@@ -2,7 +2,7 @@
 
 A Splunk application for managing detection-rule CSV whitelists with a full audit trail.
 
-Built for **Splunk Enterprise Security (ES)** on-prem environments with 300+ detection rules.
+Built for **Splunk Enterprise Security (ES)** on-prem environments with multiple detection rules.
 
 ## Features
 
