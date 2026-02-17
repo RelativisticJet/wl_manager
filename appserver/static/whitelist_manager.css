@@ -1,0 +1,187 @@
+/*
+ * Whitelist Manager — Styles
+ * Scoped with the .wl- prefix to avoid collisions with Splunk's own CSS.
+ */
+
+/* ── Editable Table ─────────────────────────────────────────────────── */
+
+.wl-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 12px;
+    font-size: 13px;
+}
+
+.wl-table thead th {
+    background-color: #333;
+    color: #fff;
+    padding: 8px 12px;
+    font-weight: 600;
+    text-align: left;
+    border-bottom: 2px solid #222;
+}
+
+.wl-table tbody td {
+    padding: 3px 6px;
+    border-bottom: 1px solid #e0e0e0;
+    vertical-align: middle;
+}
+
+.wl-table tbody tr:hover {
+    background-color: #f5f9ff;
+}
+
+.wl-input {
+    width: 100%;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    padding: 5px 8px;
+    font-size: 13px;
+    font-family: inherit;
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+}
+
+.wl-input:focus {
+    border-color: #5cc05c;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(92, 192, 92, 0.25);
+}
+
+.wl-col-actions {
+    width: 90px;
+    text-align: center;
+}
+
+/* ── Buttons ────────────────────────────────────────────────────────── */
+
+.wl-buttons {
+    margin: 14px 0;
+    padding: 12px 0;
+    border-top: 1px solid #ddd;
+}
+
+.wl-buttons .btn {
+    margin-right: 8px;
+}
+
+/* ── Alerts / Messages ──────────────────────────────────────────────── */
+
+.wl-alert {
+    padding: 10px 36px 10px 14px;
+    margin-bottom: 12px;
+    border-radius: 4px;
+    position: relative;
+    line-height: 1.5;
+}
+
+.wl-alert-close {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    opacity: 0.6;
+}
+
+.wl-alert-close:hover {
+    opacity: 1;
+}
+
+.wl-alert-error {
+    background-color: #ffebee;
+    border: 1px solid #ef9a9a;
+    color: #b71c1c;
+}
+
+.wl-alert-success {
+    background-color: #e8f5e9;
+    border: 1px solid #a5d6a7;
+    color: #1b5e20;
+}
+
+.wl-alert-info {
+    background-color: #e3f2fd;
+    border: 1px solid #90caf9;
+    color: #0d47a1;
+}
+
+.wl-alert-warning {
+    background-color: #fff3e0;
+    border: 1px solid #ffcc80;
+    color: #e65100;
+}
+
+/* ── Diff Panel ─────────────────────────────────────────────────────── */
+
+.wl-diff {
+    margin-top: 20px;
+    padding: 16px;
+    background: #fafafa;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.wl-diff h4 {
+    margin: 0 0 12px;
+    font-size: 15px;
+}
+
+.wl-diff-section {
+    margin-bottom: 14px;
+}
+
+.wl-diff-added h5 {
+    color: #2e7d32;
+    margin: 0 0 4px;
+}
+
+.wl-diff-added li {
+    color: #2e7d32;
+    font-family: "Courier New", monospace;
+    font-size: 12px;
+    word-break: break-all;
+}
+
+.wl-diff-removed h5 {
+    color: #c62828;
+    margin: 0 0 4px;
+}
+
+.wl-diff-removed li {
+    color: #c62828;
+    font-family: "Courier New", monospace;
+    font-size: 12px;
+    word-break: break-all;
+}
+
+.wl-diff-pre {
+    background: #1e1e1e;
+    color: #d4d4d4;
+    padding: 12px 14px;
+    border-radius: 4px;
+    font-size: 12px;
+    overflow-x: auto;
+    line-height: 1.6;
+}
+
+.wl-diff-line-add {
+    color: #4ec94e;
+}
+
+.wl-diff-line-rm {
+    color: #f44336;
+}
+
+.wl-diff-line-info {
+    color: #64b5f6;
+}
+
+/* ── Misc ───────────────────────────────────────────────────────────── */
+
+.wl-muted {
+    color: #999;
+    font-style: italic;
+    padding: 20px 0;
+}

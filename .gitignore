@@ -1,0 +1,25 @@
+# Build output
+dist/
+*.spl
+*.tar.gz
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Splunk runtime files
+local/
+metadata/local.meta
+
+# Docker volumes
+splunk_var/
+
+# IDE
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,23 @@
+#
+# Permissions for the Whitelist Manager app.
+#
+# wl_editor / admin / sc_admin  — full read+write
+# wl_viewer                     — read-only (can view dashboards + audit)
+# *                             — no access by default
+#
+
+[]
+access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin ]
+export = system
+
+[views]
+access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin, wl_editor ]
+export = system
+
+[lookups]
+access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin, wl_editor ]
+export = system
+
+[transforms]
+access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin ]
+export = system

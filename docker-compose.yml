@@ -1,0 +1,48 @@
+#
+# Whitelist Manager — Containerized Test Environment
+#
+# This spins up a standalone Splunk Enterprise instance with the
+# wl_manager app pre-installed, ready for testing.
+#
+# Usage:
+#   docker compose up -d          # start Splunk
+#   docker compose logs -f        # watch startup logs
+#   docker compose down -v        # tear down + remove volumes
+#
+# Splunk Web will be available at: http://localhost:8000
+#   Username: admin
+#   Password: Chang3d!   (set below — change for production)
+#
+
+services:
+  splunk:
+    image: splunk/splunk:9.3.1
+    container_name: wl_manager_test
+    hostname: splunk-test
+    environment:
+      SPLUNK_START_ARGS: "--accept-license"
+      SPLUNK_PASSWORD: "Chang3d!"
+      SPLUNK_APPS_URL: ""
+    ports:
+      # Splunk Web UI
+      - "8000:8000"
+      # Splunk Management API (REST)
+      - "8089:8089"
+      # HEC (HTTP Event Collector) — useful for testing
+      - "8088:8088"
+    volumes:
+      # Mount only the app directories Splunk needs (not scripts/tests/docker).
+      # This avoids chown failures on non-app files.
+      - ./default:/opt/splunk/etc/apps/wl_manager/default
+      - ./bin:/opt/splunk/etc/apps/wl_manager/bin
+      - ./metadata:/opt/splunk/etc/apps/wl_manager/metadata
+      - ./lookups:/opt/splunk/etc/apps/wl_manager/lookups
+      - ./appserver:/opt/splunk/etc/apps/wl_manager/appserver
+
+      # Persist Splunk indexes across restarts so audit data survives
+      - splunk_var:/opt/splunk/var
+    restart: unless-stopped
+
+volumes:
+  splunk_var:
+    name: wl_manager_splunk_var

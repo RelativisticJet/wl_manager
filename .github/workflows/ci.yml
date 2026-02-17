@@ -1,0 +1,35 @@
+name: CI — Validate & Package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate App
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Run validation checks
+        run: bash scripts/validate.sh
+
+      - name: Build .spl package
+        run: bash scripts/package.sh
+
+      - name: Upload .spl artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wl_manager-spl
+          path: dist/*.spl
+          retention-days: 30

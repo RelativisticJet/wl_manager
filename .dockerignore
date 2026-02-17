@@ -1,0 +1,14 @@
+# Don't copy these into the container
+.docker/
+.git/
+.github/
+scripts/
+tests/
+*.spl
+*.tar.gz
+*.md
+docker-compose.yml
+.dockerignore
+.gitignore
+__pycache__/
+*.pyc

@@ -1,0 +1,34 @@
+name: Release — Build & Publish .spl
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and attach .spl
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Validate
+        run: bash scripts/validate.sh
+
+      - name: Build .spl package
+        run: bash scripts/package.sh
+
+      - name: Attach .spl to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            dist/*.spl \
+            dist/*.sha256

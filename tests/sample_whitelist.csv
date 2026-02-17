@@ -1,0 +1,4 @@
+host,user,CommandLine,Comment
+WKSTN-001,bob,whoami,Legacy entry - to be removed
+WKSTN-042,alice,net use \\server\share,Approved by manager - INC-1234
+SRV-DB01,svc_backup,robocopy C:\data D:\backup /MIR,Scheduled backup job
