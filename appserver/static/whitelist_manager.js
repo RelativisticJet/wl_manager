@@ -45,11 +45,17 @@ require([
     // REST helpers
     // ══════════════════════════════════════════════════════════════════
     function restUrl() {
-        // Splunk.util.make_url normalises the locale prefix for us
-        return Splunk.util.make_url("/custom/wl_manager");
+        // Use Splunk Web's built-in proxy to reach splunkd REST API.
+        // The /splunkd/__raw/ prefix routes through Splunk Web to the
+        // management API, using the browser's session cookie for auth.
+        return Splunk.util.make_url(
+            "/splunkd/__raw/services/custom/wl_manager"
+        );
     }
 
     function restGet(params) {
+        params = params || {};
+        params.output_mode = "json";
         return $.ajax({
             url:      restUrl(),
             type:     "GET",
@@ -60,7 +66,7 @@ require([
 
     function restPost(payload) {
         return $.ajax({
-            url:         restUrl(),
+            url:         restUrl() + "?output_mode=json",
             type:        "POST",
             contentType: "application/json",
             data:        JSON.stringify(payload),
