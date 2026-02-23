@@ -1,7 +1,216 @@
 /*
  * Whitelist Manager — Styles
  * Scoped with the .wl- prefix to avoid collisions with Splunk's own CSS.
+ *
+ * Theme support: JS detects Splunk's dark/light mode and sets .wl-dark
+ * on the container. All themed values use CSS custom properties.
  */
+
+/* ── Theme Variables ─────────────────────────────────────────────────── */
+
+/* Light theme (default) */
+:root {
+    --wl-bg:              #fff;
+    --wl-bg-alt:          #fafafa;
+    --wl-bg-input:        #fff;
+    --wl-bg-disabled:     #f5f5f5;
+    --wl-bg-hover:        #f5f9ff;
+    --wl-bg-dropdown-hover: #e3f2fd;
+    --wl-bg-selected:     #c8e6c9;
+    --wl-text:            #333;
+    --wl-text-secondary:  #555;
+    --wl-text-muted:      #999;
+    --wl-text-selected:   inherit;
+    --wl-border:          #ccc;
+    --wl-border-light:    #e0e0e0;
+    --wl-border-divider:  #f0f0f0;
+    --wl-border-section:  #ddd;
+    --wl-thead-bg:        #333;
+    --wl-thead-text:      #fff;
+    --wl-thead-border:    #222;
+    --wl-shadow:          rgba(0, 0, 0, 0.15);
+    --wl-err-bg:          #ffebee;
+    --wl-err-border:      #ef9a9a;
+    --wl-err-text:        #b71c1c;
+    --wl-ok-bg:           #e8f5e9;
+    --wl-ok-border:       #a5d6a7;
+    --wl-ok-text:         #1b5e20;
+    --wl-info-bg:         #e3f2fd;
+    --wl-info-border:     #90caf9;
+    --wl-info-text:       #0d47a1;
+    --wl-warn-bg:         #fff3e0;
+    --wl-warn-border:     #ffcc80;
+    --wl-warn-text:       #e65100;
+    --wl-diff-bg:         #fafafa;
+    --wl-diff-add:        #2e7d32;
+    --wl-diff-rm:         #c62828;
+    --wl-expired-bg:      #fff9c4;
+    --wl-expired-hover:   #fff59d;
+    --wl-expired-input:   #fffde7;
+}
+
+/* Dark theme — activated by .wl-dark on any ancestor */
+.wl-dark {
+    --wl-bg:              #1a1c20;
+    --wl-bg-alt:          #111315;
+    --wl-bg-input:        #111315;
+    --wl-bg-disabled:     #0d0e10;
+    --wl-bg-hover:        #1e2a35;
+    --wl-bg-dropdown-hover: #2a3a4a;
+    --wl-bg-selected:     #1b3a1b;
+    --wl-text:            #e0e0e0;
+    --wl-text-secondary:  #aaa;
+    --wl-text-muted:      #777;
+    --wl-text-selected:   #a5d6a7;
+    --wl-border:          #444;
+    --wl-border-light:    #333;
+    --wl-border-divider:  #2a2a2a;
+    --wl-border-section:  #444;
+    --wl-thead-bg:        #1a1c20;
+    --wl-thead-text:      #e0e0e0;
+    --wl-thead-border:    #555;
+    --wl-shadow:          rgba(0, 0, 0, 0.5);
+    --wl-err-bg:          #3b1515;
+    --wl-err-border:      #c62828;
+    --wl-err-text:        #ef9a9a;
+    --wl-ok-bg:           #0e2e0e;
+    --wl-ok-border:       #2e7d32;
+    --wl-ok-text:         #a5d6a7;
+    --wl-info-bg:         #0d1f3c;
+    --wl-info-border:     #1565c0;
+    --wl-info-text:       #90caf9;
+    --wl-warn-bg:         #3b2200;
+    --wl-warn-border:     #e65100;
+    --wl-warn-text:       #ffcc80;
+    --wl-diff-bg:         #111315;
+    --wl-diff-add:        #66bb6a;
+    --wl-diff-rm:         #ef5350;
+    --wl-expired-bg:      #3b3000;
+    --wl-expired-hover:   #4a3d00;
+    --wl-expired-input:   #302800;
+}
+
+/* ── Splunk panel override — prevent clipping dropdowns ────────────── */
+.panel-body.html {
+    overflow: visible !important;
+}
+
+/* ── Searchable Dropdown ───────────────────────────────────────────── */
+
+#wl-dropdowns {
+    display: flex;
+    gap: 24px;
+    padding: 12px 0 16px;
+    flex-wrap: wrap;
+}
+
+.wl-dropdown-group {
+    display: flex;
+    flex-direction: column;
+    min-width: 300px;
+}
+
+.wl-dropdown-label {
+    font-weight: 600;
+    font-size: 13px;
+    margin-bottom: 4px;
+    color: var(--wl-text);
+}
+
+.wl-search-select {
+    position: relative;
+}
+
+.wl-search-input {
+    width: 100%;
+    padding: 7px 10px;
+    font-size: 13px;
+    border: 1px solid var(--wl-border);
+    border-radius: 3px;
+    box-sizing: border-box;
+    font-family: inherit;
+    transition: border-color 0.15s;
+    background: var(--wl-bg-input);
+    color: var(--wl-text);
+}
+
+.wl-search-input:focus {
+    border-color: #5cc05c;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(92, 192, 92, 0.25);
+}
+
+.wl-dropdown-list {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    max-height: 260px;
+    overflow-y: auto;
+    background: var(--wl-bg);
+    border: 1px solid var(--wl-border);
+    border-top: none;
+    border-radius: 0 0 3px 3px;
+    z-index: 1000;
+    box-shadow: 0 4px 12px var(--wl-shadow);
+}
+
+.wl-dropdown-list.wl-open {
+    display: block;
+}
+
+.wl-dropdown-item {
+    padding: 7px 10px;
+    font-size: 13px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--wl-border-divider);
+    color: var(--wl-text);
+}
+
+.wl-dropdown-item:last-child {
+    border-bottom: none;
+}
+
+.wl-dropdown-item:hover,
+.wl-dropdown-item.wl-highlighted {
+    background-color: var(--wl-bg-dropdown-hover);
+}
+
+.wl-dropdown-item.wl-selected {
+    background-color: var(--wl-bg-selected);
+    color: var(--wl-text-selected);
+    font-weight: 600;
+}
+
+.wl-dropdown-no-match {
+    padding: 10px;
+    color: var(--wl-text-muted);
+    font-style: italic;
+    font-size: 13px;
+}
+
+.wl-select {
+    width: 100%;
+    padding: 7px 10px;
+    font-size: 13px;
+    border: 1px solid var(--wl-border);
+    border-radius: 3px;
+    box-sizing: border-box;
+    font-family: inherit;
+    background: var(--wl-bg-input);
+    color: var(--wl-text);
+}
+
+.wl-select option {
+    background: var(--wl-bg);
+    color: var(--wl-text);
+}
+
+.wl-select:disabled {
+    background: var(--wl-bg-disabled);
+    color: var(--wl-text-muted);
+}
 
 /* ── Editable Table ─────────────────────────────────────────────────── */
 
@@ -13,33 +222,35 @@
 }
 
 .wl-table thead th {
-    background-color: #333;
-    color: #fff;
+    background-color: var(--wl-thead-bg);
+    color: var(--wl-thead-text);
     padding: 8px 12px;
     font-weight: 600;
     text-align: left;
-    border-bottom: 2px solid #222;
+    border-bottom: 2px solid var(--wl-thead-border);
 }
 
 .wl-table tbody td {
     padding: 3px 6px;
-    border-bottom: 1px solid #e0e0e0;
+    border-bottom: 1px solid var(--wl-border-light);
     vertical-align: middle;
 }
 
 .wl-table tbody tr:hover {
-    background-color: #f5f9ff;
+    background-color: var(--wl-bg-hover);
 }
 
 .wl-input {
     width: 100%;
-    border: 1px solid #ccc;
+    border: 1px solid var(--wl-border);
     border-radius: 3px;
     padding: 5px 8px;
     font-size: 13px;
     font-family: inherit;
     box-sizing: border-box;
     transition: border-color 0.15s;
+    background: var(--wl-bg-input);
+    color: var(--wl-text);
 }
 
 .wl-input:focus {
@@ -48,9 +259,73 @@
     box-shadow: 0 0 0 2px rgba(92, 192, 92, 0.25);
 }
 
+.wl-input-error {
+    background-color: var(--wl-err-bg);
+    border-color: var(--wl-err-border);
+    color: var(--wl-err-text);
+}
+
+.wl-input-error:focus {
+    border-color: var(--wl-err-border);
+    box-shadow: 0 0 0 2px rgba(239, 154, 154, 0.35);
+}
+
+.wl-col-check {
+    width: 32px;
+    text-align: center;
+}
+
+th.wl-col-rownum,
+td.wl-col-rownum {
+    width: 40px;
+    text-align: center !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    color: var(--wl-muted);
+    font-size: 0.85em;
+    user-select: none;
+}
+
+.wl-col-check input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: #5cc05c;
+}
+
 .wl-col-actions {
     width: 90px;
     text-align: center;
+}
+
+/* ── Expired Row Highlight ──────────────────────────────────────────── */
+
+.wl-row-expired {
+    background-color: var(--wl-expired-bg) !important;
+}
+
+.wl-row-expired:hover {
+    background-color: var(--wl-expired-hover) !important;
+}
+
+.wl-row-expired .wl-input {
+    background-color: var(--wl-expired-input);
+}
+
+/* ── Pagination ────────────────────────────────────────────────────── */
+
+.wl-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 10px 0 4px;
+    font-size: 13px;
+}
+
+.wl-page-info {
+    color: var(--wl-text-secondary);
+    font-weight: 600;
 }
 
 /* ── Buttons ────────────────────────────────────────────────────────── */
@@ -58,11 +333,65 @@
 .wl-buttons {
     margin: 14px 0;
     padding: 12px 0;
-    border-top: 1px solid #ddd;
+    border-top: 1px solid var(--wl-border-section);
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
 }
 
 .wl-buttons .btn {
     margin-right: 8px;
+}
+
+.wl-buttons-right {
+    margin-left: auto;
+}
+
+.wl-buttons-right .btn {
+    margin-right: 0;
+    margin-left: 8px;
+}
+
+.wl-import-btn {
+    cursor: pointer;
+    display: inline-block;
+}
+
+/* ── Undo Bar ──────────────────────────────────────────────────────── */
+
+.wl-undo {
+    background-color: #263238;
+    color: #fff;
+    padding: 10px 16px;
+    border-radius: 4px;
+    margin: 8px 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 13px;
+    animation: wl-slide-in 0.2s ease-out;
+}
+
+.wl-undo .btn {
+    background: #fff;
+    color: #263238;
+    border: none;
+    font-weight: 600;
+}
+
+.wl-undo .btn:hover {
+    background: #e0e0e0;
+}
+
+.wl-undo-countdown {
+    opacity: 0.6;
+    font-size: 12px;
+    min-width: 24px;
+}
+
+@keyframes wl-slide-in {
+    from { opacity: 0; transform: translateY(-8px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 
 /* ── Alerts / Messages ──────────────────────────────────────────────── */
@@ -90,27 +419,27 @@
 }
 
 .wl-alert-error {
-    background-color: #ffebee;
-    border: 1px solid #ef9a9a;
-    color: #b71c1c;
+    background-color: var(--wl-err-bg);
+    border: 1px solid var(--wl-err-border);
+    color: var(--wl-err-text);
 }
 
 .wl-alert-success {
-    background-color: #e8f5e9;
-    border: 1px solid #a5d6a7;
-    color: #1b5e20;
+    background-color: var(--wl-ok-bg);
+    border: 1px solid var(--wl-ok-border);
+    color: var(--wl-ok-text);
 }
 
 .wl-alert-info {
-    background-color: #e3f2fd;
-    border: 1px solid #90caf9;
-    color: #0d47a1;
+    background-color: var(--wl-info-bg);
+    border: 1px solid var(--wl-info-border);
+    color: var(--wl-info-text);
 }
 
 .wl-alert-warning {
-    background-color: #fff3e0;
-    border: 1px solid #ffcc80;
-    color: #e65100;
+    background-color: var(--wl-warn-bg);
+    border: 1px solid var(--wl-warn-border);
+    color: var(--wl-warn-text);
 }
 
 /* ── Diff Panel ─────────────────────────────────────────────────────── */
@@ -118,14 +447,16 @@
 .wl-diff {
     margin-top: 20px;
     padding: 16px;
-    background: #fafafa;
-    border: 1px solid #ddd;
+    background: var(--wl-diff-bg);
+    border: 1px solid var(--wl-border-section);
     border-radius: 4px;
+    color: var(--wl-text);
 }
 
 .wl-diff h4 {
     margin: 0 0 12px;
     font-size: 15px;
+    color: var(--wl-text);
 }
 
 .wl-diff-section {
@@ -133,24 +464,24 @@
 }
 
 .wl-diff-added h5 {
-    color: #2e7d32;
+    color: var(--wl-diff-add);
     margin: 0 0 4px;
 }
 
 .wl-diff-added li {
-    color: #2e7d32;
+    color: var(--wl-diff-add);
     font-family: "Courier New", monospace;
     font-size: 12px;
     word-break: break-all;
 }
 
 .wl-diff-removed h5 {
-    color: #c62828;
+    color: var(--wl-diff-rm);
     margin: 0 0 4px;
 }
 
 .wl-diff-removed li {
-    color: #c62828;
+    color: var(--wl-diff-rm);
     font-family: "Courier New", monospace;
     font-size: 12px;
     word-break: break-all;
@@ -178,10 +509,92 @@
     color: #64b5f6;
 }
 
+/* ── Date/Time Picker ──────────────────────────────────────────────── */
+
+.wl-date-picker {
+    display: none;
+    position: absolute;
+    z-index: 2000;
+    background: var(--wl-bg);
+    border: 1px solid var(--wl-border);
+    border-radius: 6px;
+    box-shadow: 0 6px 20px var(--wl-shadow);
+    padding: 14px;
+    min-width: 260px;
+    font-size: 13px;
+    color: var(--wl-text);
+    animation: wl-slide-in 0.15s ease-out;
+}
+
+.wl-dp-header {
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--wl-border-light);
+}
+
+.wl-dp-presets {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+.wl-dp-preset {
+    flex: 1 1 auto;
+    min-width: 60px;
+    text-align: center;
+}
+
+.wl-dp-manual {
+    margin-bottom: 12px;
+}
+
+.wl-dp-label {
+    display: block;
+    font-weight: 600;
+    font-size: 12px;
+    margin: 6px 0 3px;
+    color: var(--wl-text-secondary);
+}
+
+.wl-dp-date,
+.wl-dp-time {
+    width: 100%;
+    padding: 5px 8px;
+    font-size: 13px;
+    border: 1px solid var(--wl-border);
+    border-radius: 3px;
+    box-sizing: border-box;
+    font-family: inherit;
+    background: var(--wl-bg-input);
+    color: var(--wl-text);
+}
+
+.wl-dp-date:focus,
+.wl-dp-time:focus {
+    border-color: #5cc05c;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(92, 192, 92, 0.25);
+}
+
+.wl-dp-actions {
+    display: flex;
+    gap: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--wl-border-light);
+}
+
+.wl-dp-clear {
+    color: var(--wl-text-muted) !important;
+    font-size: 12px !important;
+}
+
 /* ── Misc ───────────────────────────────────────────────────────────── */
 
 .wl-muted {
-    color: #999;
+    color: var(--wl-text-muted);
     font-style: italic;
     padding: 20px 0;
 }

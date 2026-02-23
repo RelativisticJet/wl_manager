@@ -7,17 +7,29 @@
 #
 
 []
-access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin ]
+access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin, sc_admin ]
 export = system
+owner = admin
 
 [views]
-access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin, wl_editor ]
+access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin, sc_admin, wl_editor ]
 export = system
+owner = admin
+
+[views/audit]
+access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin, sc_admin, wl_editor ]
+export = system
+owner = admin
+
+[views/whitelist_manager]
+access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin, sc_admin, wl_editor ]
+export = system
+owner = admin
 
 [lookups]
-access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin, wl_editor ]
+access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin, sc_admin, wl_editor ]
 export = system
 
 [transforms]
-access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin ]
+access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin, sc_admin ]
 export = system

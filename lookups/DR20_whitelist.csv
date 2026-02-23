@@ -1,0 +1,7 @@
+host,user,CommandLine,Comment,Expires
+WKSTN-001,jsmith,whoami,Legacy admin tool,
+WKSTN-042,alice,net use,Approved network mapping,2026-04-15 09:00
+SRV-DB01,svc_backup,robocopy,Scheduled backup job,
+WKSTN-077,m.chen,certutil -decode,Security researcher testing certificate tools,2026-02-28 17:00
+SRV-WEB03,deploy_svc,curl -k,Deployment script uses insecure flag temporarily,2026-03-05 12:00
+WKSTN-DEV-11,r.kumar,python -c,Developer running inline Python for data migration,2026-03-15 08:00

@@ -57,6 +57,8 @@ REQUIRED_FILES=(
     "lookups/rule_csv_map.csv"
     "appserver/static/whitelist_manager.js"
     "appserver/static/whitelist_manager.css"
+    "app.manifest"
+    "README.md"
 )
 
 for f in "${REQUIRED_FILES[@]}"; do

@@ -1,0 +1,7 @@
+user,src_country,vpn_gateway,Comment,expiration_date
+j.martinez,Mexico,VPN-GW-US-EAST,Employee traveling to Mexico City office,2026-04-01 18:00
+a.chen,Singapore,VPN-GW-APAC,APAC regional manager - permanent remote access,
+k.okonkwo,Nigeria,VPN-GW-EU-WEST,Contractor working from Lagos office,2026-03-15
+m.ivanova,Russia,VPN-GW-EU-EAST,Security researcher - authorized geo-testing,2026-03-28 12:00
+svc_site2site,Germany,VPN-GW-EU-WEST,Site-to-site VPN tunnel Frankfurt DC,
+d.kim,South Korea,VPN-GW-APAC,Seoul office employee - business travel,2026-05-10

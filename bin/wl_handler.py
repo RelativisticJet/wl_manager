@@ -26,7 +26,7 @@ import csv
 import difflib
 import logging
 import logging.handlers
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # ---------------------------------------------------------------------------
 # Splunk imports
@@ -46,10 +46,15 @@ SPLUNK_HOME = os.environ.get("SPLUNK_HOME", "/opt/splunk")
 APPS_DIR = os.path.join(SPLUNK_HOME, "etc", "apps")
 OWN_LOOKUPS = os.path.join(APPS_DIR, APP_NAME, "lookups")
 MAPPING_FILE = os.path.join(OWN_LOOKUPS, "rule_csv_map.csv")
-
 AUDIT_INDEX = "wl_audit"
 AUDIT_SOURCE = "wl_manager"
 AUDIT_SOURCETYPE = "wl_audit"
+
+# Column names treated as expiration dates (case-insensitive matching).
+EXPIRE_COLUMN_NAMES = {
+    "expires", "expire", "expiration", "expiration_date",
+    "expiry", "termination", "termination_date",
+}
 
 # Roles allowed to WRITE (POST). Everyone authenticated can READ (GET).
 EDIT_ROLES = {"wl_editor", "admin", "sc_admin"}
@@ -78,6 +83,14 @@ if not _logger.handlers:
 # ═══════════════════════════════════════════════════════════════════════════
 # Utility helpers
 # ═══════════════════════════════════════════════════════════════════════════
+
+def _find_expire_column(headers):
+    """Return the first header that matches an expiration column name, or None."""
+    for h in headers:
+        if h.lower() in EXPIRE_COLUMN_NAMES:
+            return h
+    return None
+
 
 def _safe_filename(name):
     """Return True only if *name* is a plain CSV filename (no traversal)."""
@@ -129,6 +142,60 @@ def _write_csv(filepath, headers, rows):
         writer.writerows(rows)
 
 
+def _remove_expired_rows(headers, rows, tz_offset_minutes=0):
+    """
+    Filter out rows where an expiration column contains a past date/time.
+
+    Returns (kept_rows, expired_rows) where:
+        kept_rows    — rows that are still valid (empty = permanent)
+        expired_rows — rows that were removed due to expiration
+
+    Date format expected: YYYY-MM-DD HH:MM  (also tolerates YYYY-MM-DD).
+
+    Expiration values are treated as the user's local time.
+    *tz_offset_minutes* is the value of JavaScript's
+    ``Date.getTimezoneOffset()`` — minutes the user's timezone is
+    **behind** UTC (e.g. UTC+2 → -120).  We convert the current UTC time
+    to the user's local time before comparing.
+    """
+    expire_col = _find_expire_column(headers)
+    if not expire_col:
+        return rows, []
+
+    # Convert UTC "now" to the user's local time so comparisons
+    # match what the user sees in their browser.
+    now_utc = datetime.now(timezone.utc)
+    user_offset = timedelta(minutes=-tz_offset_minutes)
+    user_tz = timezone(user_offset)
+    now_local = now_utc.astimezone(user_tz).replace(tzinfo=None)
+
+    kept = []
+    expired = []
+
+    for row in rows:
+        exp_val = (row.get(expire_col) or "").strip()
+        if not exp_val:
+            kept.append(row)
+            continue
+        parsed = False
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                exp_date = datetime.strptime(exp_val, fmt)   # naive — user's local
+                parsed = True
+                break
+            except ValueError:
+                continue
+        if not parsed:
+            kept.append(row)
+            continue
+        if exp_date < now_local:
+            expired.append(row)
+        else:
+            kept.append(row)
+
+    return kept, expired
+
+
 def _compute_diff(old_headers, old_rows, new_headers, new_rows):
     """
     Compare old vs new CSV content and return a structured diff.
@@ -136,20 +203,78 @@ def _compute_diff(old_headers, old_rows, new_headers, new_rows):
     Returns dict with keys:
         added          — list of row dicts that are new
         removed        — list of row dicts that were deleted
+        edited         — list of dicts with keys: old_row, new_row, row_num,
+                         changed_fields (list of {field, before, after})
         added_count    — int
         removed_count  — int
+        edited_count   — int
         text_diff      — list of unified-diff lines (Git-style)
     """
     all_headers = list(dict.fromkeys(old_headers + new_headers))
 
+    # Only compare visible (non-metadata) columns for diff detection.
+    # Internal _ columns (_added_by, _added_at, _review_status) are
+    # bookkeeping and should not trigger change events.
+    visible_headers = [h for h in all_headers if not h.startswith("_")]
+
     def _row_key(row):
-        return tuple(row.get(h, "") for h in all_headers)
+        return tuple(row.get(h, "") for h in visible_headers)
 
     old_keys = {_row_key(r) for r in old_rows}
     new_keys = {_row_key(r) for r in new_rows}
 
-    added = [r for r in new_rows if _row_key(r) not in old_keys]
-    removed = [r for r in old_rows if _row_key(r) not in new_keys]
+    added_raw = [r for r in new_rows if _row_key(r) not in old_keys]
+    removed_raw = [r for r in old_rows if _row_key(r) not in new_keys]
+
+    # ── Detect edits: match by row position ─────────────────────
+    # When a user edits cells, the row stays at the same CSV index.
+    # Compare old_rows[i] vs new_rows[i] — if they differ and the
+    # old version is in removed_raw / new version in added_raw, it's
+    # an edit, not a separate remove + add.
+    edited = []
+
+    # Build fast lookup sets for the raw added/removed keys
+    removed_key_set = {_row_key(r) for r in removed_raw}
+    added_key_set = {_row_key(r) for r in added_raw}
+
+    # Track which raw added/removed entries are consumed by edits
+    paired_old_keys = set()   # keys from removed_raw that became edits
+    paired_new_keys = set()   # keys from added_raw   that became edits
+
+    for i in range(min(len(old_rows), len(new_rows))):
+        old_k = _row_key(old_rows[i])
+        new_k = _row_key(new_rows[i])
+
+        if old_k == new_k:
+            continue  # unchanged row
+
+        # Both sides must be in the raw diff lists (old was "removed",
+        # new was "added") for this to be a genuine positional edit.
+        if old_k not in removed_key_set or new_k not in added_key_set:
+            continue
+
+        changed_fields = []
+        for h in visible_headers:
+            old_val = old_rows[i].get(h, "")
+            new_val = new_rows[i].get(h, "")
+            if old_val != new_val:
+                changed_fields.append({
+                    "field": h, "before": old_val, "after": new_val
+                })
+
+        if changed_fields:
+            edited.append({
+                "old_row": old_rows[i],
+                "new_row": new_rows[i],
+                "row_num": i + 1,          # 1-based
+                "changed_fields": changed_fields,
+            })
+            paired_old_keys.add(old_k)
+            paired_new_keys.add(new_k)
+
+    # Remove paired rows from added/removed lists
+    added = [r for r in added_raw if _row_key(r) not in paired_new_keys]
+    removed = [r for r in removed_raw if _row_key(r) not in paired_old_keys]
 
     # Text-based unified diff (like `git diff`)
     def _rows_to_lines(headers, rows):
@@ -158,8 +283,12 @@ def _compute_diff(old_headers, old_rows, new_headers, new_rows):
             lines.append(",".join(r.get(h, "") for h in headers))
         return lines
 
-    old_lines = _rows_to_lines(old_headers or all_headers, old_rows)
-    new_lines = _rows_to_lines(new_headers or all_headers, new_rows)
+    # Use only visible headers for the text diff so metadata columns
+    # don't pollute the human-readable output.
+    old_vis = [h for h in (old_headers or all_headers) if not h.startswith("_")]
+    new_vis = [h for h in (new_headers or all_headers) if not h.startswith("_")]
+    old_lines = _rows_to_lines(old_vis, old_rows)
+    new_lines = _rows_to_lines(new_vis, new_rows)
     text_diff = list(
         difflib.unified_diff(
             old_lines, new_lines, fromfile="before", tofile="after", lineterm=""
@@ -169,8 +298,10 @@ def _compute_diff(old_headers, old_rows, new_headers, new_rows):
     return {
         "added": added,
         "removed": removed,
+        "edited": edited,
         "added_count": len(added),
         "removed_count": len(removed),
+        "edited_count": len(edited),
         "text_diff": text_diff,
     }
 
@@ -218,7 +349,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         if action == "get_csv_content":
             return self._get_csv_content(
-                query.get("csv_file", ""), query.get("app", "")
+                request, query.get("csv_file", ""), query.get("app", ""),
+                query.get("tz_offset", "0"),
             )
 
         if action == "get_mapping":
@@ -250,7 +382,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             })
         return self._resp(200, {"csv_files": entries})
 
-    def _get_csv_content(self, csv_file, app_context):
+    def _get_csv_content(self, request, csv_file, app_context, tz_offset="0"):
         path = _resolve_csv_path(csv_file, app_context)
         if path is None:
             # Try own lookups as fallback
@@ -262,11 +394,57 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             return self._resp(404, {"error": f"CSV file not found: {csv_file}"})
 
         headers, rows = _read_csv(path)
+
+        # ── Auto-remove expired rows ──────────────────────────────────
+        auto_removed_count = 0
+        try:
+            tz_offset_min = int(tz_offset)
+        except (ValueError, TypeError):
+            tz_offset_min = 0
+        if _find_expire_column(headers):
+            kept, expired = _remove_expired_rows(headers, rows, tz_offset_min)
+            if expired:
+                try:
+                    _write_csv(path, headers, kept)
+                except OSError as exc:
+                    _logger.warning("Cannot write cleaned CSV %s: %s", csv_file, exc)
+                else:
+                    auto_removed_count = len(expired)
+                    rows = kept
+
+                    detection_rule = self._lookup_rule_for_csv(csv_file)
+                    ts = int(datetime.now(timezone.utc).timestamp())
+                    expired_clean = [
+                        {k: v for k, v in r.items() if not k.startswith("_")}
+                        for r in expired
+                    ]
+                    value_lines = []
+                    for i, entry in enumerate(expired_clean, 1):
+                        for col, val in sorted(entry.items()):
+                            value_lines.append("{}_row_{}: {}".format(col, i, val))
+
+                    evt = {
+                        "timestamp": ts,
+                        "analyst": "system",
+                        "detection_rule": detection_rule,
+                        "csv_file": csv_file,
+                        "app_context": app_context,
+                        "comment": "Automatic expiration cleanup on load",
+                        "action": "auto_removed",
+                        "removed_row_count": auto_removed_count,
+                        "value": value_lines,
+                        "remove_reason": "Expired",
+                    }
+                    _logger.info("Auto-removed %d expired rows from %s, indexing audit event", auto_removed_count, csv_file)
+                    self._index_audit(request, evt)
+
         return self._resp(200, {
             "csv_file": csv_file,
             "headers": headers,
             "rows": rows,
             "row_count": len(rows),
+            "auto_removed_count": auto_removed_count,
+            "expire_column": _find_expire_column(headers) or "",
         })
 
     def _get_mapping(self):
@@ -296,7 +474,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if action == "save_csv":
             return self._save_csv(request, payload, user)
 
-        return self._resp(400, {"error": "Unknown POST action. Valid: save_csv"})
+        return self._resp(400, {
+            "error": "Unknown POST action. Valid: save_csv"
+        })
 
     def _save_csv(self, request, payload, user):
         csv_file = payload.get("csv_file", "")
@@ -305,6 +485,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         new_headers = payload.get("headers", [])
         new_rows = payload.get("rows", [])
         analyst_comment = payload.get("comment", "")
+        removal_reasons = payload.get("removal_reasons", [])
+        bulk_removal = payload.get("bulk_removal", [])
 
         # ── Validate filename ─────────────────────────────────────────
         if not _safe_filename(csv_file):
@@ -327,36 +509,179 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # ── Compute diff ──────────────────────────────────────────────
         diff = _compute_diff(old_headers, old_rows, new_headers, new_rows)
 
-        if diff["added_count"] == 0 and diff["removed_count"] == 0:
+        if diff["added_count"] == 0 and diff["removed_count"] == 0 and diff["edited_count"] == 0:
             return self._resp(200, {"message": "No changes detected", "diff": diff})
 
-        # ── Write AFTER state ─────────────────────────────────────────
-        _write_csv(path, new_headers, new_rows)
+        # ── Stamp row-level history on newly added rows ──────────────
+        ts_now = str(int(datetime.now(timezone.utc).timestamp()))
 
-        # ── Audit event ──────────────────────────────────────────────
-        audit_event = {
-            "timestamp": datetime.now(timezone.utc).strftime(
-                "%Y-%m-%dT%H:%M:%S.%fZ"
-            ),
+        added_set = set()
+        visible_headers = [h for h in new_headers if not h.startswith("_")]
+        for entry in diff["added"]:
+            key = tuple(entry.get(h, "") for h in visible_headers)
+            added_set.add(key)
+
+        for row in new_rows:
+            key = tuple(row.get(h, "") for h in visible_headers)
+            if key in added_set:
+                row["_added_by"] = user
+                row["_added_at"] = ts_now
+
+        # Ensure metadata columns are in the header list for CSV write
+        write_headers = list(new_headers)
+        for meta in ("_added_by", "_added_at"):
+            if meta not in write_headers:
+                write_headers.append(meta)
+
+        # ── Write AFTER state ─────────────────────────────────────────
+        _write_csv(path, write_headers, new_rows)
+
+        # ── Build a removal-reason lookup for quick matching ─────────
+        # Strip _ metadata columns so keys match between the frontend's
+        # row snapshot and the diff's removed entries (read from disk).
+        def _visible_key(row):
+            cleaned = {k: v for k, v in row.items() if not k.startswith("_")}
+            return json.dumps(cleaned, sort_keys=True, default=str)
+
+        reason_map = {}
+        for rr in removal_reasons:
+            rr_row = rr.get("row", {})
+            reason_map[_visible_key(rr_row)] = rr.get("reason", "")
+
+        # ── Common audit fields ──────────────────────────────────────
+        ts = int(datetime.now(timezone.utc).timestamp())
+        has_comment_col = "Comment" in new_headers
+
+        # If per-row Comment column exists, the summary comment should
+        # say so (the per-action events carry each row's own comment).
+        summary_comment = analyst_comment
+        if has_comment_col and (not analyst_comment or analyst_comment == "__per_row__"):
+            summary_comment = "See per-row comments"
+
+        common = {
+            "timestamp": ts,
             "analyst": user,
             "detection_rule": detection_rule,
             "csv_file": csv_file,
             "app_context": app_context,
-            "comment": analyst_comment,
-            "rows_before": len(old_rows),
-            "rows_after": len(new_rows),
-            "rows_added": diff["added_count"],
-            "rows_removed": diff["removed_count"],
-            "added_entries": diff["added"],
-            "removed_entries": diff["removed"],
-            "text_diff": diff["text_diff"],
+            "comment": summary_comment,
         }
 
-        # 1) Rotating log file
-        _logger.info(json.dumps(audit_event, default=str))
+        # ── Helper: strip internal _ columns from a row ────────────────
+        def _clean_entry(row):
+            return {k: v for k, v in row.items() if not k.startswith("_")}
 
-        # 2) Splunk index
-        self._index_audit(request, audit_event)
+        # ── Helper: build numbered fields + "value" summary string ────
+        # Returns (numbered_dict, value_string) where:
+        #   numbered_dict = {"user_row_3": "jsmith", "src_ip_row_3": "10.0.0.1"}
+        #   value_list    = ["user_row_3: jsmith", "src_ip_row_3: 10.0.0.1", ...]
+        def _build_row_fields(entries, row_num_map):
+            numbered = {}
+            lines = []
+            for entry in entries:
+                row_num = row_num_map.get(_visible_key(entry), 0)
+                cleaned = _clean_entry(entry)
+                for col_name, col_val in sorted(cleaned.items()):
+                    field_name = "{}_row_{}".format(col_name, row_num)
+                    numbered[field_name] = col_val
+                    lines.append("{}: {}".format(field_name, col_val))
+            return numbered, lines
+
+        # ── Map added rows to row numbers in the NEW csv ─────────────
+        # Row number = position in new_rows (1-based)
+        added_row_map = {}
+        for entry in diff["added"]:
+            ekey = _visible_key(entry)
+            for i, row in enumerate(new_rows):
+                if _visible_key(row) == ekey and ekey not in added_row_map:
+                    added_row_map[ekey] = i + 1
+                    break
+
+        # ── "added" audit event (single event for all added rows) ────
+        if diff["added_count"] > 0:
+            added_numbered, added_values = _build_row_fields(
+                diff["added"], added_row_map
+            )
+            evt = dict(common, **{
+                "action": "added",
+                "added_row_count": diff["added_count"],
+                "added_values": added_numbered,
+                "value": added_values,
+                "added_by": user,
+                "added_at": ts,
+            })
+            self._index_audit(request, evt)
+
+        # ── Removal audit events ─────────────────────────────────────
+        if bulk_removal and diff["removed_count"] > 0:
+            # Bulk removal via "Remove Selected" button
+            bulk_reason = bulk_removal[0].get("reason", "") if bulk_removal else ""
+
+            bulk_row_map = {}
+            for br in bulk_removal:
+                br_row = br.get("row", {})
+                bulk_row_map[_visible_key(br_row)] = br.get("row_number", 0)
+
+            removed_numbered, removed_values = _build_row_fields(
+                diff["removed"], bulk_row_map
+            )
+            evt = dict(common, **{
+                "action": "removed_multiple" if diff["removed_count"] > 1 else "removed",
+                "removed_row_count": diff["removed_count"],
+                "removed_values": removed_numbered,
+                "value": removed_values,
+                "remove_reason": bulk_reason,
+                "removed_by": user,
+                "removed_at": ts,
+            })
+            self._index_audit(request, evt)
+        elif diff["removed_count"] > 0:
+            # Single row removal via "Remove" button
+            single_row_map = {}
+            single_reason = ""
+            for rr in removal_reasons:
+                rr_row = rr.get("row", {})
+                single_row_map[_visible_key(rr_row)] = rr.get("row_number", 0)
+                single_reason = rr.get("reason", "")
+
+            removed_numbered, removed_values = _build_row_fields(
+                diff["removed"], single_row_map
+            )
+            evt = dict(common, **{
+                "action": "removed",
+                "removed_row_count": diff["removed_count"],
+                "removed_values": removed_numbered,
+                "value": removed_values,
+                "remove_reason": single_reason,
+                "removed_by": user,
+                "removed_at": ts,
+            })
+            self._index_audit(request, evt)
+
+        # ── "edited" audit event (cell-level changes) ────────────
+        if diff["edited_count"] > 0:
+            edit_value_lines = []
+            edit_details = {}
+            for edit_entry in diff["edited"]:
+                rn = edit_entry["row_num"]
+                for change in edit_entry["changed_fields"]:
+                    field = change["field"]
+                    before_key = "{}_row_{}_before".format(field, rn)
+                    after_key = "{}_row_{}_after".format(field, rn)
+                    edit_details[before_key] = change["before"]
+                    edit_details[after_key] = change["after"]
+                    edit_value_lines.append("{}: {}".format(before_key, change["before"]))
+                    edit_value_lines.append("{}: {}".format(after_key, change["after"]))
+
+            evt = dict(common, **{
+                "action": "edited",
+                "edited_row_count": diff["edited_count"],
+                "edited_values": edit_details,
+                "value": edit_value_lines,
+                "edited_by": user,
+                "edited_at": ts,
+            })
+            self._index_audit(request, evt)
 
         return self._resp(200, {
             "message": "CSV saved successfully",
@@ -401,11 +726,19 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
             urllib.request.urlopen(req, context=ctx, timeout=10)
         except Exception as exc:
-            sys.stderr.write("wl_manager _index_audit error: %s\n" % exc)
+            _logger.error("_index_audit error: %s", exc)
 
     # ==================================================================
     # Internal helpers
     # ==================================================================
+    def _lookup_rule_for_csv(self, csv_file):
+        """Look up the detection_rule name for a given csv_file from the mapping."""
+        mapping = self._read_mapping()
+        for entry in mapping:
+            if entry.get("csv_file") == csv_file:
+                return entry.get("rule_name", "")
+        return ""
+
     def _read_mapping(self):
         if not os.path.isfile(MAPPING_FILE):
             return []

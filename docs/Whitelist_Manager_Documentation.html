@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Whitelist Manager for Splunk — Complete Documentation</title>
+<style>
+  /* ── Base ────────────────────────────────────── */
+  :root {
+    --primary: #1a3a5c;
+    --accent: #2b6cb0;
+    --bg: #ffffff;
+    --bg-code: #f5f7fa;
+    --border: #d1d5db;
+    --text: #1f2937;
+    --text-light: #6b7280;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.7;
+    font-size: 14px;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 40px 30px;
+  }
+  /* ── Headings ───────────────────────────────── */
+  h1 {
+    font-size: 28px;
+    color: var(--primary);
+    border-bottom: 3px solid var(--accent);
+    padding-bottom: 12px;
+    margin-bottom: 8px;
+  }
+  h2 {
+    font-size: 22px;
+    color: var(--primary);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+    margin-top: 36px;
+    margin-bottom: 14px;
+  }
+  h3 {
+    font-size: 17px;
+    color: var(--accent);
+    margin-top: 24px;
+    margin-bottom: 10px;
+  }
+  h4 { font-size: 15px; margin-top: 18px; margin-bottom: 8px; }
+  .subtitle { color: var(--text-light); font-size: 14px; margin-bottom: 30px; }
+  /* ── Links ──────────────────────────────────── */
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  /* ── Paragraphs / lists ─────────────────────── */
+  p { margin-bottom: 12px; }
+  ul, ol { margin: 8px 0 14px 24px; }
+  li { margin-bottom: 4px; }
+  /* ── Tables ─────────────────────────────────── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0 20px;
+    font-size: 13px;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    text-align: left;
+  }
+  th {
+    background: var(--primary);
+    color: #fff;
+    font-weight: 600;
+  }
+  tr:nth-child(even) { background: #f9fafb; }
+  /* ── Code ───────────────────────────────────── */
+  code {
+    font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
+    background: var(--bg-code);
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-size: 13px;
+  }
+  pre {
+    background: var(--bg-code);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 14px 18px;
+    overflow-x: auto;
+    font-size: 12.5px;
+    margin: 10px 0 18px;
+    line-height: 1.5;
+  }
+  pre code { background: transparent; padding: 0; }
+  /* ── Callouts ───────────────────────────────── */
+  .note, .warning, .tip {
+    border-left: 4px solid;
+    padding: 10px 16px;
+    margin: 14px 0;
+    border-radius: 0 4px 4px 0;
+    font-size: 13px;
+  }
+  .note    { border-color: var(--accent); background: #eff6ff; }
+  .warning { border-color: #d97706; background: #fffbeb; }
+  .tip     { border-color: #059669; background: #ecfdf5; }
+  .note strong, .warning strong, .tip strong { display: block; margin-bottom: 2px; }
+  /* ── TOC ────────────────────────────────────── */
+  .toc { background: #f9fafb; border: 1px solid var(--border); border-radius: 6px; padding: 20px 28px; margin: 24px 0 36px; }
+  .toc h2 { border: none; margin-top: 0; font-size: 18px; }
+  .toc ul { list-style: none; margin-left: 0; }
+  .toc > ul > li { margin-bottom: 6px; font-weight: 600; }
+  .toc ul ul { margin-left: 20px; margin-top: 4px; }
+  .toc ul ul li { font-weight: 400; margin-bottom: 2px; font-size: 13px; }
+  /* ── Dividers ───────────────────────────────── */
+  hr { border: none; border-top: 1px solid var(--border); margin: 30px 0; }
+  .part-header {
+    background: var(--primary);
+    color: #fff;
+    padding: 16px 24px;
+    margin: 40px -30px 24px;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+  }
+  /* ── Print ──────────────────────────────────── */
+  @media print {
+    body { padding: 20px; font-size: 12px; max-width: 100%; }
+    .part-header { break-before: page; }
+    h2 { break-after: avoid; }
+    pre, table { break-inside: avoid; }
+    .toc { break-after: page; }
+    a { color: var(--text); }
+  }
+</style>
+</head>
+<body>
+
+<h1>Whitelist Manager for Splunk</h1>
+<p class="subtitle">Complete Documentation &mdash; Version 1.0.0 &mdash; Security Engineering Team</p>
+
+<!-- ═══════════════ TABLE OF CONTENTS ═══════════════ -->
+<div class="toc">
+<h2>Table of Contents</h2>
+<ul>
+  <li><a href="#part1">Part 1: User Guide</a>
+    <ul>
+      <li><a href="#s1">1. Introduction</a></li>
+      <li><a href="#s2">2. Getting Started</a></li>
+      <li><a href="#s3">3. Main Dashboard &mdash; Managing Whitelists</a></li>
+      <li><a href="#s4">4. Audit Trail Dashboard</a></li>
+      <li><a href="#s5">5. Understanding the Diff View</a></li>
+      <li><a href="#s6">6. Role-Based Access</a></li>
+      <li><a href="#s7">7. FAQ</a></li>
+    </ul>
+  </li>
+  <li><a href="#part2">Part 2: Administrator Guide</a>
+    <ul>
+      <li><a href="#s8">8. Prerequisites &amp; Requirements</a></li>
+      <li><a href="#s9">9. Installation</a></li>
+      <li><a href="#s10">10. Initial Configuration</a></li>
+      <li><a href="#s11">11. Adding Detection Rules and CSVs</a></li>
+      <li><a href="#s12">12. Expiration Settings</a></li>
+      <li><a href="#s13">13. Scheduled Cleanup</a></li>
+      <li><a href="#s14">14. Audit Trail &amp; Retention</a></li>
+      <li><a href="#s15">15. CLI Wrapper Usage</a></li>
+      <li><a href="#s16">16. Security Considerations</a></li>
+      <li><a href="#s17">17. Troubleshooting</a></li>
+      <li><a href="#s18">18. Upgrading &amp; Uninstallation</a></li>
+    </ul>
+  </li>
+</ul>
+</div>
+
+<!-- ═════════════════════════════════════════════════ -->
+<div class="part-header" id="part1">PART 1: USER GUIDE</div>
+<!-- ═════════════════════════════════════════════════ -->
+
+<h2 id="s1">1. Introduction</h2>
+<p>Whitelist Manager is a Splunk application that provides a web-based interface for managing detection-rule CSV whitelists with a full audit trail. Instead of manually editing CSV lookup files on the filesystem, security analysts can use the dashboard to view, add, edit, and remove whitelist entries &mdash; with every change automatically tracked.</p>
+
+<h3>Key Capabilities</h3>
+<ul>
+  <li><strong>Searchable dropdown</strong> for 300+ detection rules</li>
+  <li><strong>Editable CSV table</strong> with pagination (10 rows per page)</li>
+  <li><strong>Full audit trail</strong> &mdash; who, what, when, and why for every change</li>
+  <li><strong>Expiration management</strong> &mdash; date picker with presets; expired rows auto-cleaned</li>
+  <li><strong>Git-style diff</strong> &mdash; see exactly what changed after each save</li>
+  <li><strong>Cell-level edit tracking</strong> &mdash; before/after values for every field</li>
+  <li><strong>CSV import/export</strong> &mdash; bulk upload and download</li>
+  <li><strong>Role-based access control</strong> &mdash; editors vs. viewers</li>
+  <li><strong>Dark/light theme</strong> &mdash; adapts automatically</li>
+</ul>
+
+<h2 id="s2">2. Getting Started</h2>
+<h3>Accessing the App</h3>
+<ol>
+  <li>Log in to Splunk Web</li>
+  <li>Navigate to <strong>Apps &gt; Whitelist Manager</strong></li>
+  <li>The main dashboard loads automatically</li>
+</ol>
+
+<h3>Required Roles</h3>
+<table>
+  <tr><th>Action</th><th>Required Role</th></tr>
+  <tr><td>View whitelists and audit trail</td><td><code>wl_viewer</code>, <code>wl_editor</code>, <code>admin</code>, or <code>sc_admin</code></td></tr>
+  <tr><td>Edit whitelists (add/remove/modify)</td><td><code>wl_editor</code>, <code>admin</code>, or <code>sc_admin</code></td></tr>
+</table>
+
+<h3>First-Time Workflow</h3>
+<ol>
+  <li>Select a <strong>Detection Rule</strong> from the dropdown</li>
+  <li>Select a <strong>CSV File</strong> from the second dropdown</li>
+  <li>The CSV contents load in an editable table</li>
+  <li>Make your changes (add, edit, or remove rows)</li>
+  <li>Click <strong>Save Changes</strong></li>
+  <li>Provide a comment explaining the change (required)</li>
+  <li>Review the diff summary</li>
+</ol>
+
+<h2 id="s3">3. Main Dashboard &mdash; Managing Whitelists</h2>
+
+<h3>3.1 Selecting a Detection Rule</h3>
+<p>The <strong>Detection Rule</strong> dropdown supports type-ahead search. Start typing the rule name (e.g., &ldquo;DR20&rdquo; or &ldquo;malicious&rdquo;) and matching rules appear instantly. Click a rule to select it.</p>
+<p>Once selected, the <strong>CSV File</strong> dropdown populates with all CSV files mapped to that rule.</p>
+
+<h3>3.2 Viewing CSV Contents</h3>
+<p>The table displays:</p>
+<ul>
+  <li><strong>Row numbers (#)</strong> &mdash; visual 1-based row numbers</li>
+  <li><strong>Checkboxes</strong> &mdash; for selecting rows</li>
+  <li><strong>Data columns</strong> &mdash; all visible columns (internal <code>_</code> columns are hidden)</li>
+  <li><strong>Actions</strong> &mdash; a &ldquo;Remove&rdquo; button per row</li>
+</ul>
+<p>The table paginates at 10 rows per page with First/Prev/Next/Last navigation.</p>
+
+<h3>3.3 Adding Rows</h3>
+<ol>
+  <li>Click <strong>+ Add Row</strong></li>
+  <li>A new empty row appears at the bottom (auto-navigates to last page)</li>
+  <li>Fill in all required fields</li>
+  <li>Click <strong>Save Changes</strong> when done</li>
+</ol>
+
+<h3>3.4 Editing Rows</h3>
+<p>All cells are directly editable. Click a cell and type. Changes are tracked at the cell level with before/after values in the audit trail.</p>
+
+<h3>3.5 Removing Rows</h3>
+<p>Click the <strong>Remove</strong> button on any row. A prompt asks for a removal reason (required). The row is removed and saved immediately. A 10-second undo bar appears.</p>
+
+<h3>3.6 Bulk Removal</h3>
+<ol>
+  <li>Check boxes next to rows you want to remove (works across pages)</li>
+  <li>Use the header checkbox to select/deselect <strong>all</strong> rows across all pages</li>
+  <li>Click <strong>Remove Selected (N)</strong></li>
+  <li>Enter a removal reason (applies to all selected rows)</li>
+</ol>
+
+<h3>3.7 Undo Functionality</h3>
+<p>After removing a single row, a 10-second undo bar appears. Click <strong>Undo</strong> to restore the row. After 10 seconds, the option expires.</p>
+<div class="note"><strong>Note:</strong> Undo is available for single-row removals only.</div>
+
+<h3>3.8 Setting Expiration Dates</h3>
+<p>If the CSV has an expiration column, clicking the cell opens a <strong>date/time picker</strong> with presets:</p>
+<table>
+  <tr><th>Preset</th><th>Effect</th></tr>
+  <tr><td>7 Days</td><td>Sets expiration 7 days from now</td></tr>
+  <tr><td>30 Days</td><td>Sets expiration 30 days from now</td></tr>
+  <tr><td>6 Months</td><td>Sets expiration ~182 days from now</td></tr>
+  <tr><td>1 Year</td><td>Sets expiration 365 days from now</td></tr>
+  <tr><td>Clear (Permanent)</td><td>Removes expiration (row never expires)</td></tr>
+</table>
+<p>Date format: <code>YYYY-MM-DD HH:MM</code></p>
+<p>Supported column names (case-insensitive): <code>Expires</code>, <code>expire</code>, <code>expiration</code>, <code>expiration_date</code>, <code>expiry</code>, <code>termination</code>, <code>termination_date</code></p>
+
+<h3>3.9 Import and Export CSV</h3>
+<p><strong>Export:</strong> Click <strong>Export CSV</strong> to download the current CSV content (metadata columns excluded).</p>
+<p><strong>Import:</strong> Click <strong>Import CSV</strong> and select a <code>.csv</code> file. Only new rows not already in the CSV are added. Review and click <strong>Save Changes</strong> to persist.</p>
+
+<h3>3.10 Discarding Changes</h3>
+<p>Click <strong>Discard Changes</strong> to revert all unsaved modifications to the last saved state.</p>
+
+<h2 id="s4">4. Audit Trail Dashboard</h2>
+<p>Navigate to the <strong>Audit Trail</strong> tab in the app navigation.</p>
+
+<h3>4.1 Filters</h3>
+<table>
+  <tr><th>Filter</th><th>Description</th><th>Default</th></tr>
+  <tr><td>Time Range</td><td>Standard Splunk time picker</td><td>Last 7 days</td></tr>
+  <tr><td>Analyst</td><td>Filter by user who made changes</td><td>All Analysts</td></tr>
+  <tr><td>Detection Rule</td><td>Filter by detection rule</td><td>All Rules</td></tr>
+  <tr><td>Action</td><td>Added, Removed, Edited, Auto Removed</td><td>All Actions</td></tr>
+</table>
+
+<h3>4.2 Summary Statistics</h3>
+<p>Four panels at the top: <strong>Total Changes</strong>, <strong>Rows Added</strong>, <strong>Rows Removed</strong>, <strong>Rows Edited</strong>.</p>
+
+<h3>4.3 Action Log</h3>
+<p>Detailed event table showing timestamp, action, analyst, CSV file, detection rule, removal reason, row count, values, and a human-readable summary. Sorted newest-first, 5 events per page.</p>
+
+<h3>4.4 Expiring Soon Panel</h3>
+<p>Shows rows approaching expiration across all CSVs, filtered by the selected Detection Rule. Time remaining displayed as &ldquo;15 days 8 hours left&rdquo; with proper pluralization.</p>
+
+<h2 id="s5">5. Understanding the Diff View</h2>
+<p>After saving, a <strong>Change Summary</strong> appears below the table:</p>
+<ul>
+  <li><strong>Added rows</strong> &mdash; green section with each new row</li>
+  <li><strong>Removed rows</strong> &mdash; red section with each deleted row</li>
+  <li><strong>Unified diff</strong> &mdash; Git-style view with <code>+</code> (added), <code>-</code> (removed), <code>@@</code> (markers)</li>
+</ul>
+
+<h2 id="s6">6. Role-Based Access</h2>
+<table>
+  <tr><th>Role</th><th>View Whitelists</th><th>Edit Whitelists</th><th>View Audit Trail</th></tr>
+  <tr><td><code>wl_editor</code></td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+  <tr><td><code>wl_viewer</code></td><td>Yes</td><td>No</td><td>Yes</td></tr>
+  <tr><td><code>admin</code></td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+  <tr><td><code>sc_admin</code></td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+</table>
+<p>RBAC is enforced server-side via the Splunk REST API on every POST request.</p>
+
+<h2 id="s7">7. FAQ</h2>
+
+<h4>Q: I don&rsquo;t see any detection rules in the dropdown</h4>
+<p>The <code>rule_csv_map.csv</code> lookup needs to be populated. Contact your Splunk administrator.</p>
+
+<h4>Q: I get &ldquo;Permission denied&rdquo; when saving</h4>
+<p>You need the <code>wl_editor</code> role. Contact your Splunk administrator.</p>
+
+<h4>Q: Rows disappeared when I loaded the CSV</h4>
+<p>Rows past their expiration date are automatically removed on load. A yellow banner shows how many were removed.</p>
+
+<h4>Q: My expiration dates aren&rsquo;t being recognized</h4>
+<p>Ensure the column name matches one of the supported names and the date is in <code>YYYY-MM-DD HH:MM</code> or <code>YYYY-MM-DD</code> format.</p>
+
+<h4>Q: How do I make a row permanent?</h4>
+<p>Leave the expiration column empty or use <strong>Clear (Permanent)</strong> in the date picker.</p>
+
+<h4>Q: Where is audit data stored?</h4>
+<p>In the <code>wl_audit</code> index (sourcetype <code>wl_audit</code>). A backup log is at <code>$SPLUNK_HOME/var/log/splunk/wl_manager_audit.log</code>.</p>
+
+<!-- ═════════════════════════════════════════════════ -->
+<div class="part-header" id="part2">PART 2: ADMINISTRATOR GUIDE</div>
+<!-- ═════════════════════════════════════════════════ -->
+
+<h2 id="s8">8. Prerequisites &amp; Requirements</h2>
+<table>
+  <tr><th>Requirement</th><th>Detail</th></tr>
+  <tr><td>Splunk Version</td><td>Enterprise 8.2 or later (tested on 9.3.1)</td></tr>
+  <tr><td>Python</td><td>Python 3 (default in Splunk 8.x+)</td></tr>
+  <tr><td>Dependencies</td><td>None &mdash; stdlib only, no pip packages</td></tr>
+  <tr><td>Disk Space</td><td>~2 MB for app + 1 GB for wl_audit index</td></tr>
+  <tr><td>Network</td><td>Localhost only (127.0.0.1:8089)</td></tr>
+</table>
+
+<h2 id="s9">9. Installation</h2>
+
+<h3>Option A: Splunk Web</h3>
+<ol>
+  <li>Download the <code>.spl</code> file</li>
+  <li>Go to <strong>Apps &gt; Manage Apps &gt; Install app from file</strong></li>
+  <li>Upload the file and restart Splunk</li>
+</ol>
+
+<h3>Option B: CLI</h3>
+<pre><code>$SPLUNK_HOME/bin/splunk install app wl_manager-1.0.0.spl
+$SPLUNK_HOME/bin/splunk restart</code></pre>
+
+<h3>Option C: Manual</h3>
+<pre><code>tar -xzf wl_manager-1.0.0.spl -C $SPLUNK_HOME/etc/apps/
+chown -R splunk:splunk $SPLUNK_HOME/etc/apps/wl_manager/
+$SPLUNK_HOME/bin/splunk restart</code></pre>
+
+<h3>Post-Installation Verification</h3>
+<pre><code>curl -sk -u admin:password \
+  https://localhost:8089/services/custom/wl_manager?action=get_mapping</code></pre>
+
+<h2 id="s10">10. Initial Configuration</h2>
+
+<h3>10.1 Custom Roles</h3>
+<p>Two roles are created automatically:</p>
+<table>
+  <tr><th>Role</th><th>Inherits</th><th>Purpose</th></tr>
+  <tr><td><code>wl_editor</code></td><td><code>user</code></td><td>Read + write whitelists, search wl_audit</td></tr>
+  <tr><td><code>wl_viewer</code></td><td><code>user</code></td><td>Read-only access</td></tr>
+</table>
+<p>Assign via <strong>Settings &gt; Access Controls &gt; Users</strong> or:</p>
+<pre><code>$SPLUNK_HOME/bin/splunk edit user &lt;username&gt; -roles user,wl_editor -auth admin:password</code></pre>
+
+<h3>10.2 wl_audit Index</h3>
+<p>Created automatically. Default: 1 GB cap, 3-year retention. Verify:</p>
+<pre><code>| rest /services/data/indexes/wl_audit | table title currentDBSizeMB maxTotalDataSizeMB</code></pre>
+
+<h3>10.3 Rule-to-CSV Mapping</h3>
+<p>Edit <code>lookups/rule_csv_map.csv</code> via Settings &gt; Lookups or directly on the filesystem:</p>
+<pre><code>rule_name,csv_file,app_context
+DR20_malicious_command,dr20_whitelist.csv,SplunkEnterpriseSecuritySuite
+DR600_unauthorized_software,dr600_unauthorized_software.csv,</code></pre>
+<table>
+  <tr><th>Column</th><th>Required</th><th>Description</th></tr>
+  <tr><td><code>rule_name</code></td><td>Yes</td><td>Detection rule identifier</td></tr>
+  <tr><td><code>csv_file</code></td><td>Yes</td><td>CSV filename in the app's lookups/ directory</td></tr>
+  <tr><td><code>app_context</code></td><td>No</td><td>Splunk app containing the CSV (empty = wl_manager)</td></tr>
+</table>
+
+<h2 id="s11">11. Adding Detection Rules and CSVs</h2>
+<ol>
+  <li>Create the CSV file with a header row in the appropriate <code>lookups/</code> directory</li>
+  <li>Add an entry to <code>rule_csv_map.csv</code></li>
+  <li>Ensure the Splunk user has read/write permissions on the CSV file:
+    <pre><code>chown splunk:splunk $SPLUNK_HOME/etc/apps/&lt;app&gt;/lookups/&lt;csv&gt;
+chmod 644 $SPLUNK_HOME/etc/apps/&lt;app&gt;/lookups/&lt;csv&gt;</code></pre>
+  </li>
+  <li>Verify in the dashboard</li>
+</ol>
+
+<h2 id="s12">12. Expiration Settings</h2>
+<p>The app detects these column names (case-insensitive) as expiration dates:</p>
+<p><code>Expires</code>, <code>expire</code>, <code>expiration</code>, <code>expiration_date</code>, <code>expiry</code>, <code>termination</code>, <code>termination_date</code></p>
+<p>Supported formats: <code>YYYY-MM-DD HH:MM</code>, <code>YYYY-MM-DD</code></p>
+<p><strong>How it works:</strong></p>
+<ul>
+  <li><strong>On load:</strong> Expired rows removed automatically (uses browser timezone)</li>
+  <li><strong>Hourly:</strong> Scheduled cleanup removes expired rows (uses server timezone)</li>
+</ul>
+
+<h2 id="s13">13. Scheduled Cleanup</h2>
+<p>Configured in <code>inputs.conf</code>:</p>
+<pre><code>[script://./bin/wl_expiration_cleanup.py]
+disabled       = false
+interval       = 3600
+python.version = python3</code></pre>
+<p>To adjust frequency, create <code>local/inputs.conf</code> with a different <code>interval</code>. Monitor with:</p>
+<pre><code>index=_internal sourcetype=wl_expiration_cleanup</code></pre>
+
+<h2 id="s14">14. Audit Trail &amp; Retention</h2>
+
+<h3>Event Structure</h3>
+<table>
+  <tr><th>Field</th><th>Description</th></tr>
+  <tr><td><code>timestamp</code></td><td>Unix epoch</td></tr>
+  <tr><td><code>analyst</code></td><td>Username (&ldquo;system&rdquo; for auto-cleanup)</td></tr>
+  <tr><td><code>action</code></td><td>added, removed, removed_multiple, edited, auto_removed</td></tr>
+  <tr><td><code>detection_rule</code></td><td>Rule name</td></tr>
+  <tr><td><code>csv_file</code></td><td>CSV filename</td></tr>
+  <tr><td><code>comment</code></td><td>Analyst-provided reason</td></tr>
+  <tr><td><code>value</code></td><td>Per-row field values</td></tr>
+  <tr><td><code>remove_reason</code></td><td>Why rows were removed</td></tr>
+</table>
+
+<h3>Useful SPL Queries</h3>
+<pre><code># All changes in last 24h
+index=wl_audit sourcetype=wl_audit earliest=-24h
+| table timestamp analyst action detection_rule csv_file
+
+# Changes by analyst
+index=wl_audit sourcetype=wl_audit
+| stats count by analyst action | sort -count</code></pre>
+
+<h3>Retention</h3>
+<p>Default: 3 years (94,608,000 seconds). Adjust in <code>local/indexes.conf</code>. Backup log at <code>$SPLUNK_HOME/var/log/splunk/wl_manager_audit.log</code> (10 MB rotating, 5 backups).</p>
+
+<h2 id="s15">15. CLI Wrapper Usage</h2>
+<pre><code># List CSV contents
+python3 bin/wl_wrapper.py list --csv dr20_whitelist.csv --app SplunkEnterpriseSecuritySuite
+
+# Add a row
+python3 bin/wl_wrapper.py add --csv dr20_whitelist.csv --app SplunkEnterpriseSecuritySuite \
+  --rule DR20 --values "host=SRV1,user=bob,Comment=Approved" --user john --comment "INC-123"
+
+# Remove rows
+python3 bin/wl_wrapper.py remove --csv dr20_whitelist.csv --app SplunkEnterpriseSecuritySuite \
+  --rule DR20 --match "host=SRV1,user=bob" --user john --comment "No longer needed"
+
+# Dry-run diff
+python3 bin/wl_wrapper.py diff --csv dr20_whitelist.csv --app SplunkEnterpriseSecuritySuite \
+  --values "host=SRV2,user=alice"</code></pre>
+<div class="note"><strong>Note:</strong> The CLI wrapper writes audit events to the log file only (no Splunk session key). For full audit coverage, prefer the web interface.</div>
+
+<h2 id="s16">16. Security Considerations</h2>
+<table>
+  <tr><th>Area</th><th>Protection</th></tr>
+  <tr><td>Path Traversal</td><td><code>_safe_filename()</code> validates all CSV names; <code>os.path.basename()</code> on app_context</td></tr>
+  <tr><td>XSS</td><td><code>_.escape()</code> on all user values before DOM insertion</td></tr>
+  <tr><td>Authentication</td><td><code>requireAuthentication = true</code> in restmap.conf</td></tr>
+  <tr><td>Authorization</td><td>Server-side RBAC via Splunk REST API role checks</td></tr>
+  <tr><td>Credentials</td><td>No hardcoded credentials; uses Splunk session tokens</td></tr>
+  <tr><td>Dependencies</td><td>Python stdlib only &mdash; no third-party packages</td></tr>
+  <tr><td>SSL</td><td>Verification disabled for localhost:8089 only (standard for self-signed cert)</td></tr>
+</table>
+
+<h2 id="s17">17. Troubleshooting</h2>
+
+<h4>App not visible</h4>
+<p>Check: <code>ls $SPLUNK_HOME/etc/apps/wl_manager/</code> and ownership. Restart Splunk.</p>
+
+<h4>REST endpoint returns 404</h4>
+<p>Verify <code>restmap.conf</code> and <code>web.conf</code>. Check: <code>index=_internal source=*splunkd.log* wl_manager ERROR</code></p>
+
+<h4>Permission denied on CSV save</h4>
+<p>Fix file ownership: <code>chown splunk:splunk &lt;csv_path&gt;</code></p>
+
+<h4>Dashboard shows stale data</h4>
+<p>Bump build number in <code>app.conf</code> and restart, or use: <code>curl -k -u admin:pass https://localhost:8089/services/apps/local/wl_manager/_bump</code></p>
+
+<h4>Docker: files owned by root</h4>
+<p>Fix with: <code>docker exec -u 0 &lt;container&gt; chown -R splunk:splunk /opt/splunk/etc/apps/wl_manager/</code></p>
+
+<h2 id="s18">18. Upgrading &amp; Uninstallation</h2>
+
+<h3>Upgrading</h3>
+<ol>
+  <li>Back up <code>local/</code> directory and <code>lookups/rule_csv_map.csv</code></li>
+  <li>Install the new <code>.spl</code> (overwrites <code>default/</code>)</li>
+  <li>Restore your <code>rule_csv_map.csv</code></li>
+  <li>Clear Python cache: <code>find ... -name "__pycache__" -exec rm -rf {} +</code></li>
+  <li>Restart Splunk</li>
+</ol>
+
+<h3>Uninstallation</h3>
+<pre><code>$SPLUNK_HOME/bin/splunk remove app wl_manager
+$SPLUNK_HOME/bin/splunk restart
+
+# Optional: remove the audit index
+$SPLUNK_HOME/bin/splunk remove index wl_audit
+
+# Optional: remove the log file
+rm $SPLUNK_HOME/var/log/splunk/wl_manager_audit.log*</code></pre>
+
+<hr>
+
+<h2>Quick Reference</h2>
+<table>
+  <tr><th>Item</th><th>Value</th></tr>
+  <tr><td>App folder</td><td><code>$SPLUNK_HOME/etc/apps/wl_manager/</code></td></tr>
+  <tr><td>REST endpoint</td><td><code>/services/custom/wl_manager</code></td></tr>
+  <tr><td>Web dashboard</td><td><code>/app/wl_manager/whitelist_manager</code></td></tr>
+  <tr><td>Audit index</td><td><code>wl_audit</code></td></tr>
+  <tr><td>Audit log</td><td><code>$SPLUNK_HOME/var/log/splunk/wl_manager_audit.log</code></td></tr>
+  <tr><td>Mapping CSV</td><td><code>lookups/rule_csv_map.csv</code></td></tr>
+  <tr><td>Edit role</td><td><code>wl_editor</code></td></tr>
+  <tr><td>View role</td><td><code>wl_viewer</code></td></tr>
+  <tr><td>Python</td><td>Python 3 (stdlib only)</td></tr>
+  <tr><td>Splunk</td><td>8.2+ (tested on 9.3.1)</td></tr>
+</table>
+
+</body>
+</html>

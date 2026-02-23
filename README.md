@@ -1,18 +1,25 @@
-# Whitelist Manager for Splunk ES
+# Whitelist Manager for Splunk
 
 A Splunk application for managing detection-rule CSV whitelists with a full audit trail.
 
-Built for **Splunk Enterprise Security (ES)** on-prem environments with multiple detection rules.
+Built for **Splunk Enterprise Security (ES)** on-prem environments with hundreds of detection rules.
 
 ## Features
 
-- **Two codependent dropdowns** — select a detection rule, then its associated CSV files
-- **Editable CSV table** — add, remove, and modify whitelist entries in-browser
-- **Git-style audit trail** — every change records who, what, when, with unified diff
-- **RBAC enforcement** — only `wl_editor` role can save changes
-- **Dual audit storage** — events indexed in `wl_audit` + rotating log file
+- **Searchable detection rule dropdown** — type-ahead search across 300+ detection rules
+- **Editable CSV table** — add, remove, and edit whitelist entries in-browser with pagination
+- **Row selection** — select individual rows or all rows across pages for bulk operations
+- **Git-style audit trail** — every change records who, what, when, with unified diff and cell-level edit tracking
+- **Expiration management** — date/time picker with presets (7 days, 30 days, 6 months, 1 year); supports 7 column name variants
+- **Auto-expiration cleanup** — expired rows removed automatically on load and via hourly scheduled task
+- **Undo support** — 10-second undo window after row removal
+- **CSV import/export** — bulk upload to merge rows, download current CSV
+- **RBAC enforcement** — server-side role checks; only `wl_editor` / `admin` / `sc_admin` can save changes
+- **Dual audit storage** — events indexed in `wl_audit` + rotating log file backup
 - **Master mapping CSV** — `rule_csv_map.csv` links rules to their CSV files across apps
-- **CLI wrapper** — `wl_wrapper.py` for command-line bulk operations
+- **CLI wrapper** — `wl_wrapper.py` for command-line and automation operations
+- **Dark/light theme** — automatically detects and adapts to Splunk's active theme
+- **Expiring Soon dashboard** — shows rows approaching expiration with "X days Y hours left" display
 
 ## Quick Start
 
@@ -38,34 +45,51 @@ The master mapping (`rule_csv_map.csv`) has three columns:
 | `csv_file` | CSV filename | `DR45_whitelist_users.csv` |
 | `app_context` | Splunk app containing the CSV | `SplunkEnterpriseSecuritySuite` |
 
-A rule can map to multiple CSVs (one row per CSV).
+A rule can map to multiple CSVs (one row per CSV). Leave `app_context` empty if the CSV is in `wl_manager/lookups/`.
+
+## Supported Expiration Column Names
+
+The app recognizes these column names (case-insensitive) as expiration dates:
+
+`Expires`, `expire`, `expiration`, `expiration_date`, `expiry`, `termination`, `termination_date`
+
+Date formats supported: `YYYY-MM-DD HH:MM`, `YYYY-MM-DD`
 
 ## Architecture
 
 ```
 wl_manager/
 ├── bin/
-│   ├── wl_handler.py       # REST handler (PersistentServerConnectionApplication)
-│   └── wl_wrapper.py       # CLI wrapper for terminal operations
+│   ├── wl_handler.py              # REST handler (PersistentServerConnectionApplication)
+│   ├── wl_expiring_soon.py        # Custom search command: | wlexpiringsoon
+│   ├── wl_expiration_cleanup.py   # Scheduled hourly cleanup
+│   └── wl_wrapper.py              # CLI wrapper for terminal operations
 ├── default/
-│   ├── app.conf            # App metadata
-│   ├── restmap.conf        # REST endpoint registration
-│   ├── web.conf            # Splunk Web exposure
-│   ├── indexes.conf        # wl_audit index definition
-│   ├── authorize.conf      # wl_editor / wl_viewer roles
-│   ├── transforms.conf     # Lookup definitions
+│   ├── app.conf                   # App metadata
+│   ├── restmap.conf               # REST endpoint registration
+│   ├── web.conf                   # Splunk Web exposure
+│   ├── commands.conf              # Custom search command registration
+│   ├── inputs.conf                # Scheduled cleanup (hourly)
+│   ├── indexes.conf               # wl_audit index definition
+│   ├── authorize.conf             # wl_editor / wl_viewer roles
+│   ├── transforms.conf            # Lookup definitions
+│   ├── savedsearches.conf         # Expiring soon saved search
 │   └── data/ui/
 │       ├── nav/default.xml
 │       └── views/
 │           ├── whitelist_manager.xml  # Main dashboard
 │           └── audit.xml              # Audit trail dashboard
 ├── appserver/static/
-│   ├── whitelist_manager.js   # Frontend controller
-│   └── whitelist_manager.css  # Styles
+│   ├── whitelist_manager.js       # Frontend controller
+│   └── whitelist_manager.css      # Styles (dark/light theme)
 ├── lookups/
-│   └── rule_csv_map.csv    # Master rule-to-CSV mapping
-└── metadata/
-    └── default.meta        # RBAC permissions
+│   └── rule_csv_map.csv           # Master rule-to-CSV mapping
+├── metadata/
+│   └── default.meta               # RBAC permissions
+└── docs/
+    ├── Whitelist_Manager_Documentation.md    # User Guide
+    ├── Whitelist_Manager_Documentation.html  # Full Documentation (PDF-ready)
+    └── Splunk_Admin_Installation_Guide.md    # Admin Guide
 ```
 
 ## RBAC Roles
@@ -74,7 +98,22 @@ wl_manager/
 |---|---|
 | `wl_editor` | Read + write whitelists, view audit trail |
 | `wl_viewer` | Read-only access to whitelists and audit trail |
-| `admin` / `sc_admin` | Full access (built-in) |
+| `admin` / `sc_admin` | Full access (built-in Splunk roles) |
+
+## Dashboards
+
+### Whitelist Manager (Main)
+- Searchable detection rule dropdown
+- CSV file selector
+- Editable table with Add Row, Remove, Save, Discard, Import, Export
+- Date/time picker for expiration columns
+- Git-style diff display after save
+
+### Audit Trail
+- Time range, analyst, detection rule, and action filters
+- Summary stats: Total Changes, Rows Added, Rows Removed, Rows Edited
+- Detailed action log with per-row values
+- Expiring Soon panel filtered by selected detection rule
 
 ## Development
 
@@ -97,39 +136,43 @@ bash scripts/test_integration.sh
 docker compose down
 ```
 
-### Validation & Packaging
+### Packaging
 
 ```bash
-# Validate app structure, syntax, security
-bash scripts/validate.sh
-
 # Build .spl package
 bash scripts/package.sh
 # Output: dist/wl_manager-<version>.spl
 ```
 
-## Releasing a New Version
-
-1. Update `version` in `default/app.conf`
-2. Commit and push
-3. Create a GitHub release with a tag matching the version (e.g., `v1.1.0`)
-4. The CI workflow automatically builds and attaches the `.spl` to the release
-
 ## Audit Trail
 
-Every CSV save generates an audit event containing:
+Every CSV change generates audit events containing:
 
 - **Analyst** — who made the change
-- **Timestamp** — UTC ISO-8601
+- **Timestamp** — Unix epoch (displayed as formatted datetime in dashboard)
 - **Detection rule** — which rule the whitelist belongs to
-- **Comment** — mandatory analyst-provided reason
-- **Diff** — added rows, removed rows, and unified text diff
+- **Action** — added, removed, edited, or auto_removed
+- **Comment** — analyst-provided reason for the change
+- **Row details** — per-row field values with row numbers
+- **Removal reason** — why rows were removed (required)
 
 View the audit trail at **Apps > Whitelist Manager > Audit Trail**.
 
 Search in SPL:
 ```spl
 index=wl_audit sourcetype=wl_audit
-| spath
-| table timestamp analyst detection_rule csv_file comment rows_added rows_removed
+| table timestamp analyst action detection_rule csv_file comment
 ```
+
+## Security
+
+- **Path traversal prevention** — filenames validated, `os.path.basename()` applied to app context
+- **XSS prevention** — all user values escaped with `_.escape()` before DOM insertion
+- **Server-side RBAC** — role checks performed server-side via Splunk REST API
+- **No hardcoded credentials** — uses Splunk session tokens exclusively
+- **No external dependencies** — Python stdlib only (no pip packages)
+- **Authentication required** — REST endpoint requires valid Splunk session
+
+## License
+
+Proprietary — Security Engineering Team
