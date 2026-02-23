@@ -115,6 +115,20 @@ wl_manager/
 - Detailed action log with per-row values
 - Expiring Soon panel filtered by selected detection rule
 
+## Quick Demo (Docker)
+
+Evaluate the app in a containerized Splunk instance with one command:
+
+```bash
+bash demo/demo.sh          # build .spl, start Splunk on http://localhost:9000
+bash demo/demo.sh --stop   # stop and remove the demo container
+bash demo/demo.sh --clean  # stop + remove container and data volume
+```
+
+Login: `admin` / `Chang3d!` at http://localhost:9000
+
+The demo seeds three sample detection rules with whitelist data so you can immediately test all features. See `demo/Demo_Guide.pdf` for a step-by-step walkthrough.
+
 ## Development
 
 ### Prerequisites

@@ -112,6 +112,7 @@ tar -czf "$SPL_FILE" \
     --exclude="$APP_NAME/.github" \
     --exclude="$APP_NAME/.docker" \
     --exclude="$APP_NAME/dist" \
+    --exclude="$APP_NAME/demo" \
     --exclude="$APP_NAME/scripts" \
     --exclude="$APP_NAME/tests" \
     --exclude="$APP_NAME/docker-compose.yml" \
