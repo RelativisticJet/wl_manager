@@ -125,6 +125,25 @@ $SPLUNK_HOME/bin/splunk list user > /tmp/splunk_users_backup.txt
 
 ---
 
+## Try It First (Docker Demo)
+
+Before installing on production, you can evaluate the app in a containerized Splunk instance. This requires Docker Desktop and takes about 2-3 minutes.
+
+```bash
+# From the wl_manager repository root:
+bash demo/demo.sh          # builds .spl, starts Splunk on http://localhost:9000
+bash demo/demo.sh --stop   # tear down when done
+bash demo/demo.sh --clean  # tear down + remove data volume
+```
+
+Login: `admin` / `Chang3d!` at http://localhost:9000
+
+The demo installs the app from the `.spl` package (same as a real install) and seeds three sample detection rules with whitelist data. See `demo/Demo_Guide.pdf` for a detailed walkthrough.
+
+> **Note:** The demo uses ports 9000/9089 to avoid conflicts with any existing Splunk installation.
+
+---
+
 ## DURING Installation
 
 ### Step 1: Install the .spl Package

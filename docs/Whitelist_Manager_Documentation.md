@@ -48,6 +48,17 @@ Whitelist Manager is a Splunk application that provides a web-based interface fo
 
 ## 2. Getting Started
 
+### Quick Demo (Docker)
+
+Want to try the app before installing on a production Splunk instance? Run the demo script to launch a containerized Splunk with sample data:
+
+```bash
+bash demo/demo.sh          # starts Splunk on http://localhost:9000
+bash demo/demo.sh --stop   # tear down when done
+```
+
+Login: `admin` / `Chang3d!`. See `demo/Demo_Guide.pdf` for a full walkthrough.
+
 ### Accessing the App
 
 1. Log in to Splunk Web
