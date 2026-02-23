@@ -41,8 +41,8 @@ The master mapping (`rule_csv_map.csv`) has three columns:
 
 | Column | Description | Example |
 |---|---|---|
-| `rule_name` | Detection rule name | `DR45_suspicious_login` |
-| `csv_file` | CSV filename | `DR45_whitelist_users.csv` |
+| `rule_name` | Detection rule name | `My_Detection_Rule` |
+| `csv_file` | CSV filename | `my_whitelist.csv` |
 | `app_context` | Splunk app containing the CSV | `SplunkEnterpriseSecuritySuite` |
 
 A rule can map to multiple CSVs (one row per CSV). Leave `app_context` empty if the CSV is in `wl_manager/lookups/`.

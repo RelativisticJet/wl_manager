@@ -222,7 +222,7 @@
 <h2 id="s3">3. Main Dashboard &mdash; Managing Whitelists</h2>
 
 <h3>3.1 Selecting a Detection Rule</h3>
-<p>The <strong>Detection Rule</strong> dropdown supports type-ahead search. Start typing the rule name (e.g., &ldquo;DR20&rdquo; or &ldquo;malicious&rdquo;) and matching rules appear instantly. Click a rule to select it.</p>
+<p>The <strong>Detection Rule</strong> dropdown supports type-ahead search. Start typing the rule name (e.g., a partial name or keyword) and matching rules appear instantly. Click a rule to select it.</p>
 <p>Once selected, the <strong>CSV File</strong> dropdown populates with all CSV files mapped to that rule.</p>
 
 <h3>3.2 Viewing CSV Contents</h3>
@@ -395,8 +395,8 @@ $SPLUNK_HOME/bin/splunk restart</code></pre>
 <h3>10.3 Rule-to-CSV Mapping</h3>
 <p>Edit <code>lookups/rule_csv_map.csv</code> via Settings &gt; Lookups or directly on the filesystem:</p>
 <pre><code>rule_name,csv_file,app_context
-DR20_malicious_command,dr20_whitelist.csv,SplunkEnterpriseSecuritySuite
-DR600_unauthorized_software,dr600_unauthorized_software.csv,</code></pre>
+My_Detection_Rule,my_whitelist.csv,SplunkEnterpriseSecuritySuite
+Another_Rule,another_whitelist.csv,</code></pre>
 <table>
   <tr><th>Column</th><th>Required</th><th>Description</th></tr>
   <tr><td><code>rule_name</code></td><td>Yes</td><td>Detection rule identifier</td></tr>
@@ -463,18 +463,18 @@ index=wl_audit sourcetype=wl_audit
 
 <h2 id="s15">15. CLI Wrapper Usage</h2>
 <pre><code># List CSV contents
-python3 bin/wl_wrapper.py list --csv dr20_whitelist.csv --app SplunkEnterpriseSecuritySuite
+python3 bin/wl_wrapper.py list --csv my_whitelist.csv --app SplunkEnterpriseSecuritySuite
 
 # Add a row
-python3 bin/wl_wrapper.py add --csv dr20_whitelist.csv --app SplunkEnterpriseSecuritySuite \
-  --rule DR20 --values "host=SRV1,user=bob,Comment=Approved" --user john --comment "INC-123"
+python3 bin/wl_wrapper.py add --csv my_whitelist.csv --app SplunkEnterpriseSecuritySuite \
+  --rule My_Detection_Rule --values "host=SRV1,user=bob,Comment=Approved" --user john --comment "INC-123"
 
 # Remove rows
-python3 bin/wl_wrapper.py remove --csv dr20_whitelist.csv --app SplunkEnterpriseSecuritySuite \
-  --rule DR20 --match "host=SRV1,user=bob" --user john --comment "No longer needed"
+python3 bin/wl_wrapper.py remove --csv my_whitelist.csv --app SplunkEnterpriseSecuritySuite \
+  --rule My_Detection_Rule --match "host=SRV1,user=bob" --user john --comment "No longer needed"
 
 # Dry-run diff
-python3 bin/wl_wrapper.py diff --csv dr20_whitelist.csv --app SplunkEnterpriseSecuritySuite \
+python3 bin/wl_wrapper.py diff --csv my_whitelist.csv --app SplunkEnterpriseSecuritySuite \
   --values "host=SRV2,user=alice"</code></pre>
 <div class="note"><strong>Note:</strong> The CLI wrapper writes audit events to the log file only (no Splunk session key). For full audit coverage, prefer the web interface.</div>
 

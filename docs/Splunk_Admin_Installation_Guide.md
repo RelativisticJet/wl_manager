@@ -178,7 +178,7 @@ curl -sk -u admin:password https://localhost:8089/services/custom/wl_manager?act
 **Expected response** (JSON with the sample mapping data):
 
 ```json
-{"mapping": [{"rule_name": "DR20_malicious_command", "csv_file": "DR20_whitelist.csv", ...}]}
+{"mapping": [{"rule_name": "My_Detection_Rule", "csv_file": "my_whitelist.csv", ...}]}
 ```
 
 If you get a **404**, restart Splunk one more time. If the 404 persists, check the logs above.
@@ -245,8 +245,8 @@ Format:
 
 ```csv
 rule_name,csv_file,app_context
-DR20_malicious_command,DR20_whitelist.csv,SplunkEnterpriseSecuritySuite
-DR45_suspicious_login,DR45_whitelist_users.csv,SplunkEnterpriseSecuritySuite
+My_Detection_Rule,my_whitelist.csv,SplunkEnterpriseSecuritySuite
+Another_Rule,another_whitelist.csv,DA-ESS-ContentUpdate
 ```
 
 **Important**: The `app_context` must exactly match the app's folder name in `$SPLUNK_HOME/etc/apps/`.

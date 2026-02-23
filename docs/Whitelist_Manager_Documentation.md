@@ -77,7 +77,7 @@ If you see a "Permission denied" error when trying to save, contact your Splunk 
 
 ### 3.1 Selecting a Detection Rule
 
-The **Detection Rule** dropdown supports type-ahead search. Start typing the rule name (e.g., "DR20" or "malicious") and matching rules appear instantly. Click a rule to select it.
+The **Detection Rule** dropdown supports type-ahead search. Start typing the rule name (e.g., a partial name or keyword) and matching rules appear instantly. Click a rule to select it.
 
 Once a rule is selected, the **CSV File** dropdown populates with all CSV files mapped to that rule. If a rule has only one CSV, it is selected automatically.
 
