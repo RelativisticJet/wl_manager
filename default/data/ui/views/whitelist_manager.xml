@@ -1,89 +1,32 @@
-<dashboard script="whitelist_manager.js" stylesheet="whitelist_manager.css">
+<dashboard version="1.1" theme="dark" script="whitelist_manager.js" stylesheet="whitelist_manager.css">
   <label>Whitelist Manager</label>
   <description>View, edit, and audit detection-rule CSV whitelists</description>
 
   <!-- ============================================================
-       DROPDOWN FILTERS
-       ============================================================ -->
-  <fieldset submitButton="false">
-
-    <!-- Dropdown 1 — Detection Rules (searchable) -->
-    <input type="dropdown" token="rule_token" searchWhenChanged="true">
-      <label>Detection Rule</label>
-      <search>
-        <query>| inputlookup rule_csv_map.csv | dedup rule_name | sort rule_name | table rule_name</query>
-      </search>
-      <fieldForLabel>rule_name</fieldForLabel>
-      <fieldForValue>rule_name</fieldForValue>
-      <choice value="">-- Select a Detection Rule --</choice>
-      <default></default>
-      <initialValue></initialValue>
-      <change>
-        <unset token="csv_token" />
-        <unset token="app_token" />
-        <unset token="csv_error" />
-      </change>
-    </input>
-
-    <!-- Dropdown 2 — CSV Files for selected rule (auto-selects first) -->
-    <input type="dropdown" token="csv_token" searchWhenChanged="true"
-           depends="$rule_token$">
-      <label>CSV File</label>
-      <search>
-        <query>| inputlookup rule_csv_map.csv | where rule_name="$rule_token$" | table csv_file app_context</query>
-        <done>
-          <condition match="$job.resultCount$ == 0">
-            <set token="csv_error">no_csv</set>
-            <unset token="csv_token" />
-          </condition>
-          <condition>
-            <unset token="csv_error" />
-          </condition>
-        </done>
-      </search>
-      <fieldForLabel>csv_file</fieldForLabel>
-      <fieldForValue>csv_file</fieldForValue>
-      <selectFirstChoice>true</selectFirstChoice>
-    </input>
-
-  </fieldset>
-
-  <!-- Hidden search: resolve app_context for the selected CSV -->
-  <search id="app_context_search">
-    <query>
-      | inputlookup rule_csv_map.csv
-      | where rule_name="$rule_token$" AND csv_file="$csv_token$"
-      | head 1
-      | table app_context
-    </query>
-    <done>
-      <set token="app_token">$result.app_context$</set>
-    </done>
-  </search>
-
-  <!-- ============================================================
-       ERROR: no CSV for this rule
-       ============================================================ -->
-  <row depends="$csv_error$">
-    <panel>
-      <html>
-        <div class="alert alert-warning" style="padding:12px;margin:10px 0;border-radius:4px;background:#fff3e0;border:1px solid #ffcc80;color:#e65100;">
-          <strong>No whitelisting exists for this detection rule.</strong>
-        </div>
-      </html>
-    </panel>
-  </row>
-
-  <!-- ============================================================
        EDITABLE CSV TABLE  (rendered by whitelist_manager.js)
        ============================================================ -->
-  <row depends="$csv_token$">
+  <row>
     <panel>
-      <title>Whitelist: $csv_token$</title>
       <html>
+        <div id="wl-dropdowns">
+          <div class="wl-dropdown-group">
+            <label class="wl-dropdown-label">Detection Rule</label>
+            <div class="wl-search-select" id="rule-select">
+              <input type="text" class="wl-search-input" id="rule-search"
+                     placeholder="Type to search detection rules..." autocomplete="off" />
+              <div class="wl-dropdown-list" id="rule-list"></div>
+            </div>
+          </div>
+          <div class="wl-dropdown-group">
+            <label class="wl-dropdown-label">CSV File</label>
+            <select class="wl-select" id="csv-select" disabled="disabled">
+              <option value="">-- Select a Detection Rule first --</option>
+            </select>
+          </div>
+        </div>
         <div id="message-container"></div>
         <div id="csv-table-container">
-          <p class="muted">Select a detection rule and CSV file above.</p>
+          <p class="wl-muted">Select a detection rule and CSV file above.</p>
         </div>
         <div id="diff-container"></div>
       </html>

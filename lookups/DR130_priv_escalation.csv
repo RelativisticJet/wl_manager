@@ -1,0 +1,8 @@
+user,target_group,host,Comment,Expires,_added_by,_added_at
+svc_sccm,Domain Admins,SRV-SCCM01,SCCM needs DA for client push installation,,,
+svc_exchange,Organization Management,SRV-EXCH01,Exchange service requires elevated permissions,,,
+admin_k.lee,Server Operators,DC01,Kevin Lee - tier 2 admin performing scheduled maintenance,2026-07-01 08:00,,
+svc_adconnect,ADSyncAdmins,SRV-AADC01,Azure AD Connect sync service,,,
+svc_adconnect_2,ADSyncAdmins,SRV-AADC08,Azure AD Connect sync service SRV-AADC08,,admin,1771712939
+contractor_j.novak,Backup Operators,SRV-BACKUP01,Contractor backup migration project,2026-03-14 17:00,,
+temp_admin,Domain Admins,DC02,Emergency admin account for DR exercise,2026-02-24 12:00,,

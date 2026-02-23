@@ -1,0 +1,9 @@
+src_host,dst_host,Comment,Expires,_added_by,_added_at,_review_status
+WKSTN-001,SRV-FILE01,Approved file share access,,,,
+Station_1,Station_2,Test comment for DR88,,admin,2026-02-18T17:17:08Z,pending
+SRV-SCAN01,DC01,Vulnerability scanner authenticated scans,2026-04-30 12:00,admin,,
+SRV-SCAN01,DC02,Vulnerability scanner authenticated scans,2026-04-30 12:00,admin,,
+WKSTN-PENTEST,SRV-WEB01,Penetration test engagement - web tier,2026-03-07 18:00,admin,,
+WKSTN-PENTEST,SRV-DB01,Penetration test engagement - database tier,2026-03-07 18:00,admin,,
+SRV-ANSIBLE01,SRV-APP01,Ansible configuration management,,,,,
+SRV-ANSIBLE01,SRV-APP02,Ansible configuration management,,,,,

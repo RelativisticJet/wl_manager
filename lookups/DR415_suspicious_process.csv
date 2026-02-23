@@ -1,0 +1,3 @@
+host,process_name,process_path,user,Comment,_added_by,_added_at
+WKSTN-DEV-042,python.exe,C:\Python311\python.exe,j.martinez,Developer workstation - Python used for build scripts,,
+WKSTN-DEV-0443,python.exe,C:\Python311\python.exe,john,Developer workstation - Python used for build scripts,admin,1771709031

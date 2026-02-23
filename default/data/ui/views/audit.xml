@@ -1,11 +1,11 @@
-<dashboard>
+<dashboard version="1.1" theme="dark">
   <label>Audit Trail</label>
   <description>Full history of every whitelist change — who, what, when, and the exact rows added or removed</description>
 
   <!-- ============================================================
        FILTERS
        ============================================================ -->
-  <fieldset submitButton="true" autoRun="true">
+  <fieldset submitButton="false" autoRun="true">
 
     <input type="time" token="time_token" searchWhenChanged="true">
       <label>Time Range</label>
@@ -41,6 +41,16 @@
       <default>*</default>
     </input>
 
+    <input type="dropdown" token="action_filter" searchWhenChanged="true">
+      <label>Action</label>
+      <choice value="*">All Actions</choice>
+      <choice value="added">Added</choice>
+      <choice value="removed">Removed</choice>
+      <choice value="edited">Edited</choice>
+      <choice value="auto_removed">Auto Removed</choice>
+      <default>*</default>
+    </input>
+
   </fieldset>
 
   <!-- ============================================================
@@ -48,13 +58,16 @@
        ============================================================ -->
   <row>
     <panel>
-      <title>Summary</title>
+      <title>Total Changes</title>
       <single>
         <search>
           <query>
             index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
               analyst=$analyst_filter$ detection_rule=$rule_filter$
-            | stats count as "Total Changes"
+            | stats sum(added_row_count) as r_added sum(removed_row_count) as r_removed sum(edited_row_count) as r_edited sum(auto_removed_count) as r_auto
+            | eval total_changes=coalesce(r_added,0)+coalesce(r_removed,0)+coalesce(r_edited,0)+coalesce(r_auto,0)
+            | table total_changes
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
@@ -67,9 +80,10 @@
         <search>
           <query>
             index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
               analyst=$analyst_filter$ detection_rule=$rule_filter$
-            | spath rows_added
-            | stats sum(rows_added) as "Total Rows Added"
+            | where action="added"
+            | stats sum(added_row_count) as total_rows_added
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
@@ -82,9 +96,26 @@
         <search>
           <query>
             index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
               analyst=$analyst_filter$ detection_rule=$rule_filter$
-            | spath rows_removed
-            | stats sum(rows_removed) as "Total Rows Removed"
+            | where action="removed" OR action="removed_multiple" OR action="auto_removed"
+            | stats sum(removed_row_count) as total_rows_removed
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+    <panel>
+      <title>Rows Edited</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="edited"
+            | stats sum(edited_row_count) as total_rows_edited
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
@@ -94,120 +125,50 @@
   </row>
 
   <!-- ============================================================
-       CHANGE LOG TABLE
+       ACTION LOG
        ============================================================ -->
   <row>
     <panel>
-      <title>Change Log</title>
+      <title>Action Log</title>
       <table id="audit_table">
         <search>
           <query>
             index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
               analyst=$analyst_filter$ detection_rule=$rule_filter$
-            | spath
-            | table timestamp analyst detection_rule csv_file comment rows_added rows_removed
-            | sort - timestamp
-            | rename
-                timestamp       as "Time",
-                analyst         as "Analyst",
-                detection_rule  as "Detection Rule",
-                csv_file        as "CSV File",
-                comment         as "Comment",
-                rows_added      as "Rows Added",
-                rows_removed    as "Rows Removed"
+            | stats values(value{}) as value values(*) as * by action csv_file analyst timestamp
+            | sort -timestamp
+            | eval timestamp=strftime(timestamp, "%d-%m-%Y %H:%M:%S GMT%:::z")
+            | eval row_change_count=case(action=="removed_multiple", removed_row_count, action=="removed", removed_row_count, action=="auto_removed", removed_row_count, action=="edited", edited_row_count, action=="added", added_row_count), action_temp=case(action=="removed_multiple", "removed", action=="removed", "removed", action=="auto_removed", "auto_removed", action=="edited", "edited", action=="added", "added")
+            | eval summary="User "+analyst+" "+action_temp+" "+row_change_count+" row(s) from "+csv_file+" (detection rule - "+detection_rule+") at "+timestamp
+            | table timestamp action analyst csv_file detection_rule remove_reason row_change_count value summary
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
         </search>
-        <option name="drilldown">row</option>
-        <option name="count">25</option>
+        <option name="drilldown">none</option>
+        <option name="count">5</option>
         <option name="wrap">true</option>
-        <drilldown>
-          <set token="drilldown_time">$row.Time$</set>
-          <set token="drilldown_analyst">$row.Analyst$</set>
-          <set token="drilldown_rule">$row.Detection Rule$</set>
-          <set token="drilldown_csv">$row.CSV File$</set>
-        </drilldown>
       </table>
     </panel>
   </row>
 
   <!-- ============================================================
-       DRILLDOWN: ADDED ENTRIES
+       EXPIRING SOON
        ============================================================ -->
-  <row depends="$drilldown_time$">
+  <row>
     <panel>
-      <title>Added Entries — $drilldown_rule$ — $drilldown_csv$ at $drilldown_time$</title>
-      <table>
+      <title>Expiring Soon</title>
+      <table id="expiring_soon_table">
         <search>
-          <query>
-            index=wl_audit sourcetype=wl_audit
-              timestamp="$drilldown_time$"
-              analyst="$drilldown_analyst$"
-              csv_file="$drilldown_csv$"
-            | spath output=entry path=added_entries{}
-            | mvexpand entry
-            | spath input=entry
-            | fields - entry _raw _time _serial source sourcetype host index linecount splunk_server
-            | table *
-          </query>
+          <query>| wlexpiringsoon | where "$rule_filter$"="*" OR detection_rule="$rule_filter$" | table detection_rule csv_file Expires value</query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
         </search>
-        <option name="count">50</option>
+        <option name="drilldown">none</option>
+        <option name="count">5</option>
+        <option name="wrap">true</option>
       </table>
-    </panel>
-  </row>
-
-  <!-- ============================================================
-       DRILLDOWN: REMOVED ENTRIES
-       ============================================================ -->
-  <row depends="$drilldown_time$">
-    <panel>
-      <title>Removed Entries — $drilldown_rule$ — $drilldown_csv$ at $drilldown_time$</title>
-      <table>
-        <search>
-          <query>
-            index=wl_audit sourcetype=wl_audit
-              timestamp="$drilldown_time$"
-              analyst="$drilldown_analyst$"
-              csv_file="$drilldown_csv$"
-            | spath output=entry path=removed_entries{}
-            | mvexpand entry
-            | spath input=entry
-            | fields - entry _raw _time _serial source sourcetype host index linecount splunk_server
-            | table *
-          </query>
-          <earliest>$time_token.earliest$</earliest>
-          <latest>$time_token.latest$</latest>
-        </search>
-        <option name="count">50</option>
-      </table>
-    </panel>
-  </row>
-
-  <!-- ============================================================
-       DRILLDOWN: UNIFIED DIFF (text)
-       ============================================================ -->
-  <row depends="$drilldown_time$">
-    <panel>
-      <title>Unified Diff (Git-style)</title>
-      <event>
-        <search>
-          <query>
-            index=wl_audit sourcetype=wl_audit
-              timestamp="$drilldown_time$"
-              analyst="$drilldown_analyst$"
-              csv_file="$drilldown_csv$"
-            | spath output=diff_line path=text_diff{}
-            | mvexpand diff_line
-            | table diff_line
-          </query>
-          <earliest>$time_token.earliest$</earliest>
-          <latest>$time_token.latest$</latest>
-        </search>
-        <option name="count">100</option>
-      </event>
     </panel>
   </row>
 

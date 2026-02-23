@@ -60,8 +60,13 @@ AUDIT_LOG = os.path.join(
 
 def resolve_path(csv_file, app):
     """Build full path to a CSV lookup file."""
+    basename = os.path.basename(csv_file)
+    if basename != csv_file or csv_file.startswith("."):
+        print(f"Error: invalid CSV filename (must be a plain filename): {csv_file}")
+        sys.exit(1)
     if app:
-        return os.path.join(APPS_DIR, app, "lookups", csv_file)
+        safe_app = os.path.basename(app)
+        return os.path.join(APPS_DIR, safe_app, "lookups", csv_file)
     return csv_file
 
 

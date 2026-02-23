@@ -107,7 +107,6 @@ tar -czf "$SPL_FILE" \
     --exclude="$APP_NAME/.dockerignore" \
     --exclude="$APP_NAME/.gitignore" \
     --exclude="$APP_NAME/Makefile" \
-    --exclude="$APP_NAME/*.md" \
     --exclude="$APP_NAME/__pycache__" \
     --exclude="$APP_NAME/**/__pycache__" \
     --exclude="$APP_NAME/**/*.pyc" \

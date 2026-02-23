@@ -1,0 +1,10 @@
+query_domain,src_ip,Comment,Expires
+update.microsoft.com,0.0.0.0,Windows Update - long TXT record queries are normal,
+ocsp.digicert.com,0.0.0.0,Certificate revocation checks - high volume expected,
+wpad.internal.corp,10.0.0.0/8,WPAD auto-discovery - noisy but benign,
+_ldap._tcp.dc._msdcs.corp.local,0.0.0.0,AD domain controller SRV lookups,
+connectivity-check.ubuntu.com,10.0.5.60,Ubuntu servers performing connectivity checks,
+safebrowsing.googleapis.com,0.0.0.0,Chrome safe browsing lookups from all endpoints,
+vendor-api.acmecorp.io,10.10.20.5,Temporary vendor API integration - high DNS volume,2026-03-20 14:00
+telemetry.newrelic.com,10.0.5.70,New Relic APM trial evaluation,2026-04-15 00:00
+cdn.partner-portal.net,10.10.20.10,Partner portal CDN - project-based access,2026-05-01 08:00

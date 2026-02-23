@@ -1,0 +1,11 @@
+user,src_ip,threshold,Comment,Expires,_added_by,_added_at
+svc_backup,10.0.5.20,50,Backup service account - high login rate expected,,,,
+svc_monitoring,10.0.5.25,100,Nagios monitoring account polls every 30s,,,,
+admin_jdoe,192.168.1.50,30,IT admin John Doe - frequent re-auth due to MFA resets,2026-06-30 18:00,,
+svc_ldap_sync,10.0.5.30,200,LDAP sync service runs every minute,,,,
+t.wilson,172.16.10.15,25,Tom Wilson - remote developer using VPN with frequent disconnects,2026-03-10 09:00,,
+svc_jenkins,10.0.5.40,150,Jenkins CI build agent - triggers on every commit,,,,
+r.garcia,192.168.2.88,20,Rosa Garcia - QA lead running automated login tests,2026-04-01 16:00,,
+svc_sccm,10.0.5.50,80,SCCM client push service account,,,,
+contractor_a.patel,10.10.50.22,15,Contractor Arjun Patel - temporary access for audit project,2026-03-01 23:59,,
+intern_s.lee,10.10.50.30,10,Summer intern Sarah Lee - limited access,2026-02-25 17:00,,

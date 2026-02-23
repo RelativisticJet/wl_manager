@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "2.0.0",
+  "info": {
+    "title": "Whitelist Manager",
+    "id": {
+      "group": null,
+      "name": "wl_manager",
+      "version": "1.0.0"
+    },
+    "author": [
+      {
+        "name": "Security Engineering",
+        "email": null,
+        "company": null
+      }
+    ],
+    "releaseDate": null,
+    "description": "Manage detection-rule CSV whitelists with diff-based audit trail. Provides a web-based interface for viewing, editing, adding, and removing whitelist entries with full change tracking, expiration management, and role-based access control.",
+    "classification": {
+      "intendedAudience": "Security Operations",
+      "categories": [
+        "Security, Fraud & Compliance"
+      ],
+      "developmentStatus": "Production/Stable"
+    },
+    "commonInformationModels": null,
+    "license": {
+      "name": null,
+      "text": null,
+      "uri": null
+    }
+  },
+  "dependencies": null,
+  "tasks": null,
+  "inputGroups": null,
+  "incompatibleApps": null,
+  "platformRequirements": {
+    "splunk": {
+      "Enterprise": ">=8.2"
+    }
+  },
+  "supportedDeployments": [
+    "_standalone",
+    "_distributed"
+  ],
+  "targetWorkloads": [
+    "_search_heads"
+  ]
+}

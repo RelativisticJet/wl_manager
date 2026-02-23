@@ -1,0 +1,8 @@
+src_ip,src_host,Comment
+10.0.5.20,SRV-BACKUP01,Backup server - expected high auth volume
+10.0.5.25,SRV-NAGIOS,Monitoring server polling all endpoints
+10.0.5.40,SRV-JENKINS01,Jenkins CI server - build agents auth frequently
+10.0.5.50,SRV-SCCM01,SCCM distribution point
+172.16.0.1,VPN-GW-01,VPN gateway - NAT causes single source IP for remote users
+172.16.0.2,VPN-GW-02,Secondary VPN gateway - same NAT issue
+10.10.1.100,KIOSK-LOBBY,Lobby kiosk shared terminal - multiple user logins expected
