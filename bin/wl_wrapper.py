@@ -9,30 +9,30 @@ cron jobs, or automation scripts.
 Usage examples
 --------------
 List contents of a whitelist CSV:
-    python wl_wrapper.py list --csv DR20_whitelist.csv --app SA-DetectionRules
+    python wl_wrapper.py list --csv my_whitelist.csv --app SplunkEnterpriseSecuritySuite
 
 Add a row:
     python wl_wrapper.py add \\
-        --csv DR20_whitelist.csv \\
-        --app SA-DetectionRules \\
-        --rule DR20_malicious_command \\
+        --csv my_whitelist.csv \\
+        --app SplunkEnterpriseSecuritySuite \\
+        --rule My_Detection_Rule \\
         --values "host=WKSTN-042,user=alice,CommandLine=net use,Comment=Approved" \\
         --user john.doe \\
         --comment "Ticket INC-12345"
 
 Remove rows matching criteria:
     python wl_wrapper.py remove \\
-        --csv DR20_whitelist.csv \\
-        --app SA-DetectionRules \\
-        --rule DR20_malicious_command \\
+        --csv my_whitelist.csv \\
+        --app SplunkEnterpriseSecuritySuite \\
+        --rule My_Detection_Rule \\
         --match "host=WKSTN-001,user=bob" \\
         --user john.doe \\
         --comment "No longer needed"
 
 Show the diff between two snapshots (dry-run a planned change):
     python wl_wrapper.py diff \\
-        --csv DR20_whitelist.csv \\
-        --app SA-DetectionRules \\
+        --csv my_whitelist.csv \\
+        --app SplunkEnterpriseSecuritySuite \\
         --values "host=SRV-099,user=svc_backup,CommandLine=robocopy,Comment=test"
 """
 
