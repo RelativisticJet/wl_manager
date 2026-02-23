@@ -95,6 +95,17 @@ echo "Step 4/5: Creating .spl archive..."
 #
 # Exclude files that should NOT be in the package:
 
+# ── Step 4a: Prepare a clean rule_csv_map.csv (header-only) ──────────
+# The production package ships with an empty mapping file.
+# Sample lookup CSVs are for development/testing only.
+STAGING_DIR=$(mktemp -d)
+PROD_MAP="$STAGING_DIR/rule_csv_map.csv"
+head -1 "$APP_DIR/lookups/rule_csv_map.csv" > "$PROD_MAP"
+
+# Temporarily swap in the header-only mapping for packaging
+cp "$APP_DIR/lookups/rule_csv_map.csv" "$APP_DIR/lookups/rule_csv_map.csv.bak"
+cp "$PROD_MAP" "$APP_DIR/lookups/rule_csv_map.csv"
+
 tar -czf "$SPL_FILE" \
     -C "$(dirname "$APP_DIR")" \
     --exclude="$APP_NAME/.git" \
@@ -111,7 +122,17 @@ tar -czf "$SPL_FILE" \
     --exclude="$APP_NAME/**/__pycache__" \
     --exclude="$APP_NAME/**/*.pyc" \
     --exclude="$APP_NAME/.DS_Store" \
+    --exclude="$APP_NAME/lookups/DR*" \
+    --exclude="$APP_NAME/lookups/*.bak" \
+    --exclude="$APP_NAME/metadata/local.meta" \
+    --exclude="$APP_NAME/local" \
+    --exclude="$APP_NAME/*.spl" \
+    --exclude="$APP_NAME/*.pdf" \
     "$APP_NAME/"
+
+# Restore the original mapping file
+mv "$APP_DIR/lookups/rule_csv_map.csv.bak" "$APP_DIR/lookups/rule_csv_map.csv"
+rm -rf "$STAGING_DIR"
 
 echo "  Archive created."
 
