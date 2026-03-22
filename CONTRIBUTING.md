@@ -1,0 +1,87 @@
+# Contributing to Whitelist Manager
+
+Thanks for your interest in contributing! This guide covers the development setup, workflow, and guidelines.
+
+## Development Environment
+
+### Prerequisites
+
+- Docker and Docker Compose
+- Git Bash (Windows) or any Unix shell
+- Python 3.9+
+
+### Setup
+
+```bash
+git clone https://github.com/RelativisticJet/wl_manager.git
+cd wl_manager
+docker compose up -d      # Start Splunk container
+make docker-wait          # Wait until Splunk is ready (~90s)
+```
+
+Open `http://localhost:8000` and log in with `admin` / `Chang3d!` (override with `SPLUNK_PASSWORD` env var).
+
+### Development Workflow
+
+1. Make changes to source files
+2. Deploy to the dev container:
+   ```bash
+   # Copy files and restart Splunk
+   MSYS_NO_PATHCONV=1 docker cp bin/wl_handler.py wl_manager_test:/opt/splunk/etc/apps/wl_manager/bin/
+   MSYS_NO_PATHCONV=1 docker cp appserver/static/whitelist_manager.js wl_manager_test:/opt/splunk/etc/apps/wl_manager/appserver/static/
+   ```
+3. Bump `build` in `default/app.conf` (Splunk caches JS/CSS aggressively)
+4. Restart Splunk inside the container
+5. Test in the browser
+
+### Validation
+
+```bash
+make validate    # AppInspect-style checks (syntax, security, structure)
+make test        # Integration tests against Docker Splunk
+make package     # Build .spl package
+```
+
+## Project Structure
+
+| Directory | Purpose |
+| --- | --- |
+| `bin/` | Python backend — REST handler, scheduled scripts |
+| `appserver/static/` | Frontend — JavaScript controllers, CSS |
+| `default/` | Splunk config files and dashboard XML |
+| `lookups/` | CSV lookup files and rule mapping |
+| `scripts/` | Build, validation, and test scripts |
+| `docs/` | User documentation and screenshots |
+| `demo/` | Docker demo scripts and guide |
+
+## Guidelines
+
+### Code Style
+
+- **Python**: Follow PEP 8. No `eval()`, `exec()`, or `os.system()`. Use `_sanitize_text()` for all user input written to audit logs.
+- **JavaScript**: Use jQuery (bundled with Splunk). Escape all user data with `_.escape()` before `.html()`. Build UI in JavaScript, not HTML (Splunk strips most HTML from SimpleXML panels).
+- **CSS**: Prefix all custom classes with `wl-` to avoid Splunk CSS conflicts.
+
+### Security
+
+- Never trust client-provided values for security decisions (compute server-side)
+- All POST actions must check RBAC via `_get_roles()`
+- Path traversal protection required for any file path from user input
+- Sanitize all fields written to the audit index
+
+### Commits
+
+- One logical change per commit
+- Prefix: `fix:`, `feat:`, `chore:`, `docs:`, `refactor:`, `test:`
+- Bump `build` in `app.conf` for any JS/CSS/Python change
+
+### Pull Requests
+
+1. Create a feature branch from `main`
+2. Make your changes with clean commits
+3. Run `make validate` and `make test`
+4. Open a PR with a description of what and why
+
+## Reporting Issues
+
+Use [GitHub Issues](https://github.com/RelativisticJet/wl_manager/issues) with the provided templates. Include your Splunk version, browser, and steps to reproduce.

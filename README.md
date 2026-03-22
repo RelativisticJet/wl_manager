@@ -1,8 +1,31 @@
 # Whitelist Manager for Splunk
 
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/RelativisticJet/wl_manager/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Splunk](https://img.shields.io/badge/Splunk-8.x%20%7C%209.x-orange.svg)](https://www.splunk.com/)
+[![Python](https://img.shields.io/badge/Python-3.9+-yellow.svg)](https://www.python.org/)
+
 Manage detection-rule CSV whitelists through a web UI with inline editing, approval workflows, version control, and a full diff-based audit trail.
 
 Built for SOC teams who need to manage detection rule exceptions without touching raw CSV files or Splunk configs.
+
+## Screenshots
+
+**Main Dashboard** — Inline editing with change tracking, search, pagination, and bulk operations
+
+![Main Dashboard](docs/screenshots/01-main-dashboard.png)
+
+**Inline Editing** — Click any cell to edit. Modified cells are highlighted for review before saving.
+
+![Inline Editing](docs/screenshots/02-inline-editing.png)
+
+**Audit Trail** — Complete audit dashboard with summary stats, filters, and approval tracking
+
+![Audit Trail](docs/screenshots/03-audit-trail.png)
+
+**Control Panel** — Admin-only dashboard for approval queue, analyst usage, and limit configuration
+
+![Control Panel](docs/screenshots/04-control-panel.png)
 
 ## Features
 
