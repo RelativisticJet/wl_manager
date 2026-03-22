@@ -1,0 +1,8 @@
+/* Hide "Control Panel" nav link by default for all users.
+   Admin JS (application.js) removes this for admin roles. */
+.nav a[href*="control_panel"],
+a[href*="control_panel"],
+li[data-view="control_panel"],
+.nav-item-control_panel {
+    display: none !important;
+}

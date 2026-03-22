@@ -1,0 +1,27 @@
+<dashboard version="1.1" theme="dark" script="control_panel.js,notifications.js" stylesheet="whitelist_manager.css">
+  <label>Control Panel</label>
+
+
+  <row>
+    <panel>
+      <html>
+        <div id="wl-control-panel" class="wl-container">
+          <div id="wl-cp-access-denied" style="display:none">
+            <div class="wl-msg wl-msg-error" style="margin:20px 0">
+              Access denied. This page is only available to users with the wl_admin, admin, or sc_admin role.
+            </div>
+          </div>
+          <div id="wl-cp-loading" style="padding:20px;color:var(--wl-muted,#888)">
+            Loading Control Panel...
+          </div>
+          <div id="wl-cp-content" style="display:none">
+            <div id="wl-cp-tabs"></div>
+            <div id="wl-cp-approval-queue"></div>
+            <div id="wl-cp-daily-limits" style="display:none"></div>
+            <div id="wl-cp-analyst-usage" style="display:none"></div>
+          </div>
+        </div>
+      </html>
+    </panel>
+  </row>
+</dashboard>

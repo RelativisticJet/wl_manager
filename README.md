@@ -1,192 +1,203 @@
-# Whitelist Manager for Splunk
+# Splunk Whitelist Manager
 
-A Splunk application for managing detection-rule CSV whitelists with a full audit trail.
+## Overview
 
-Built for **Splunk Enterprise Security (ES)** on-prem environments with hundreds of detection rules.
+The Splunk Whitelist Manager is a comprehensive, user-friendly Splunk application designed to streamline the management of detection rule whitelists across your security operations. This application enables security teams to efficiently review, approve, and manage whitelist entries for critical detection rules without requiring direct access to lookup files or advanced Splunk configuration knowledge.
+
+Built with an intuitive web interface, role-based access controls, and comprehensive audit logging, the Whitelist Manager reduces operational friction while maintaining security and compliance requirements. Teams can quickly respond to false positives, manage exceptions, and track all whitelist changes through a centralized dashboard.
 
 ## Features
 
-- **Searchable detection rule dropdown** — type-ahead search across 300+ detection rules
-- **Editable CSV table** — add, remove, and edit whitelist entries in-browser with pagination
-- **Row selection** — select individual rows or all rows across pages for bulk operations
-- **Git-style audit trail** — every change records who, what, when, with unified diff and cell-level edit tracking
-- **Expiration management** — date/time picker with presets (7 days, 30 days, 6 months, 1 year); supports 7 column name variants
-- **Auto-expiration cleanup** — expired rows removed automatically on load and via hourly scheduled task
-- **Undo support** — 10-second undo window after row removal
-- **CSV import/export** — bulk upload to merge rows, download current CSV
-- **RBAC enforcement** — server-side role checks; only `wl_editor` / `admin` / `sc_admin` can save changes
-- **Dual audit storage** — events indexed in `wl_audit` + rotating log file backup
-- **Master mapping CSV** — `rule_csv_map.csv` links rules to their CSV files across apps
-- **CLI wrapper** — `wl_wrapper.py` for command-line and automation operations
-- **Dark/light theme** — automatically detects and adapts to Splunk's active theme
-- **Expiring Soon dashboard** — shows rows approaching expiration with "X days Y hours left" display
+- **Multi-Rule Support**: Manage whitelists for 16+ detection rules including data exfiltration, brute force, privilege escalation, and more
+- **Web-Based Interface**: Intuitive dashboard for viewing, filtering, and managing whitelist entries
+- **Role-Based Access Control**: Assign permissions to managers, approvers, and viewers for controlled access
+- **Audit Trail**: Complete logging of all whitelist modifications with user attribution and timestamps
+- **Bulk Operations**: Add, remove, or modify multiple whitelist entries efficiently
+- **CSV Lookup Integration**: Seamless integration with Splunk lookup files for real-time whitelist application
+- **Search Integration**: View whitelist status directly in detection rule searches
+- **Flexible Rule Mapping**: Customizable configuration to add new detection rules
 
-## Quick Start
+## Prerequisites
 
-### Install from `.spl`
+- Splunk Enterprise 7.3 or higher (8.x and 9.x recommended)
+- Admin access to Splunk instance for app installation
+- Available disk space for lookup files and audit logs
+- Network access to the Splunk web interface
 
-1. Download the latest `.spl` from [Releases](../../releases)
-2. In Splunk Web: **Apps > Manage Apps > Install app from file**
-3. Upload the `.spl` file and restart Splunk
+## Installation
 
-### Post-Install Setup
+### Method 1: Via Splunk Web UI (Recommended)
 
-1. **Populate the mapping** — Edit `lookups/rule_csv_map.csv` via **Settings > Lookups > Lookup table files** to map your detection rules to their CSV files
-2. **Assign roles** — Give analysts the `wl_editor` role via **Settings > Access Controls > Users**
-3. **Verify** — Navigate to **Apps > Whitelist Manager** and test the dropdowns
+1. Download the latest package from the Releases page
+2. Log in to Splunk as an admin
+3. Navigate to Manage Apps and select Install app from file
+4. Click Choose File and select the wl_manager-1.0.0.spl package
+5. Click Upload app and wait for installation to complete
+6. Restart Splunk when prompted
 
-## Mapping CSV Format
+### Method 2: Via Splunk CLI
 
-The master mapping (`rule_csv_map.csv`) has three columns:
+bash
+/opt/splunk/bin/splunk install app wl_manager-1.0.0.spl -auth admin:password
+bash
 
-| Column | Description | Example |
-|---|---|---|
-| `rule_name` | Detection rule name | `My_Detection_Rule` |
-| `csv_file` | CSV filename | `my_whitelist.csv` |
-| `app_context` | Splunk app containing the CSV | `SplunkEnterpriseSecuritySuite` |
+Replace 'admin:password' with your actual credentials.
 
-A rule can map to multiple CSVs (one row per CSV). Leave `app_context` empty if the CSV is in `wl_manager/lookups/`.
+### Method 3: Manual Installation
 
-## Supported Expiration Column Names
+1. Extract the app package: tar -xzf wl_manager-1.0.0.spl
+2. Copy to Splunk apps directory: cp -r wl_manager SPLUNK_HOME/etc/apps/
+3. Set proper permissions: chown -R splunk:splunk SPLUNK_HOME/etc/apps/wl_manager
+4. Restart Splunk: SPLUNK_HOME/bin/splunk restart
 
-The app recognizes these column names (case-insensitive) as expiration dates:
+## Configuration
 
-`Expires`, `expire`, `expiration`, `expiration_date`, `expiry`, `termination`, `termination_date`
+### 1. Map Detection Rules
 
-Date formats supported: `YYYY-MM-DD HH:MM`, `YYYY-MM-DD`
+Edit the rule_csv_map.csv file to define which detection rules use which lookup files:
+
+- Location: lookups/rule_csv_map.csv
+- Format: rule_name,csv_lookup_file,description
+- Example: DR20_whitelist,DR20_whitelist.csv,DNS Tunneling Detection
+
+### 2. Assign User Roles and Capabilities
+
+The app includes custom roles for access control:
+
+- wl_manager_admin: Full access to manage all whitelists and settings
+- wl_manager_approver: Can approve whitelist changes
+- wl_manager_user: Can view and submit whitelist change requests
+
+Assign roles in Settings menu or through your identity provider.
+
+### 3. Verify Index Configuration
+
+Ensure that your Splunk instance has an index for audit logs:
+
+1. Go to Settings and select Indexes
+2. Verify audit index exists (default Splunk index)
+3. The Whitelist Manager logs changes to the audit index automatically
+
+## Usage
+
+### Accessing the Application
+
+1. Log in to your Splunk instance
+2. In the app picker, select Whitelist Manager
+3. You will see the main dashboard with available detection rules
+
+### Managing Whitelists
+
+View Whitelist Entries:
+- Select a detection rule from the dropdown
+- Current whitelist entries display in a table
+- Use filters to search for specific entries
+
+Add Whitelist Entry:
+- Click Add Entry button
+- Fill in required fields (varies by rule type)
+- Click Save to add the entry
+
+Remove Whitelist Entry:
+- Click the delete icon next to an entry
+- Confirm deletion when prompted
+- Change is logged and applied immediately
+
+### Checking Audit Trail
+
+Navigate to the Audit Trail tab to:
+- View all whitelist changes with timestamps
+- See which user made each change
+- Review the action taken (add, remove, modify)
+- Track entry details that were modified
+- Export audit logs for compliance reporting
 
 ## Architecture
 
-```
-wl_manager/
-├── bin/
-│   ├── wl_handler.py              # REST handler (PersistentServerConnectionApplication)
-│   ├── wl_expiring_soon.py        # Custom search command: | wlexpiringsoon
-│   ├── wl_expiration_cleanup.py   # Scheduled hourly cleanup
-│   └── wl_wrapper.py              # CLI wrapper for terminal operations
-├── default/
-│   ├── app.conf                   # App metadata
-│   ├── restmap.conf               # REST endpoint registration
-│   ├── web.conf                   # Splunk Web exposure
-│   ├── commands.conf              # Custom search command registration
-│   ├── inputs.conf                # Scheduled cleanup (hourly)
-│   ├── indexes.conf               # wl_audit index definition
-│   ├── authorize.conf             # wl_editor / wl_viewer roles
-│   ├── transforms.conf            # Lookup definitions
-│   ├── savedsearches.conf         # Expiring soon saved search
-│   └── data/ui/
-│       ├── nav/default.xml
-│       └── views/
-│           ├── whitelist_manager.xml  # Main dashboard
-│           └── audit.xml              # Audit trail dashboard
-├── appserver/static/
-│   ├── whitelist_manager.js       # Frontend controller
-│   └── whitelist_manager.css      # Styles (dark/light theme)
-├── lookups/
-│   └── rule_csv_map.csv           # Master rule-to-CSV mapping
-├── metadata/
-│   └── default.meta               # RBAC permissions
-└── docs/
-    ├── Whitelist_Manager_Documentation.md    # User Guide
-    ├── Whitelist_Manager_Documentation.html  # Full Documentation (PDF-ready)
-    └── Splunk_Admin_Installation_Guide.md    # Admin Guide
-```
+The Whitelist Manager consists of several key components:
 
-## RBAC Roles
+### CSV Lookup Files
+- Rule-specific CSV files in the lookups/ directory
+- Format: CSV with whitelist entries
+- Updated in real-time by the backend handler
 
-| Role | Permissions |
-|---|---|
-| `wl_editor` | Read + write whitelists, view audit trail |
-| `wl_viewer` | Read-only access to whitelists and audit trail |
-| `admin` / `sc_admin` | Full access (built-in Splunk roles) |
+### Web Interface
+- React-based front-end for intuitive user experience
+- Located in appserver/static/
+- Dashboard, control panel, and audit trail views
 
-## Dashboards
+### Backend Handler
+- Python script (bin/wl_handler.py) processes whitelist changes
+- Updates CSV lookup files
+- Logs all operations to audit index
+- Enforces role-based permissions
 
-### Whitelist Manager (Main)
-- Searchable detection rule dropdown
-- CSV file selector
-- Editable table with Add Row, Remove, Save, Discard, Import, Export
-- Date/time picker for expiration columns
-- Git-style diff display after save
-
-### Audit Trail
-- Time range, analyst, detection rule, and action filters
-- Summary stats: Total Changes, Rows Added, Rows Removed, Rows Edited
-- Detailed action log with per-row values
-- Expiring Soon panel filtered by selected detection rule
-
-## Quick Demo (Docker)
-
-Evaluate the app in a containerized Splunk instance with one command:
-
-```bash
-bash demo/demo.sh          # build .spl, start Splunk on http://localhost:9000
-bash demo/demo.sh --stop   # stop and remove the demo container
-bash demo/demo.sh --clean  # stop + remove container and data volume
-```
-
-Login: `admin` / `Chang3d!` at http://localhost:9000
-
-The demo seeds three sample detection rules with whitelist data so you can immediately test all features. See `demo/Demo_Guide.pdf` for a step-by-step walkthrough.
+### Configuration Files
+- app.conf: App metadata and version info
+- restmap.conf: REST API endpoint definitions
+- authorize.conf: Role-based access control rules
+- props.conf: Lookup file properties
+- rule_csv_map.csv: Detection rule to lookup file mappings
 
 ## Development
 
-### Prerequisites
+### Building the App
 
-- Docker Desktop
-- Git Bash (Windows) or Bash (Linux/macOS)
-- Python 3.9+
+To build a deployable package from source:
 
-### Local Testing
+bash
+./scripts/package.sh
+bash
 
-```bash
-# Start containerized Splunk
-docker compose up -d
+Output: dist/wl_manager-VERSION.spl
 
-# Wait ~60 seconds for Splunk to start, then run tests
-bash scripts/test_integration.sh
+### Testing
 
-# Stop
-docker compose down
-```
+Validate the app package:
 
-### Packaging
+bash
+./scripts/validate.sh
+bash
 
-```bash
-# Build .spl package
-bash scripts/package.sh
-# Output: dist/wl_manager-<version>.spl
-```
+Run integration tests:
 
-## Audit Trail
+bash
+pytest tests/ -v
+bash
 
-Every CSV change generates audit events containing:
+### Modifying Detection Rules
 
-- **Analyst** — who made the change
-- **Timestamp** — Unix epoch (displayed as formatted datetime in dashboard)
-- **Detection rule** — which rule the whitelist belongs to
-- **Action** — added, removed, edited, or auto_removed
-- **Comment** — analyst-provided reason for the change
-- **Row details** — per-row field values with row numbers
-- **Removal reason** — why rows were removed (required)
+To add a new detection rule to the Whitelist Manager:
 
-View the audit trail at **Apps > Whitelist Manager > Audit Trail**.
+1. Create a new CSV lookup file in lookups/ directory
+2. Define column structure matching your rule requirements
+3. Add entry to lookups/rule_csv_map.csv
+4. Update bin/wl_handler.py if new field types needed
+5. Rebuild and test the app package
 
-Search in SPL:
-```spl
-index=wl_audit sourcetype=wl_audit
-| table timestamp analyst action detection_rule csv_file comment
-```
+## Troubleshooting
 
-## Security
+### App Not Appearing in App Picker
+- Check app is installed in Manage Apps
+- Verify app.conf is properly formatted
+- Restart Splunk and clear browser cache
 
-- **Path traversal prevention** — filenames validated, `os.path.basename()` applied to app context
-- **XSS prevention** — all user values escaped with `_.escape()` before DOM insertion
-- **Server-side RBAC** — role checks performed server-side via Splunk REST API
-- **No hardcoded credentials** — uses Splunk session tokens exclusively
-- **No external dependencies** — Python stdlib only (no pip packages)
-- **Authentication required** — REST endpoint requires valid Splunk session
+### Whitelist Changes Not Applying
+- Verify the backend handler has proper permissions
+- Check Splunk logs for Python errors in bin/wl_handler.py
+- Ensure lookup file path in rule_csv_map.csv is correct
+- Verify detection rule references the correct lookup file
 
-## License
+### Permission Denied Errors
+- Ensure user has appropriate wl_manager role assigned
+- Check authorize.conf for correct role definitions
+- Verify REST API endpoint permissions in restmap.conf
 
-Proprietary — Security Engineering Team
+### Contact Support
+
+For additional issues, check the documentation or open an issue on GitHub repository.
+
+## License and Support
+
+This application is provided as-is for use within your organization.
+For support, questions, or contributions, please contact your team lead.

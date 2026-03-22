@@ -6,6 +6,7 @@
  * on the container. All themed values use CSS custom properties.
  */
 
+
 /* ── Theme Variables ─────────────────────────────────────────────────── */
 
 /* Light theme (default) */
@@ -123,7 +124,7 @@
 
 .wl-search-input {
     width: 100%;
-    padding: 7px 10px;
+    padding: 7px 30px 7px 10px;
     font-size: 13px;
     border: 1px solid var(--wl-border);
     border-radius: 3px;
@@ -183,11 +184,65 @@
     font-weight: 600;
 }
 
+.wl-dropdown-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.wl-dropdown-remove {
+    display: none;
+    font-size: 12px;
+    color: var(--wl-text-muted);
+    cursor: pointer;
+    padding: 0 2px;
+    margin-left: 10px;
+    flex-shrink: 0;
+}
+.wl-dropdown-item:hover .wl-dropdown-remove {
+    display: inline;
+}
+.wl-dropdown-remove:hover {
+    color: var(--wl-diff-rm, #c62828);
+}
+
 .wl-dropdown-no-match {
     padding: 10px;
     color: var(--wl-text-muted);
     font-style: italic;
     font-size: 13px;
+}
+
+/* CSV custom dropdown display */
+.wl-csv-display {
+    width: 100%;
+    padding: 7px 30px 7px 10px;
+    font-size: 13px;
+    border: 1px solid var(--wl-border);
+    border-radius: 3px;
+    box-sizing: border-box;
+    font-family: inherit;
+    background: var(--wl-bg-input);
+    color: var(--wl-text);
+    cursor: pointer;
+    position: relative;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.wl-csv-display::after {
+    content: "\25BE";
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--wl-text-muted);
+    pointer-events: none;
+}
+.wl-csv-display.wl-disabled {
+    background: var(--wl-bg-disabled);
+    color: var(--wl-text-muted);
+    cursor: default;
 }
 
 .wl-select {
@@ -214,10 +269,15 @@
 
 /* ── Editable Table ─────────────────────────────────────────────────── */
 
+.wl-table-scroll {
+    overflow-x: auto;
+    margin-top: 12px;
+}
+
 .wl-table {
     width: 100%;
+    min-width: max-content;
     border-collapse: collapse;
-    margin-top: 12px;
     font-size: 13px;
 }
 
@@ -228,12 +288,13 @@
     font-weight: 600;
     text-align: left;
     border-bottom: 2px solid var(--wl-thead-border);
+    position: relative;
 }
 
 .wl-table tbody td {
     padding: 3px 6px;
     border-bottom: 1px solid var(--wl-border-light);
-    vertical-align: middle;
+    vertical-align: top;
 }
 
 .wl-table tbody tr:hover {
@@ -242,6 +303,7 @@
 
 .wl-input {
     width: 100%;
+    min-width: 110px;
     border: 1px solid var(--wl-border);
     border-radius: 3px;
     padding: 5px 8px;
@@ -259,6 +321,17 @@
     box-shadow: 0 0 0 2px rgba(92, 192, 92, 0.25);
 }
 
+textarea.wl-input {
+    resize: none;
+    overflow: hidden;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    line-height: 18px;
+    min-height: 28px;
+    max-height: 90px;
+    display: block;
+}
+
 .wl-input-error {
     background-color: var(--wl-err-bg);
     border-color: var(--wl-err-border);
@@ -272,7 +345,9 @@
 
 .wl-col-check {
     width: 32px;
-    text-align: center;
+    text-align: center !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
 }
 
 th.wl-col-rownum,
@@ -291,11 +366,79 @@ td.wl-col-rownum {
     height: 16px;
     cursor: pointer;
     accent-color: #5cc05c;
+    color-scheme: light;
+}
+.wl-dark .wl-col-check input[type="checkbox"] {
+    color-scheme: dark;
 }
 
 .wl-col-actions {
     width: 90px;
     text-align: center;
+}
+
+/* ── Column header remove button ───────────────────────────────────── */
+
+.wl-col-header-text {
+    margin-right: 4px;
+    cursor: text;
+}
+
+.wl-col-rename-input {
+    width: calc(100% - 6px);
+    box-sizing: border-box;
+    font-size: inherit;
+    font-weight: inherit;
+    border: 1px solid #5c9;
+    padding: 1px 3px;
+    background: var(--wl-input-bg, #fff);
+    color: inherit;
+    outline: none;
+    border-radius: 3px;
+}
+
+.wl-col-remove-btn {
+    float: right;
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: bold;
+    line-height: 1;
+    color: var(--wl-text-muted);
+    opacity: 0.4;
+    margin-left: 4px;
+    padding: 0 2px;
+    border-radius: 3px;
+    transition: opacity 0.15s, color 0.15s;
+}
+
+.wl-col-remove-btn:hover {
+    opacity: 1;
+    color: #e74c3c;
+}
+
+/* ── Column resize handle ─────────────────────────────────────────── */
+
+.wl-col-resize-handle {
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 5px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 2;
+}
+
+.wl-col-resize-handle:hover {
+    background-color: rgba(92, 192, 92, 0.4);
+}
+
+body.wl-resizing {
+    cursor: col-resize !important;
+    user-select: none;
+}
+
+body.wl-resizing * {
+    cursor: col-resize !important;
 }
 
 /* ── Expired Row Highlight ──────────────────────────────────────────── */
@@ -316,9 +459,10 @@ td.wl-col-rownum {
 
 .wl-pagination {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: center;
-    gap: 12px;
+    gap: 8px 12px;
     padding: 10px 0 4px;
     font-size: 13px;
 }
@@ -326,6 +470,29 @@ td.wl-col-rownum {
 .wl-page-info {
     color: var(--wl-text-secondary);
     font-weight: 600;
+}
+
+.wl-pagination select.wl-page-size {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 6px;
+    font-family: inherit;
+    font-size: 12px;
+    height: 26px;
+    line-height: normal;
+    border: 1px solid var(--wl-border);
+    border-radius: 3px;
+    background: var(--wl-bg);
+    color: var(--wl-text);
+    color-scheme: dark light;
+    cursor: pointer;
+    margin: 0 0 0 4px !important;
+    vertical-align: middle;
+    box-sizing: border-box;
+    -webkit-appearance: menulist;
+       -moz-appearance: menulist;
+            appearance: menulist;
+    min-width: 100px;
 }
 
 /* ── Buttons ────────────────────────────────────────────────────────── */
@@ -396,12 +563,23 @@ td.wl-col-rownum {
 
 /* ── Alerts / Messages ──────────────────────────────────────────────── */
 
+#message-container {
+    position: fixed;
+    top: 50px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1000;
+    width: 500px;
+    max-width: 90vw;
+    pointer-events: none;
+}
+
 .wl-alert {
     padding: 10px 36px 10px 14px;
-    margin-bottom: 12px;
     border-radius: 4px;
-    position: relative;
     line-height: 1.5;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    pointer-events: auto;
 }
 
 .wl-alert-close {
@@ -591,10 +769,717 @@ td.wl-col-rownum {
     font-size: 12px !important;
 }
 
+/* ── Search / Filter Bar ──────────────────────────────────────────── */
+
+.wl-search-wrap {
+    position: relative;
+}
+
+.wl-search-field {
+    width: 100%;
+    padding: 7px 30px 7px 10px;
+    font-size: 13px;
+    border: 1px solid var(--wl-border);
+    border-radius: 3px;
+    box-sizing: border-box;
+    font-family: inherit;
+    transition: border-color 0.15s;
+    background: var(--wl-bg-input);
+    color: var(--wl-text);
+}
+
+.wl-search-field:focus {
+    border-color: #5cc05c;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(92, 192, 92, 0.25);
+}
+
+.wl-search-clear-btn {
+    position: absolute;
+    right: 4px;
+    top: 5px;
+    background: none;
+    border: none;
+    font-size: 18px;
+    width: 22px;
+    height: 22px;
+    cursor: pointer;
+    color: var(--wl-text-muted);
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.wl-search-clear-btn:hover {
+    color: var(--wl-text);
+    background: var(--wl-bg-hover);
+}
+
+.wl-rule-clear-btn {
+    z-index: 1;
+}
+
+.wl-search-info {
+    font-size: 12px;
+    color: var(--wl-text-secondary);
+    padding: 2px 0 4px;
+}
+
+/* Matching cells during search — highlighted border + subtle background */
+.wl-cell-match {
+    border-color: #f9a825 !important;
+    background-color: #fff9c4 !important;
+}
+
+.wl-dark .wl-cell-match {
+    border-color: #f9a825 !important;
+    background-color: #3b3000 !important;
+}
+
+/* ── Search Warning Modal ────────────────────────────────────────── */
+
+.wl-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 3000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: wl-slide-in 0.15s ease-out;
+}
+
+.wl-modal {
+    background: var(--wl-bg);
+    border: 1px solid var(--wl-border);
+    border-radius: 8px;
+    box-shadow: 0 8px 30px var(--wl-shadow);
+    padding: 20px 24px;
+    min-width: 320px;
+    max-width: 440px;
+    color: var(--wl-text);
+}
+
+.wl-modal-header {
+    font-weight: 600;
+    font-size: 15px;
+    margin-bottom: 10px;
+}
+
+.wl-modal-body {
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 16px;
+    color: var(--wl-text-secondary);
+}
+
+.wl-modal-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.wl-crossapp-warning {
+    margin-top: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    border-radius: 4px;
+    background: rgba(243, 156, 18, 0.15);
+    border: 1px solid rgba(243, 156, 18, 0.4);
+    color: #f39c12;
+}
+
+.wl-modal textarea.wl-input {
+    margin-top: 4px;
+    font-family: inherit;
+}
+
+.wl-modal .wl-input {
+    background: var(--wl-bg-input) !important;
+    color: var(--wl-text) !important;
+}
+
+.wl-modal-label {
+    display: block;
+    font-weight: 600;
+    font-size: 13px;
+    margin-bottom: 4px;
+}
+
+.wl-modal .wl-modal-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px;
+    font-size: 13px;
+    font-family: inherit;
+    border: 1px solid var(--wl-border, #333);
+    border-radius: 4px;
+    background: var(--wl-bg-input, #111315) !important;
+    color: var(--wl-text, #e0e0e0) !important;
+    resize: vertical;
+}
+
+.wl-char-counter {
+    font-size: 11px;
+    color: var(--wl-text-secondary, #888);
+    text-align: right;
+    margin-top: 4px;
+}
+
+/* Modals are appended to <body>, outside the .wl-dark panel scope.
+   Dark theme detection also adds .wl-dark to <body>, so modals inherit. */
+body.wl-dark > .wl-modal-overlay {
+    --wl-bg:              #1a1c20;
+    --wl-bg-alt:          #111315;
+    --wl-bg-input:        #111315;
+    --wl-text:            #e0e0e0;
+    --wl-text-secondary:  #aaa;
+    --wl-border:          #333;
+}
+
 /* ── Misc ───────────────────────────────────────────────────────────── */
 
 .wl-muted {
     color: var(--wl-text-muted);
     font-style: italic;
     padding: 20px 0;
+}
+
+.wl-link {
+    cursor: pointer;
+    text-decoration: underline;
+    font-weight: bold;
+}
+
+.wl-kbd {
+    display: inline-block;
+    padding: 1px 5px;
+    border: 1px solid var(--wl-border);
+    border-radius: 3px;
+    background: var(--wl-bg-alt);
+    font-family: monospace;
+    font-size: 11px;
+}
+
+.wl-presence-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    font-size: 12px;
+    color: var(--wl-text-secondary);
+    border-bottom: 1px solid transparent;
+    margin-bottom: 4px;
+    height: 28px;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+.wl-presence-bar.wl-presence-active {
+    border-bottom-color: var(--wl-border-light);
+}
+
+.wl-presence-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #4caf50;
+    margin-right: 2px;
+}
+
+.wl-presence-user {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--wl-bg-hover);
+    border: 1px solid var(--wl-border-light);
+    font-size: 11px;
+}
+
+.wl-bulk-edit-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--wl-info-bg);
+    border: 1px solid var(--wl-info-border);
+    border-radius: 4px;
+    margin-bottom: 6px;
+    font-size: 13px;
+}
+
+.wl-bulk-edit-bar select,
+.wl-bulk-edit-bar input {
+    padding: 3px 6px;
+    border: 1px solid var(--wl-border);
+    border-radius: 3px;
+    background: var(--wl-bg-input);
+    color: var(--wl-text);
+}
+
+.wl-cell-edited {
+    background: #fff8e1 !important;
+}
+
+.wl-dark .wl-cell-edited {
+    background: #3e2723 !important;
+}
+
+body.wl-dark .wl-bulk-edit-bar {
+    background: #1a237e30;
+    border-color: #3949ab;
+}
+
+/* ── Drag and Drop ────────────────────────────────────────────────── */
+
+.wl-row-drag-handle {
+    cursor: grab;
+    user-select: none;
+}
+.wl-row-drag-handle:active {
+    cursor: grabbing;
+}
+
+.wl-grip-icon {
+    font-size: 10px;
+    margin-right: 2px;
+    opacity: 0.35;
+    vertical-align: middle;
+}
+.wl-row-drag-handle:hover .wl-grip-icon {
+    opacity: 0.8;
+}
+
+.wl-col-drag-handle {
+    cursor: grab;
+    font-size: 11px;
+    opacity: 0.3;
+    margin-right: 4px;
+    padding: 0 2px;
+    vertical-align: middle;
+    transition: opacity 0.15s;
+}
+.wl-col-drag-handle:active {
+    cursor: grabbing;
+}
+.wl-col-draggable:hover .wl-col-drag-handle {
+    opacity: 0.8;
+}
+
+/* Smooth transform transitions for drag-and-drop shifting */
+.wl-table tbody tr {
+    transition: transform 0.15s ease;
+}
+.wl-table thead th,
+.wl-table tbody td {
+    transition: transform 0.15s ease;
+}
+
+/* Dragged row: follows cursor, elevated */
+tr.wl-dragging {
+    transition: none !important;
+    opacity: 0.9;
+    position: relative;
+    z-index: 999;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    background: var(--wl-bg-hover) !important;
+}
+
+/* Dragged column header */
+th.wl-dragging {
+    opacity: 0.7;
+}
+
+/* Prevent text selection during drag */
+body.wl-dragging-active {
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    cursor: grabbing !important;
+}
+
+/* ── Pending Approval Highlights (Orange) ─────────────────────────── */
+
+tr.wl-pending-approval {
+    background-color: #fff3e0 !important;
+}
+
+tr.wl-pending-approval:hover {
+    background-color: #ffe0b2 !important;
+}
+
+tr.wl-pending-approval .wl-input {
+    background-color: #fff8e1;
+}
+
+th.wl-pending-approval-header {
+    background-color: #fff3e0 !important;
+    color: #333 !important;
+}
+
+.wl-table.wl-pending-approval-table {
+    outline: 3px solid #ff9800;
+    outline-offset: 2px;
+}
+
+.wl-dark tr.wl-pending-approval {
+    background-color: #3e2200 !important;
+}
+
+.wl-dark tr.wl-pending-approval:hover {
+    background-color: #4a2a00 !important;
+}
+
+.wl-dark tr.wl-pending-approval .wl-input {
+    background-color: #3b2000;
+}
+
+.wl-dark th.wl-pending-approval-header {
+    background-color: #3e2200 !important;
+    color: #ffd699 !important;
+}
+
+.wl-dark .wl-table.wl-pending-approval-table {
+    outline-color: #e65100;
+}
+
+/* ── Locked button (pending approval) ────────────────────────────── */
+.wl-btn-locked {
+    opacity: 0.5 !important;
+    cursor: not-allowed !important;
+    pointer-events: none;
+}
+
+/* ── Inline approval action bar (admin only) ─────────────────────── */
+.wl-approval-bar {
+    margin: 8px 0;
+    padding: 10px 12px;
+    background: #fff8e1;
+    border: 1px solid #ffe082;
+    border-radius: 4px;
+}
+.wl-approval-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+}
+.wl-approval-item + .wl-approval-item {
+    border-top: 1px solid #ffe082;
+    margin-top: 6px;
+    padding-top: 10px;
+}
+.wl-approval-desc {
+    flex: 1;
+    min-width: 0;          /* allow flex child to shrink below content width */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.wl-approval-desc:hover {
+    white-space: normal;    /* expand full text on hover */
+    word-break: break-word;
+}
+.wl-approval-self-note {
+    font-style: italic;
+    color: #e65100;
+    white-space: nowrap;
+}
+.wl-dark .wl-approval-self-note {
+    color: #ffb74d;
+}
+.wl-dark .wl-approval-bar {
+    background: #3e2723;
+    border-color: #e65100;
+}
+.wl-dark .wl-approval-item + .wl-approval-item {
+    border-top-color: #e65100;
+}
+
+/* ── Control Panel tab bar ────────────────────────────────────────── */
+
+.wl-cp-tab-bar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.wl-cp-tab-bar .btn {
+    cursor: pointer;
+}
+
+.wl-cp-reason-cell {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.wl-addition-preview {
+    background: var(--wl-bg-alt, #f8f9fa);
+    border: 2px solid var(--wl-pending-border, #e67e22);
+    border-radius: 6px;
+    padding: 12px;
+    margin: 8px 0;
+}
+.wl-addition-preview td {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.wl-dark .wl-addition-preview {
+    background: #2a2a2a;
+}
+
+/* ── CSV Import Section ───────────────────────────────────────── */
+.wl-import-section {
+    border: 1px dashed var(--wl-border, #444);
+    border-radius: 6px;
+    padding: 12px 14px;
+    margin-bottom: 14px;
+    background: var(--wl-bg-row-alt, rgba(255,255,255,0.02));
+}
+.wl-import-section label {
+    font-size: 13px;
+    font-weight: 600;
+    display: block;
+    margin-bottom: 6px;
+}
+.wl-import-file-hidden {
+    position: absolute;
+    width: 0;
+    height: 0;
+    opacity: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+.wl-import-file-btn {
+    display: inline-block;
+    padding: 4px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--wl-border, #444);
+    border-radius: 3px;
+    background: var(--wl-bg-input, #1a1c1e);
+    color: var(--wl-text, #e0e0e0);
+    white-space: nowrap;
+}
+.wl-import-file-btn:hover {
+    background: var(--wl-bg-hover, #2a2d30);
+}
+.wl-import-file-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.wl-import-file-row .wl-import-file-name {
+    font-size: 12px;
+    color: var(--wl-text-muted, #999);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 260px;
+}
+.wl-import-clear {
+    font-size: 12px;
+    color: var(--wl-link, #80cbc4);
+    cursor: pointer;
+    margin-left: auto;
+}
+.wl-import-clear:hover {
+    text-decoration: underline;
+}
+.wl-import-divider {
+    display: flex;
+    align-items: center;
+    margin: 14px 0;
+    font-size: 12px;
+    color: var(--wl-text-muted, #888);
+}
+.wl-import-divider::before,
+.wl-import-divider::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid var(--wl-border, #444);
+}
+.wl-import-divider::before { margin-right: 10px; }
+.wl-import-divider::after  { margin-left: 10px; }
+.wl-import-messages {
+    margin-top: 10px;
+    font-size: 12px;
+}
+.wl-import-error-item {
+    color: #ef9a9a;
+    padding: 2px 0;
+}
+.wl-import-error-item::before {
+    content: "\2716 ";
+    font-weight: bold;
+}
+.wl-import-warning-item {
+    color: #fff9c4;
+    padding: 4px 0;
+}
+.wl-import-warning-item::before {
+    content: "\26A0 ";
+    font-weight: bold;
+}
+.wl-import-warning-examples {
+    margin: 2px 0 2px 20px;
+    font-size: 11px;
+    color: var(--wl-text-muted, #999);
+}
+.wl-import-summary {
+    font-size: 12px;
+    color: var(--wl-text-muted, #aaa);
+    margin: 10px 0 6px 0;
+}
+.wl-import-preview-wrap {
+    max-height: 300px;
+    overflow-y: auto;
+    overflow-x: auto;
+    border: 1px solid var(--wl-border, #444);
+    border-radius: 4px;
+}
+.wl-import-preview-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.wl-import-preview-table th {
+    position: sticky;
+    top: 0;
+    background: var(--wl-bg-header, #23272b);
+    color: var(--wl-text, #e0e0e0);
+    padding: 6px 10px;
+    text-align: left;
+    border-bottom: 2px solid var(--wl-border, #444);
+    font-weight: 600;
+}
+.wl-import-preview-table td {
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--wl-border-light, #333);
+    color: var(--wl-text, #e0e0e0);
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.wl-import-preview-table tbody tr:hover {
+    background: var(--wl-bg-hover, rgba(255,255,255,0.04));
+}
+.wl-import-headers-display {
+    font-size: 12px;
+    color: var(--wl-text, #e0e0e0);
+    padding: 6px 8px;
+    background: var(--wl-bg-row-alt, rgba(255,255,255,0.03));
+    border: 1px solid var(--wl-border, #444);
+    border-radius: 4px;
+    word-break: break-word;
+}
+
+/* ── Notification bell & dropdown ──────────────────────────────── */
+.wl-notif-bell {
+    position: relative;
+    display: inline-block;
+    cursor: pointer;
+    padding: 4px;
+}
+.wl-notif-bell:hover svg {
+    opacity: 0.8;
+}
+.wl-notif-badge {
+    position: absolute;
+    top: -2px;
+    right: -6px;
+    background: #e74c3c;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    min-width: 16px;
+    height: 16px;
+    line-height: 16px;
+    text-align: center;
+    border-radius: 8px;
+    padding: 0 4px;
+}
+.wl-notif-dropdown {
+    position: absolute;
+    top: 32px;
+    right: 0;
+    width: 340px;
+    max-height: 400px;
+    background: var(--wl-bg-main, #1a1c1e);
+    border: 1px solid var(--wl-border, #444);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    z-index: 10001;
+    overflow: hidden;
+}
+.wl-notif-dropdown-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--wl-border, #444);
+    font-size: 13px;
+}
+.wl-notif-mark-all {
+    font-size: 11px;
+    color: var(--wl-link, #80cbc4);
+    cursor: pointer;
+}
+.wl-notif-mark-all:hover {
+    text-decoration: underline;
+}
+.wl-notif-dropdown-body {
+    max-height: 350px;
+    overflow-y: auto;
+}
+.wl-notif-item {
+    display: flex;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--wl-border, rgba(255,255,255,0.05));
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.wl-notif-item:hover {
+    background: var(--wl-bg-hover, rgba(255,255,255,0.05));
+}
+.wl-notif-item.unread {
+    background: rgba(52, 152, 219, 0.08);
+}
+.wl-notif-icon {
+    flex-shrink: 0;
+    font-size: 14px;
+    line-height: 20px;
+}
+.wl-notif-content {
+    flex: 1;
+    min-width: 0;
+}
+.wl-notif-message {
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--wl-text, #e0e0e0);
+    word-break: break-word;
+}
+.wl-notif-time {
+    font-size: 11px;
+    color: var(--wl-text-muted, #999);
+    margin-top: 2px;
+}
+.wl-notif-empty {
+    padding: 24px 14px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--wl-text-muted, #999);
 }

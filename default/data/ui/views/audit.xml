@@ -1,6 +1,6 @@
-<dashboard version="1.1" theme="dark">
+<dashboard version="1.1" theme="dark" refresh="60" script="audit_trail.js,notifications.js" stylesheet="whitelist_manager.css">
   <label>Audit Trail</label>
-  <description>Full history of every whitelist change — who, what, when, and the exact rows added or removed</description>
+  <description></description>
 
   <!-- ============================================================
        FILTERS
@@ -44,10 +44,28 @@
     <input type="dropdown" token="action_filter" searchWhenChanged="true">
       <label>Action</label>
       <choice value="*">All Actions</choice>
-      <choice value="added">Added</choice>
-      <choice value="removed">Removed</choice>
-      <choice value="edited">Edited</choice>
+      <choice value="row_added">Row Added</choice>
+      <choice value="row_removed">Row Removed</choice>
+      <choice value="row_edited">Row Edited</choice>
       <choice value="auto_removed">Auto Removed</choice>
+      <choice value="revert">Revert</choice>
+      <choice value="column_removed">Column Removed</choice>
+      <choice value="column_added">Column Added</choice>
+      <choice value="row_reordered">Row Reordered</choice>
+      <choice value="column_reordered">Column Reordered</choice>
+      <choice value="column_renamed">Column Renamed</choice>
+      <choice value="audit_exported">Audit Exported</choice>
+      <choice value="csv_exported">CSV Exported</choice>
+      <choice value="csv_imported">CSV Imported</choice>
+      <choice value="csv_created">CSV Created</choice>
+      <choice value="dr_created">Detection Rule Created</choice>
+      <choice value="rule_removed">Rule Removed</choice>
+      <choice value="csv_removed">CSV Removed</choice>
+      <choice value="request_submitted">Request Submitted</choice>
+      <choice value="request_approved">Request Approved</choice>
+      <choice value="request_rejected">Request Rejected</choice>
+      <choice value="request_failed">Request Failed</choice>
+      <choice value="request_cancelled">Request Cancelled</choice>
       <default>*</default>
     </input>
 
@@ -65,8 +83,8 @@
             index=wl_audit sourcetype=wl_audit
               action=$action_filter$*
               analyst=$analyst_filter$ detection_rule=$rule_filter$
-            | stats sum(added_row_count) as r_added sum(removed_row_count) as r_removed sum(edited_row_count) as r_edited sum(auto_removed_count) as r_auto
-            | eval total_changes=coalesce(r_added,0)+coalesce(r_removed,0)+coalesce(r_edited,0)+coalesce(r_auto,0)
+            | stats sum(added_row_count) as r_added sum(removed_row_count) as r_removed sum(edited_row_count) as r_edited sum(auto_removed_count) as r_auto sum(eval(if(action="revert",1,0))) as r_revert sum(eval(if(action="column_removed" OR action="column_added",column_count,0))) as r_cols sum(eval(if(action="row_reordered" OR action="column_reordered",1,0))) as r_reorder sum(eval(if(action="column_renamed",1,0))) as r_rename
+            | eval total_changes=coalesce(r_added,0)+coalesce(r_removed,0)+coalesce(r_edited,0)+coalesce(r_auto,0)+coalesce(r_revert,0)+coalesce(r_cols,0)+coalesce(r_reorder,0)+coalesce(r_rename,0)
             | table total_changes
           </query>
           <earliest>$time_token.earliest$</earliest>
@@ -82,7 +100,7 @@
             index=wl_audit sourcetype=wl_audit
               action=$action_filter$*
               analyst=$analyst_filter$ detection_rule=$rule_filter$
-            | where action="added"
+            | where action="row_added"
             | stats sum(added_row_count) as total_rows_added
           </query>
           <earliest>$time_token.earliest$</earliest>
@@ -98,7 +116,7 @@
             index=wl_audit sourcetype=wl_audit
               action=$action_filter$*
               analyst=$analyst_filter$ detection_rule=$rule_filter$
-            | where action="removed" OR action="removed_multiple" OR action="auto_removed"
+            | where action="row_removed" OR action="row_removed_multiple" OR action="auto_removed"
             | stats sum(removed_row_count) as total_rows_removed
           </query>
           <earliest>$time_token.earliest$</earliest>
@@ -114,8 +132,270 @@
             index=wl_audit sourcetype=wl_audit
               action=$action_filter$*
               analyst=$analyst_filter$ detection_rule=$rule_filter$
-            | where action="edited"
+            | where action="row_edited"
             | stats sum(edited_row_count) as total_rows_edited
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+    <panel>
+      <title>Rows Reordered</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="row_reordered"
+            | stats count as total_rows_reordered
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Columns Added</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="column_added"
+            | stats sum(column_count) as total_columns_added
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+    <panel>
+      <title>Columns Removed</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="column_removed"
+            | stats sum(column_count) as total_columns_removed
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+    <panel>
+      <title>Columns Renamed</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="column_renamed"
+            | stats sum(column_count) as total_columns_renamed
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+    <panel>
+      <title>Columns Reordered</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="column_reordered"
+            | stats count as total_columns_reordered
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+    <panel>
+      <title>Reverted</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="revert"
+            | stats count as total_reverts
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Audit Exported</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="audit_exported"
+            | stats count as total_audit_exported
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+    <panel>
+      <title>CSV Exported</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="csv_exported"
+            | stats count as total_csv_exported
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+    <panel>
+      <title>CSV Imported</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="csv_imported"
+            | stats count as total_csv_imported
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+    <panel>
+      <title>CSV Created</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="csv_created"
+            | stats count as total_csv_created
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+    <panel>
+      <title>Detection Rule Created</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="dr_created"
+            | stats count as total_dr_created
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Requests Submitted</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="request_submitted"
+            | stats count as total_requests_submitted
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+    <panel>
+      <title>Requests Approved</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="request_approved"
+            | stats count as total_requests_approved
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+    <panel>
+      <title>Requests Rejected</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="request_rejected"
+            | stats count as total_requests_rejected
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+    <panel>
+      <title>Requests Failed</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="request_failed"
+            | stats count as total_requests_failed
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+    <panel>
+      <title>Requests Cancelled</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="request_cancelled"
+            | stats count as total_requests_cancelled
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
@@ -125,23 +405,144 @@
   </row>
 
   <!-- ============================================================
-       ACTION LOG
+       DATA CHANGES LOG
        ============================================================ -->
   <row>
     <panel>
-      <title>Action Log</title>
-      <table id="audit_table">
+      <title>Data Changes</title>
+      <table id="audit_table_changes">
         <search>
           <query>
             index=wl_audit sourcetype=wl_audit
               action=$action_filter$*
               analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where NOT match(action, "^request_|^audit_exported$|^csv_exported$|^csv_imported$|^csv_created$|^dr_created$|^rule_removed$|^csv_removed$")
             | stats values(value{}) as value values(*) as * by action csv_file analyst timestamp
             | sort -timestamp
-            | eval timestamp=strftime(timestamp, "%d-%m-%Y %H:%M:%S GMT%:::z")
-            | eval row_change_count=case(action=="removed_multiple", removed_row_count, action=="removed", removed_row_count, action=="auto_removed", removed_row_count, action=="edited", edited_row_count, action=="added", added_row_count), action_temp=case(action=="removed_multiple", "removed", action=="removed", "removed", action=="auto_removed", "auto_removed", action=="edited", "edited", action=="added", "added")
-            | eval summary="User "+analyst+" "+action_temp+" "+row_change_count+" row(s) from "+csv_file+" (detection rule - "+detection_rule+") at "+timestamp
-            | table timestamp action analyst csv_file detection_rule remove_reason row_change_count value summary
+            | eval timestamp=if(match(timestamp, "^\d+\.?\d*$"), strftime(timestamp, "%d-%m-%Y %H:%M:%S GMT%:::z"), timestamp)
+
+            | eval action_label=case(
+                action=="row_removed_multiple", "removed",
+                action=="row_removed",          "removed",
+                action=="auto_removed",         "auto removed",
+                action=="row_edited",           "edited",
+                action=="row_added",            "added",
+                action=="revert",               "reverted",
+                action=="column_removed",       "removed column",
+                action=="column_added",         "added column",
+                action=="row_reordered",        "reordered row",
+                action=="column_reordered",     "reordered column",
+                action=="column_renamed",       "renamed column"
+              )
+
+            | eval row_change_count=case(
+                action=="row_removed_multiple", removed_row_count,
+                action=="row_removed",          removed_row_count,
+                action=="auto_removed",         removed_row_count,
+                action=="row_edited",           edited_row_count,
+                action=="row_added",            added_row_count,
+                action=="row_reordered",        1
+              )
+
+            | eval column_change_count=case(
+                action=="column_removed",       column_count,
+                action=="column_added",         column_count,
+                action=="column_reordered",     1,
+                action=="column_renamed",       column_count
+              )
+
+            | eval col_names=mvjoin('columns{}', ", ")
+
+            | eval summary=case(
+                action_label="reverted",
+                  "User ".analyst." ".action_label." ".csv_file." ".reverted_from_version." ".row_count_before." row(s) version to ".reverted_to_version." ".row_count_after." row(s) version (which became the latest in the record ".new_record_version.") at ".timestamp,
+                action=="column_removed",
+                  "User ".analyst." ".action_label." ".col_names." from ".csv_file." (".column_change_count." column(s), detection rule - ".detection_rule.") at ".timestamp,
+                action=="column_added",
+                  "User ".analyst." ".action_label." ".col_names." to ".csv_file." (".column_change_count." column(s), detection rule - ".detection_rule.") at ".timestamp,
+                action=="row_reordered",
+                  "User ".analyst." ".action_label." in ".csv_file." from position #".row_number_before." to #".row_number_after." (detection rule - ".detection_rule.") at ".timestamp,
+                action=="column_reordered",
+                  "User ".analyst." ".action_label." '".column_name."' in ".csv_file." from position #".column_number_before." to #".column_number_after." (detection rule - ".detection_rule.") at ".timestamp,
+                action=="column_renamed",
+                  "User ".analyst." ".action_label." '".column_renamed_before."' to '".column_renamed_after."' in ".csv_file." (detection rule - ".detection_rule.") at ".timestamp,
+                1==1,
+                  "User ".analyst." ".action_label." ".row_change_count." row(s) from ".csv_file." (detection rule - ".detection_rule.") at ".timestamp
+              )
+            | eval reason=coalesce(remove_reason, row_add_reason, revert_reason, "")
+            | table timestamp action analyst csv_file detection_rule reason row_change_count column_change_count request_id value summary
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="count">5</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <!-- ============================================================
+       ACTIVITY LOG (requests, exports, imports)
+       ============================================================ -->
+  <row>
+    <panel>
+      <title>Activity Log</title>
+      <table id="audit_table_activity">
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where match(action, "^request_|^audit_exported$|^csv_exported$|^csv_imported$|^csv_created$|^dr_created$|^rule_removed$|^csv_removed$")
+            | eval csv_file=if(isnull(csv_file) OR csv_file="", "N/A", csv_file)
+            | stats values(*) as * by action csv_file analyst timestamp
+            | sort -timestamp
+            | eval timestamp=if(match(timestamp, "^\d+\.?\d*$"), strftime(timestamp, "%d-%m-%Y %H:%M:%S GMT%:::z"), timestamp)
+
+            | eval action_label=case(
+                action=="audit_exported",        "exported audit",
+                action=="csv_exported",          "exported CSV",
+                action=="csv_imported",          "imported CSV",
+                action=="csv_created",           "created CSV",
+                action=="dr_created",            "created detection rule",
+                action=="rule_removed",          "removed rule",
+                action=="csv_removed",           "removed CSV",
+                action=="request_submitted",    "submitted request",
+                action=="request_approved",     "approved request",
+                action=="request_rejected",     "rejected request",
+                action=="request_failed",       "failed request",
+                action=="request_cancelled",   "cancelled request"
+              )
+
+            | eval summary=case(
+                action=="audit_exported",
+                  "User ".analyst." ".if(status=="success","successfully","unsuccessfully")." exported ".export_file." audit file containing ".event_count." event(s) for ".csv_file." (detection rule - ".detection_rule.") at ".timestamp,
+                action=="csv_exported",
+                  "User ".analyst." ".if(status=="success","successfully","unsuccessfully")." exported ".export_file." containing ".row_count." row(s) for ".csv_file." (detection rule - ".detection_rule.") at ".timestamp,
+                action=="csv_imported",
+                  "User ".analyst." ".if(status=="success","successfully","unsuccessfully")." ".import_mode." ".export_file." into ".csv_file." (".imported_row_count." row(s), detection rule - ".detection_rule.") at ".timestamp,
+                action=="csv_created",
+                  "User ".analyst." created CSV ".csv_file." with ".column_count." column(s) for detection rule ".detection_rule." at ".timestamp,
+                action=="dr_created",
+                  "User ".analyst." created new detection rule ".detection_rule." at ".timestamp,
+                action=="rule_removed",
+                  "User ".analyst." ".if(removal_type=="permanent","permanently deleted","unlinked")." rule ".detection_rule." (".csv_count." CSV file(s): ".csv_files.") — ".comment." at ".timestamp,
+                action=="csv_removed",
+                  "User ".analyst." ".if(removal_type=="permanent","permanently deleted","unlinked")." CSV ".csv_file." from rule ".detection_rule.if(rule_also_removed=="true"," (last CSV — rule also removed)","")." — ".comment." at ".timestamp,
+                action=="request_submitted",
+                  "User ".analyst." submitted ".approval_action_type." request for ".csv_file." - ".description." (detection rule - ".detection_rule.") at ".timestamp,
+                action=="request_approved",
+                  "User ".analyst." approved ".approval_action_type." request created by ".requester." for ".csv_file." (detection rule - ".detection_rule.") at ".timestamp,
+                action=="request_rejected",
+                  "User ".analyst." rejected ".approval_action_type." request created by ".requester." for ".csv_file." (reason: ".rejection_reason.") (detection rule - ".detection_rule.") at ".timestamp,
+                action=="request_failed",
+                  "User ".analyst." failed to approve ".approval_action_type." request created by ".requester." for ".csv_file." (reason: ".failure_reason.") (detection rule - ".detection_rule.") at ".timestamp,
+                action=="request_cancelled",
+                  "User ".analyst." cancelled their ".approval_action_type." request for ".csv_file." (reason: ".cancellation_reason.") (detection rule - ".detection_rule.") at ".timestamp
+              )
+            | eval reason=coalesce(remove_reason, row_add_reason, revert_reason, rejection_reason, failure_reason, cancellation_reason, comment, "")
+            | table timestamp action analyst csv_file detection_rule reason request_id approval_action_type requester status export_file summary
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>

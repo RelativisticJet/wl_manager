@@ -35,7 +35,7 @@ Whitelist Manager is a Splunk application that provides a web-based interface fo
 
 ### Key Capabilities
 
-- **Searchable dropdown** for 300+ detection rules
+- **Searchable dropdown** for detection rules
 - **Editable CSV table** with pagination (10 rows per page)
 - **Full audit trail** — every change records who, what, when, and why
 - **Expiration management** — set expiration dates with presets; expired rows are automatically cleaned up
