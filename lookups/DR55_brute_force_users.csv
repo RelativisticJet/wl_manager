@@ -1,11 +1,40 @@
-user,src_ip,threshold,Comment,Expires,_added_by,_added_at
-svc_backup,10.0.5.20,50,Backup service account - high login rate expected,,,,
-svc_monitoring,10.0.5.25,100,Nagios monitoring account polls every 30s,,,,
-admin_jdoe,192.168.1.50,30,IT admin John Doe - frequent re-auth due to MFA resets,2026-06-30 18:00,,
-svc_ldap_sync,10.0.5.30,200,LDAP sync service runs every minute,,,,
-t.wilson,172.16.10.15,25,Tom Wilson - remote developer using VPN with frequent disconnects,2026-03-10 09:00,,
-svc_jenkins,10.0.5.40,150,Jenkins CI build agent - triggers on every commit,,,,
-r.garcia,192.168.2.88,20,Rosa Garcia - QA lead running automated login tests,2026-04-01 16:00,,
-svc_sccm,10.0.5.50,80,SCCM client push service account,,,,
-contractor_a.patel,10.10.50.22,15,Contractor Arjun Patel - temporary access for audit project,2026-03-01 23:59,,
-intern_s.lee,10.10.50.30,10,Summer intern Sarah Lee - limited access,2026-02-25 17:00,,
+user,src_ip,dest_host,threshold,auth_method,Comment,Expires
+svc_patch,10.2.0.39,ADFS02,20,ntlm,ServiceNow API polling,2026-10-18 23:59
+p.anderson,10.100.0.104,RADIUS01,100,password,Splunk forwarder reconnections,2026-06-17 09:00
+h.brown,10.2.0.14,LDAP01,30,kerberos,Night shift operator account,
+k.wong,172.16.20.93,VPN-GW02,30,certificate,Compliance scan account,2026-05-08 18:00
+admin_jdoe,192.168.10.54,ADFS02,25,ldap,Emergency access account,
+svc_ansible,192.168.1.210,WEB-SSO01,20,mfa,Monitoring account polls every 30s,
+j.chen,172.16.10.81,ADFS02,25,kerberos,Load testing service account,
+f.white,192.168.10.125,DC02,150,mfa,Multi-site VPN user,
+m.patel,10.2.0.101,VPN-GW01,100,saml,Contractor with approved access,2026-07-02 12:00
+d.martinez,192.168.1.83,RADIUS01,200,password,Monitoring account polls every 30s,
+admin_bwilson,192.168.10.84,LDAP02,200,mfa,Night shift operator account,
+o.davis,10.2.0.169,ADFS01,25,certificate,Training lab account,
+o.davis,10.0.5.180,DC01,200,kerberos,Load testing service account,
+admin_asmith,192.168.10.55,WEB-SSO01,100,kerberos,Penetration test engagement,2026-06-26 09:00
+admin_dlee,192.168.10.207,VPN-GW02,150,certificate,Penetration test engagement,2026-10-09 09:00
+e.moore,172.16.20.110,VPN-GW01,100,radius,Frequent re-auth due to MFA resets,2026-05-14 12:00
+svc_monitoring,10.0.10.194,VPN-GW01,15,mfa,Training lab account,2026-11-03 23:59
+v.jones,10.2.0.185,DC01,200,saml,Frequent re-auth due to MFA resets,2026-09-22 09:00
+c.taylor,10.100.0.235,ADFS01,50,ntlm,Remote developer using VPN with frequent disconnects,
+r.garcia,10.100.0.133,WEB-SSO01,200,mfa,Multi-site VPN user,
+b.jackson,192.168.10.142,DC01,75,kerberos,Night shift operator account,
+svc_ansible,10.200.0.11,WEB-SSO01,50,kerberos,Kubernetes pod scaling events,
+svc_patch,192.168.10.235,LDAP02,50,password,Frequent re-auth due to MFA resets,
+p.anderson,10.0.10.203,VPN-GW01,25,saml,Vendor remote access approved,2026-09-24 09:00
+svc_deploy,10.0.5.17,VPN-GW02,500,kerberos,Emergency access account,2026-07-07 23:59
+svc_monitoring,10.1.0.37,RADIUS01,150,radius,Emergency access account,2026-05-09 23:59
+u.williams,172.16.20.238,WEB-SSO01,20,password,Contractor with approved access,
+s.kumar,192.168.10.77,ADFS02,500,mfa,Emergency access account,
+d.martinez,10.2.0.30,VPN-GW02,20,ntlm,Known shared account in SOC,2026-09-17 12:00
+c.taylor,10.0.10.192,ADFS02,20,certificate,Backup service account - high login rate expected,2026-08-01 23:59
+n.miller,10.0.5.85,ADFS01,30,certificate,Multi-site VPN user,2026-10-18 18:00
+q.johnson,10.0.10.142,DC01,75,ldap,Night shift operator account,
+t.wilson,10.0.5.250,ADFS02,50,mfa,Backup service account - high login rate expected,
+svc_patch,10.200.0.182,VPN-GW02,25,mfa,Training lab account,2026-05-03 18:00
+svc_monitoring,10.0.10.115,VPN-GW01,25,ldap,ServiceNow API polling,
+svc_splunk,172.16.20.115,ADFS02,30,ldap,Vendor remote access approved,
+j.chen,172.16.10.121,WEB-SSO01,100,password,Splunk forwarder reconnections,
+q.johnson,172.16.10.66,DC02,500,radius,Night shift operator account,2026-08-28 12:00
+r.garcia,172.16.10.191,RADIUS01,30,certificate,ServiceNow API polling,

@@ -7,7 +7,7 @@ DR55_brute_force_login,DR55_brute_force_src.csv,wl_manager
 DR71_data_exfiltration,DR71_data_exfil_hosts.csv,wl_manager
 DR71_data_exfiltration,DR71_data_exfil_users.csv,wl_manager
 DR88_lateral_movement,DR88_whitelist.csv,wl_manager
-DR102_powershell_obfuscation,DR102_whitelist.csv,wl_manager
+DR102_priv_escalation,DR102_whitelist.csv,wl_manager
 DR130_privilege_escalation,DR130_priv_escalation.csv,wl_manager
 DR200_dns_tunneling,DR200_dns_tunneling.csv,wl_manager
 DR310_impossible_travel,DR310_impossible_travel.csv,wl_manager
