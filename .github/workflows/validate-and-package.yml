@@ -1,0 +1,43 @@
+name: Validate and Package Whitelist Manager
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate-and-package:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Bash environment
+      run: |
+        apt-get update && apt-get install -y bash
+
+    - name: Run validation script
+      run: |
+        if [ -f ./scripts/validate.sh ]; then
+          bash ./scripts/validate.sh
+        else
+          echo 'Validation script not found, skipping validation'
+        fi
+
+    - name: Run packaging script
+      run: |
+        if [ -f ./scripts/package.sh ]; then
+          bash ./scripts/package.sh
+        else
+          echo 'Packaging script not found, skipping packaging'
+        fi
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      if: success()
+      with:
+        name: wl_manager-package
+        path: dist/*.spl
+        retention-days: 30

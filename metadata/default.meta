@@ -1,35 +1,42 @@
 #
 # Permissions for the Whitelist Manager app.
 #
-# wl_editor / admin / sc_admin  — full read+write
-# wl_viewer                     — read-only (can view dashboards + audit)
+# wl_admin                      — Control Panel access (approve/reject, limits)
+# wl_analyst_editor / wl_editor — full read+write on whitelists
+# wl_analyst_viewer / wl_viewer — read-only (can view dashboards + audit)
+# admin / sc_admin              — full access
 # *                             — no access by default
 #
 
 []
-access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin, sc_admin ]
+access = read : [ wl_admin, wl_analyst_editor, wl_analyst_viewer, wl_editor, wl_viewer, admin, sc_admin ], write : [ wl_admin, admin, sc_admin ]
 export = system
 owner = admin
 
 [views]
-access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin, sc_admin, wl_editor ]
-export = system
-owner = admin
-
-[views/audit]
-access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin, sc_admin, wl_editor ]
+access = read : [ wl_admin, wl_analyst_editor, wl_analyst_viewer, wl_editor, wl_viewer, admin, sc_admin ], write : [ wl_admin, wl_analyst_editor, wl_editor, admin, sc_admin ]
 export = system
 owner = admin
 
 [views/whitelist_manager]
-access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin, sc_admin, wl_editor ]
+access = read : [ wl_admin, wl_analyst_editor, wl_analyst_viewer, wl_editor, wl_viewer, admin, sc_admin ], write : [ wl_admin, wl_analyst_editor, wl_editor, admin, sc_admin ]
+export = system
+owner = admin
+
+[views/audit]
+access = read : [ wl_admin, wl_analyst_editor, wl_analyst_viewer, wl_editor, wl_viewer, admin, sc_admin ], write : [ wl_admin, wl_analyst_editor, wl_editor, admin, sc_admin ]
+export = system
+owner = admin
+
+[views/control_panel]
+access = read : [ wl_admin, admin, sc_admin ], write : [ wl_admin, admin, sc_admin ]
 export = system
 owner = admin
 
 [lookups]
-access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin, sc_admin, wl_editor ]
+access = read : [ wl_admin, wl_analyst_editor, wl_analyst_viewer, wl_editor, wl_viewer, admin, sc_admin ], write : [ wl_admin, wl_analyst_editor, wl_editor, admin, sc_admin ]
 export = system
 
 [transforms]
-access = read : [ wl_editor, wl_viewer, admin, sc_admin ], write : [ admin, sc_admin ]
+access = read : [ wl_admin, wl_analyst_editor, wl_analyst_viewer, wl_editor, wl_viewer, admin, sc_admin ], write : [ wl_admin, admin, sc_admin ]
 export = system

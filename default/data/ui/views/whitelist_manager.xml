@@ -1,6 +1,6 @@
-<dashboard version="1.1" theme="dark" script="whitelist_manager.js" stylesheet="whitelist_manager.css">
+<dashboard version="1.1" theme="dark" script="whitelist_manager.js,notifications.js" stylesheet="whitelist_manager.css">
   <label>Whitelist Manager</label>
-  <description>View, edit, and audit detection-rule CSV whitelists</description>
+  <description></description>
 
   <!-- ============================================================
        EDITABLE CSV TABLE  (rendered by whitelist_manager.js)

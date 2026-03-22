@@ -2,6 +2,6 @@
 
   <view name="whitelist_manager" default="true" label="Whitelist Manager" />
   <view name="audit"             label="Audit Trail" />
-  <view name="search"            label="Search" />
+  <view name="control_panel"     label="Control Panel" />
 
 </nav>
