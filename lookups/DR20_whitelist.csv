@@ -1,4 +1,4 @@
 host,user,CommandLine,Comment,Expires,_added_by,_added_at
 WKSTN-001,jsmith,whoami,Legacy admin tool,,,
-WKSTN-042,alice,net user,Approved network mapping,2026-04-15 09:00,admin,1773887056
-SRV-DB01,svc_backup,robocopy,Scheduled backup job,,admin,1773887056
+WKSTN-042,alice,net user,Approved network mapping,2026-04-15 09:00,,
+SRV-DB01,svc_backup,robocopy,Scheduled backup job,,,
