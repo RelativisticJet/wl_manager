@@ -1,7 +1,1 @@
 host,software_name,publisher,Comment,expire,_added_by,_added_at
-SRV-DEV01,Visual Studio Code,Microsoft,Approved IDE for development team,,,
-WKS-MKT05,Canva Desktop,Canva Pty Ltd,Marketing team design tool - temporary license,2026-04-15,,
-SRV-BUILD02,Jenkins,CloudBees,CI/CD pipeline server,2026-03-25 00:37,,
-WKS-FIN03,Tableau Desktop,Salesforce,Finance analyst reporting tool - trial period,2026-03-10 09:00,,
-WKS-HR01,BambooHR Desktop,BambooHR,HR portal desktop app - evaluation,2026-03-25,,
-SRV-QA01,Selenium Grid,Apache5,QA automation framework for user SRV-QA01,2026-08-24 00:38,,

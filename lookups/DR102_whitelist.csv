@@ -1,2 +1,6 @@
-host,CommandLine,Comment,_added_by,_added_at
-WKSTN-099,powershell -enc,Security testing tool,,
+host,_added_by,_added_at
+WKSTN-099,,
+TEST_2,wladmin2,1773609786
+TEST_3,wladmin2,1773609786
+TEST_4,wladmin2,1773612826
+TEST_5,wladmin2,1773612826
