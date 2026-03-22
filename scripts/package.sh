@@ -111,24 +111,37 @@ tar -czf "$SPL_FILE" \
     --exclude="$APP_NAME/.git" \
     --exclude="$APP_NAME/.github" \
     --exclude="$APP_NAME/.docker" \
+    --exclude="$APP_NAME/.claude" \
+    --exclude="$APP_NAME/.code-review-graph" \
+    --exclude="$APP_NAME/.pytest_cache" \
+    --exclude="$APP_NAME/.superpowers" \
+    --exclude="$APP_NAME/.mcp.json" \
+    --exclude="$APP_NAME/.vscode" \
     --exclude="$APP_NAME/dist" \
     --exclude="$APP_NAME/demo" \
     --exclude="$APP_NAME/scripts" \
     --exclude="$APP_NAME/tests" \
+    --exclude="$APP_NAME/docs" \
     --exclude="$APP_NAME/docker-compose.yml" \
     --exclude="$APP_NAME/.dockerignore" \
     --exclude="$APP_NAME/.gitignore" \
     --exclude="$APP_NAME/Makefile" \
+    --exclude="$APP_NAME/CLAUDE.md" \
     --exclude="$APP_NAME/__pycache__" \
     --exclude="$APP_NAME/**/__pycache__" \
     --exclude="$APP_NAME/**/*.pyc" \
     --exclude="$APP_NAME/.DS_Store" \
     --exclude="$APP_NAME/lookups/DR*" \
     --exclude="$APP_NAME/lookups/*.bak" \
+    --exclude="$APP_NAME/lookups/_versions" \
+    --exclude="$APP_NAME/lookups/_*.json" \
     --exclude="$APP_NAME/metadata/local.meta" \
     --exclude="$APP_NAME/local" \
     --exclude="$APP_NAME/*.spl" \
     --exclude="$APP_NAME/*.pdf" \
+    --exclude="$APP_NAME/test_*.py" \
+    --exclude="$APP_NAME/*-after-*" \
+    --exclude="$APP_NAME/login-check" \
     "$APP_NAME/"
 
 # Restore the original mapping file
