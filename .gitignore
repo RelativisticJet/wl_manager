@@ -51,7 +51,6 @@ test_*.py
 CLAUDE.md
 login-check
 081-after-rule-select
-demo/
 *.log
 *.patch
 
