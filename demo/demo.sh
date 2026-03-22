@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 #
 # ═══════════════════════════════════════════════════════════════════════
-# Whitelist Manager — Quick Demo
+# Whitelist Manager v2.0 — Quick Demo
 # ═══════════════════════════════════════════════════════════════════════
 #
 # Spins up a standalone Splunk instance in Docker, installs the
-# Whitelist Manager app from the .spl package, and seeds demo data
-# so you can evaluate the app immediately.
+# Whitelist Manager app from the .spl package, creates demo users
+# with different roles, and seeds sample data so you can evaluate
+# the full feature set including approval workflows.
 #
 # Usage:
 #   bash demo/demo.sh              # build .spl, start Splunk, seed data
@@ -20,8 +21,12 @@
 #
 # Access after startup:
 #   URL:      http://localhost:9000
-#   Username: admin
-#   Password: Chang3d!
+#
+#   Demo accounts:
+#     admin    / Chang3d!   — full Splunk admin
+#     analyst1 / Chang3d!   — editor (can edit whitelists)
+#     viewer1  / Chang3d!   — viewer (read-only)
+#     wladmin1 / Chang3d!   — WL admin (can approve/reject, configure limits)
 #
 
 set -euo pipefail
@@ -29,7 +34,7 @@ set -euo pipefail
 # ── Configuration ────────────────────────────────────────────────────
 CONTAINER_NAME="wl_manager_demo"
 SPLUNK_IMAGE="splunk/splunk:9.3.1"
-SPLUNK_PASSWORD="Chang3d!"
+SPLUNK_PASSWORD="${SPLUNK_PASSWORD:-Chang3d!}"
 WEB_PORT=9000
 API_PORT=9089
 VOLUME_NAME="wl_manager_demo_var"
@@ -59,7 +64,6 @@ wait_for_splunk() {
         fi
         sleep 3
         elapsed=$((elapsed + 3))
-        # Print progress every 15 seconds
         if [ $((elapsed % 15)) -eq 0 ]; then
             info "Still waiting... (${elapsed}s)"
         fi
@@ -67,6 +71,18 @@ wait_for_splunk() {
     err "Splunk did not start within ${MAX_WAIT} seconds."
     err "Check logs: docker logs ${CONTAINER_NAME}"
     return 1
+}
+
+splunk_api() {
+    # Helper: make a Splunk REST API call
+    # Usage: splunk_api POST /services/authentication/users -d "name=foo&..."
+    local method="$1"
+    local endpoint="$2"
+    shift 2
+    curl -sk -X "$method" \
+        -u "admin:${SPLUNK_PASSWORD}" \
+        "https://localhost:${API_PORT}${endpoint}" \
+        "$@" -o /dev/null -w "%{http_code}"
 }
 
 # ── Handle --stop / --clean ──────────────────────────────────────────
@@ -94,13 +110,13 @@ fi
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
-echo "  Whitelist Manager — Quick Demo"
+echo "  Whitelist Manager v2.0 — Quick Demo"
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
 
 # ── Step 1: Check Docker ────────────────────────────────────────────
 
-echo "Step 1/6: Checking Docker..."
+echo "Step 1/7: Checking Docker..."
 if ! docker info &>/dev/null; then
     err "Docker is not running. Please start Docker Desktop and try again."
     exit 1
@@ -110,15 +126,13 @@ ok "Docker is running."
 # ── Step 2: Find or build .spl ──────────────────────────────────────
 
 echo ""
-echo "Step 2/6: Locating .spl package..."
+echo "Step 2/7: Locating .spl package..."
 
 SPL_FILE=""
 if [[ -n "${1:-}" && -f "${1:-}" ]]; then
-    # User passed a path to an existing .spl
     SPL_FILE="$1"
     ok "Using provided .spl: $SPL_FILE"
 else
-    # Look for existing .spl in dist/
     SPL_FILE=$(ls -t "$PROJECT_DIR"/dist/wl_manager-*.spl 2>/dev/null | head -1 || true)
     if [[ -n "$SPL_FILE" ]]; then
         ok "Found existing .spl: $SPL_FILE"
@@ -137,9 +151,8 @@ fi
 # ── Step 3: Start container ─────────────────────────────────────────
 
 echo ""
-echo "Step 3/6: Starting Splunk container..."
+echo "Step 3/7: Starting Splunk container..."
 
-# Stop existing demo container if running
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     info "Removing existing demo container..."
     docker stop "$CONTAINER_NAME" 2>/dev/null || true
@@ -163,41 +176,70 @@ wait_for_splunk "$API_PORT"
 # ── Step 4: Install .spl ────────────────────────────────────────────
 
 echo ""
-echo "Step 4/6: Installing Whitelist Manager app..."
+echo "Step 4/7: Installing Whitelist Manager app..."
 
-# Copy .spl into the container and fix ownership
 docker cp "$SPL_FILE" "${CONTAINER_NAME}:/tmp/wl_manager.spl"
 MSYS_NO_PATHCONV=1 docker exec -u 0 "$CONTAINER_NAME" \
     chown splunk:splunk /tmp/wl_manager.spl 2>/dev/null || true
 
-# Install via Splunk CLI (must run as splunk user)
 MSYS_NO_PATHCONV=1 docker exec -u splunk "$CONTAINER_NAME" \
     /opt/splunk/bin/splunk install app /tmp/wl_manager.spl \
     -auth "admin:${SPLUNK_PASSWORD}" 2>&1 | grep -v "^$" || true
 
 ok "App installed."
 
-# Restart Splunk to load the new app (--answer-yes avoids interactive prompt)
 info "Restarting Splunk to load the app..."
 MSYS_NO_PATHCONV=1 docker exec -u splunk "$CONTAINER_NAME" \
     /opt/splunk/bin/splunk restart --answer-yes 2>&1 | tail -1 || true
 
 wait_for_splunk "$API_PORT"
 
-# ── Step 5: Seed demo data ──────────────────────────────────────────
+# ── Step 5: Create demo users ────────────────────────────────────────
 
 echo ""
-echo "Step 5/6: Seeding demo data..."
+echo "Step 5/7: Creating demo users..."
+
+# analyst1 — editor role (can edit whitelists, subject to daily limits and approval gates)
+STATUS=$(splunk_api POST "/services/authentication/users" \
+    -d "name=analyst1&password=${SPLUNK_PASSWORD}&roles=wl_analyst_editor&roles=user")
+if [[ "$STATUS" == "201" || "$STATUS" == "409" ]]; then
+    ok "analyst1 (editor) — can edit whitelists"
+else
+    info "analyst1 create returned HTTP $STATUS"
+fi
+
+# viewer1 — viewer role (read-only access to whitelists and audit trail)
+STATUS=$(splunk_api POST "/services/authentication/users" \
+    -d "name=viewer1&password=${SPLUNK_PASSWORD}&roles=wl_analyst_viewer&roles=user")
+if [[ "$STATUS" == "201" || "$STATUS" == "409" ]]; then
+    ok "viewer1  (viewer) — read-only access"
+else
+    info "viewer1 create returned HTTP $STATUS"
+fi
+
+# wladmin1 — WL admin (can approve/reject requests, configure limits, view usage)
+STATUS=$(splunk_api POST "/services/authentication/users" \
+    -d "name=wladmin1&password=${SPLUNK_PASSWORD}&roles=wl_admin&roles=user")
+if [[ "$STATUS" == "201" || "$STATUS" == "409" ]]; then
+    ok "wladmin1 (admin)  — approve/reject, configure limits"
+else
+    info "wladmin1 create returned HTTP $STATUS"
+fi
+
+# ── Step 6: Seed demo data ──────────────────────────────────────────
+
+echo ""
+echo "Step 6/7: Seeding demo data..."
 
 APP_LOOKUPS="/opt/splunk/etc/apps/wl_manager/lookups"
 
 # Calculate demo dates
-FUTURE_7D=$(date -u -d "+7 days" "+%Y-%m-%d 00:00" 2>/dev/null || date -u -v+7d "+%Y-%m-%d 00:00" 2>/dev/null || echo "2026-03-02 00:00")
-FUTURE_30D=$(date -u -d "+30 days" "+%Y-%m-%d 00:00" 2>/dev/null || date -u -v+30d "+%Y-%m-%d 00:00" 2>/dev/null || echo "2026-03-25 00:00")
-FUTURE_6M=$(date -u -d "+180 days" "+%Y-%m-%d 00:00" 2>/dev/null || date -u -v+180d "+%Y-%m-%d 00:00" 2>/dev/null || echo "2026-08-22 00:00")
+FUTURE_7D=$(date -u -d "+7 days" "+%Y-%m-%d 00:00" 2>/dev/null || date -u -v+7d "+%Y-%m-%d 00:00" 2>/dev/null || echo "2026-04-01 00:00")
+FUTURE_30D=$(date -u -d "+30 days" "+%Y-%m-%d 00:00" 2>/dev/null || date -u -v+30d "+%Y-%m-%d 00:00" 2>/dev/null || echo "2026-04-25 00:00")
+FUTURE_6M=$(date -u -d "+180 days" "+%Y-%m-%d 00:00" 2>/dev/null || date -u -v+180d "+%Y-%m-%d 00:00" 2>/dev/null || echo "2026-09-20 00:00")
 PAST_DATE="2025-01-15 08:00"
 
-# 1. Master mapping CSV
+# 1. Master mapping CSV — 3 demo rules
 MSYS_NO_PATHCONV=1 docker exec -u splunk "$CONTAINER_NAME" bash -c "cat > ${APP_LOOKUPS}/rule_csv_map.csv << 'CSVEOF'
 rule_name,csv_file,app_context
 Brute_Force_Login,brute_force_whitelist.csv,wl_manager
@@ -205,7 +247,7 @@ Suspicious_Process,suspicious_process_whitelist.csv,wl_manager
 Impossible_Travel,impossible_travel_whitelist.csv,wl_manager
 CSVEOF"
 
-# 2. Brute Force whitelist (has Expires column — demonstrates expiration features)
+# 2. Brute Force whitelist (has Expires — demonstrates expiration + approval gates)
 MSYS_NO_PATHCONV=1 docker exec -u splunk "$CONTAINER_NAME" bash -c "cat > ${APP_LOOKUPS}/brute_force_whitelist.csv << CSVEOF
 user,src_ip,threshold,Comment,Expires
 svc_monitoring,10.1.1.50,100,Service account - high threshold expected,${FUTURE_6M}
@@ -236,30 +278,42 @@ CSVEOF"
 MSYS_NO_PATHCONV=1 docker exec -u 0 "$CONTAINER_NAME" \
     chown -R splunk:splunk "${APP_LOOKUPS}/" 2>/dev/null || true
 
-ok "Demo data seeded (3 rules, 3 CSV files)."
+ok "Demo data seeded (3 rules, 3 CSV files, 1 expired row for auto-removal demo)."
 
-# ── Step 6: Summary ─────────────────────────────────────────────────
+# ── Step 7: Summary ─────────────────────────────────────────────────
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo "  DEMO READY"
 echo ""
 echo "  Splunk Web:  http://localhost:${WEB_PORT}"
-echo "  Username:    admin"
-echo "  Password:    ${SPLUNK_PASSWORD}"
+echo ""
+echo "  Demo Accounts:"
+echo "    admin    / ${SPLUNK_PASSWORD}  — full Splunk admin"
+echo "    analyst1 / ${SPLUNK_PASSWORD}  — editor (edit whitelists)"
+echo "    viewer1  / ${SPLUNK_PASSWORD}  — viewer (read-only)"
+echo "    wladmin1 / ${SPLUNK_PASSWORD}  — WL admin (approve/reject)"
 echo ""
 echo "  What to try:"
-echo "    1. Go to Apps > Whitelist Manager"
-echo "    2. Select a detection rule from the dropdown"
-echo "       - Brute_Force_Login      (has expiration dates)"
-echo "       - Suspicious_Process     (simple whitelist)"
-echo "       - Impossible_Travel      (has expiration dates)"
-echo "    3. Select a CSV file and explore the table"
-echo "    4. Try editing a cell, adding a row, or removing one"
-echo "    5. Click Save Changes and see the diff summary"
-echo "    6. Click the Audit Trail tab to see change history"
-echo "    7. Notice the expired row in Brute_Force_Login was"
-echo "       auto-removed (check the yellow banner on load)"
+echo ""
+echo "  As analyst1 (editor):"
+echo "    1. Apps > Whitelist Manager"
+echo "    2. Select Brute_Force_Login — notice the expired row"
+echo "       is auto-removed (yellow banner)"
+echo "    3. Edit a cell, add a row, save with a comment"
+echo "    4. Try removing 3+ rows — approval is required!"
+echo "    5. Check the Audit Trail tab for change history"
+echo ""
+echo "  As wladmin1 (admin):"
+echo "    6. Log in as wladmin1"
+echo "    7. Go to the Control Panel tab"
+echo "    8. Review and approve/reject analyst1's request"
+echo "    9. Check Analyst Usage and Limits & Permissions tabs"
+echo ""
+echo "  As viewer1 (viewer):"
+echo "    10. Log in as viewer1"
+echo "    11. Notice you can view but NOT edit (Save is disabled)"
+echo "    12. Control Panel tab is NOT visible"
 echo ""
 echo "  Tear down:"
 echo "    bash demo/demo.sh --stop    # stop + remove container"

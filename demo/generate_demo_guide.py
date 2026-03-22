@@ -70,7 +70,7 @@ class DemoGuide(FPDF):
         self.ln(40)
         self.set_font("Helvetica", "", 10)
         self.cell(0, 8, "Security Engineering Team", align="C", new_x="LMARGIN", new_y="NEXT")
-        self.cell(0, 8, "Version 1.0.0", align="C", new_x="LMARGIN", new_y="NEXT")
+        self.cell(0, 8, "Version 2.0.0", align="C", new_x="LMARGIN", new_y="NEXT")
 
     def section(self, number, title):
         self._check_space(20)
@@ -215,8 +215,9 @@ def build():
     pdf.numbered(2, "Build the .spl package (if not already built)")
     pdf.numbered(3, "Start a Splunk 9.3.1 container")
     pdf.numbered(4, "Install the Whitelist Manager app from the .spl")
-    pdf.numbered(5, "Seed three demo detection rules with sample whitelist data")
-    pdf.numbered(6, "Print the login URL and credentials")
+    pdf.numbered(5, "Create demo users with different roles (editor, viewer, admin)")
+    pdf.numbered(6, "Seed three demo detection rules with sample whitelist data")
+    pdf.numbered(7, "Print the login URL and credentials")
     pdf.ln(2)
     pdf.body(
         "The entire process takes approximately 2-3 minutes "
@@ -224,10 +225,13 @@ def build():
     )
     pdf.ln(2)
     pdf.sub_section("Login Credentials")
-    pdf.table_row(["Setting", "Value"], header=True)
-    pdf.table_row(["URL", "http://localhost:9000"])
-    pdf.table_row(["Username", "admin"])
-    pdf.table_row(["Password", "Chang3d!"])
+    pdf.body("URL: http://localhost:9000")
+    pdf.ln(2)
+    pdf.table_row(["Username", "Password", "Role", "Can Do"], header=True)
+    pdf.table_row(["admin", "Chang3d!", "Splunk admin", "Everything"])
+    pdf.table_row(["analyst1", "Chang3d!", "wl_analyst_editor", "Edit whitelists"])
+    pdf.table_row(["viewer1", "Chang3d!", "wl_analyst_viewer", "View only"])
+    pdf.table_row(["wladmin1", "Chang3d!", "wl_admin", "Approve/reject, config"])
 
     # -- What to Try --
     pdf.section("3", "What to Try")
@@ -268,8 +272,57 @@ def build():
     pdf.numbered(4, 'Click "30 Days" to set an expiration 30 days from now')
     pdf.numbered(5, 'Or pick a manual date/time and click "Apply"')
 
+    pdf.sub_section("3.6 Version Control and Revert")
+    pdf.numbered(1, "After making a few changes, look at the Revert to Version dropdown")
+    pdf.numbered(2, "It shows timestamped snapshots of previous versions")
+    pdf.numbered(3, "Select a previous version to see what would change")
+    pdf.numbered(4, "Enter a reason and click Revert to restore that version")
+
+    pdf.sub_section("3.7 Test Read-Only Access (as viewer1)")
+    pdf.numbered(1, "Log out and log in as viewer1")
+    pdf.numbered(2, "Navigate to Whitelist Manager - you can view but not edit")
+    pdf.numbered(3, 'The Save, Add Row, and Remove buttons are disabled')
+    pdf.numbered(4, 'The "Control Panel" tab is not visible in the navigation')
+
+    # -- Approval Workflow --
+    pdf.section("4", "Approval Workflow Demo")
+    pdf.body(
+        "One of the key v2.0 features is the approval workflow. "
+        "Bulk operations above configurable thresholds require admin approval."
+    )
+
+    pdf.sub_section("4.1 Trigger an Approval Gate (as analyst1)")
+    pdf.numbered(1, "Log in as analyst1")
+    pdf.numbered(2, "Go to Whitelist Manager and select Suspicious_Process")
+    pdf.numbered(3, "Select all rows using the header checkbox")
+    pdf.numbered(4, 'Click "Remove Selected (4)"')
+    pdf.numbered(5, 'Enter a reason when prompted (e.g., "Cleanup old entries")')
+    pdf.numbered(6, "Since 4 rows exceeds the threshold (3), you will see: "
+                     '"Removing 4 rows requires admin approval"')
+    pdf.numbered(7, 'Click "Submit for Approval" and add a justification')
+    pdf.numbered(8, "The CSV is now locked until an admin reviews the request")
+
+    pdf.sub_section("4.2 Approve the Request (as wladmin1)")
+    pdf.numbered(1, "Log out and log in as wladmin1")
+    pdf.numbered(2, 'Click the "Control Panel" tab in the navigation bar')
+    pdf.numbered(3, "The Approval Queue shows the pending request from analyst1")
+    pdf.numbered(4, 'Click "Approve" (or "Reject" with a reason)')
+    pdf.numbered(5, "The approved operation executes automatically")
+    pdf.numbered(6, "analyst1 receives a notification about the decision")
+    pdf.ln(2)
+    pdf.info_box(
+        "Note: Self-approval is prevented. If analyst1 also has admin roles, "
+        "they still cannot approve their own request. Another admin must review it."
+    )
+
+    pdf.sub_section("4.3 Check Daily Limits")
+    pdf.numbered(1, 'In the Control Panel, click the "Analyst Usage" tab')
+    pdf.numbered(2, "See analyst1's usage counters for today")
+    pdf.numbered(3, 'Click "Limits & Permissions" to see and adjust thresholds')
+    pdf.numbered(4, "Try changing the bulk removal threshold from 3 to 5")
+
     # -- Audit Trail --
-    pdf.section("4", "Viewing the Audit Trail")
+    pdf.section("5", "Viewing the Audit Trail")
     pdf.numbered(1, 'Click the "Audit Trail" tab in the app navigation bar')
     pdf.numbered(2, "The dashboard shows all changes made during your demo session")
     pdf.numbered(3, "Use the filters at the top to narrow by analyst, rule, or action type")
@@ -283,7 +336,7 @@ def build():
     )
 
     # -- Demo Data --
-    pdf.section("5", "Demo Data Reference")
+    pdf.section("6", "Demo Data Reference")
     pdf.body("The demo seeds three detection rules with sample whitelists:")
 
     pdf.sub_section("Brute_Force_Login")
@@ -302,7 +355,7 @@ def build():
     pdf.body("Features demonstrated: expiration dates, date picker presets")
 
     # -- Stopping the Demo --
-    pdf.section("6", "Stopping the Demo")
+    pdf.section("7", "Stopping the Demo")
 
     pdf.sub_section("Stop and Remove Container")
     pdf.body("This stops the container and removes it, but keeps the data volume for next time:")
@@ -321,7 +374,7 @@ def build():
     )
 
     # -- Troubleshooting --
-    pdf.section("7", "Troubleshooting")
+    pdf.section("8", "Troubleshooting")
 
     pdf.sub_section("Docker is not running")
     pdf.body(
