@@ -11,7 +11,7 @@
 #
 # Splunk Web will be available at: http://localhost:8000
 #   Username: admin
-#   Password: Chang3d!   (set below — change for production)
+#   Password: set SPLUNK_PASSWORD env var (default: Chang3d!)
 #
 
 services:
@@ -21,7 +21,7 @@ services:
     hostname: splunk-test
     environment:
       SPLUNK_START_ARGS: "--accept-license"
-      SPLUNK_PASSWORD: "Chang3d!"
+      SPLUNK_PASSWORD: "${SPLUNK_PASSWORD:-Chang3d!}"
       SPLUNK_APPS_URL: ""
     ports:
       # Splunk Web UI
