@@ -101,6 +101,7 @@ SUPERADMIN_ROLES = {"wl_superadmin"}
 
 # Trash / soft-delete constants
 TRASH_DIR = "_trash"
+MIN_TRASH_RETENTION_DAYS = 7      # minimum enforced retention (safety floor)
 DEFAULT_TRASH_RETENTION_DAYS = 30  # auto-purge after this many days
 TRASH_CONFIG_FILE = "_trash_config.json"
 
@@ -2411,7 +2412,13 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 return self._resp(403, {
                     "error": "Requires admin role to view the approval queue"
                 })
-            return self._get_approval_queue_action()
+            resp = self._get_approval_queue_action()
+            # Inject role tier info for frontend UI gating
+            body = json.loads(resp.get("payload", "{}"))
+            body["is_superadmin"] = bool(
+                roles.intersection(SUPERADMIN_ROLES))
+            resp["payload"] = json.dumps(body, default=str)
+            return resp
 
         if action == "get_daily_limits":
             if not roles.intersection(ADMIN_ROLES):
@@ -2573,9 +2580,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             except (ValueError, TypeError):
                 return self._resp(400, {
                     "error": "retention_days must be an integer"})
-            if days < 1 or days > 365:
+            if days < 7 or days > 365:
                 return self._resp(400, {
-                    "error": "retention_days must be between 1 and 365"})
+                    "error": "retention_days must be between 7 and 365. "
+                             "Minimum 7 days ensures recovery window."})
             config = _read_trash_config()
             old_days = config.get("retention_days",
                                   DEFAULT_TRASH_RETENTION_DAYS)
