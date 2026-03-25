@@ -13,6 +13,19 @@ require([
     var POLL_INTERVAL = 30000;  // 30 seconds
     var bellInjected = false;
 
+    // Detect admin via server-verified API call (same pattern as
+    // whitelist_manager.js).  DOM-based checks are fragile — the nav
+    // may not have rendered yet or could be manipulated.
+    var isAdmin = false;
+    restPost({ action: "get_approval_queue" }).done(function () {
+        isAdmin = true;
+    });
+
+    // Global hook: other modules can register callbacks via
+    // window.__wlNotifCallbacks.push(function(notifications) { ... })
+    // Called on every poll with the full notification list.
+    window.__wlNotifCallbacks = window.__wlNotifCallbacks || [];
+
     // ── REST helpers ──────────────────────────────────────────────
     var BASE_URL = Splunk.util.make_url(
         "/splunkd/__raw/services/custom/wl_manager");
@@ -50,15 +63,27 @@ require([
     function injectBell() {
         if (bellInjected) return;
 
-        // Splunk dashboard header area
-        var $header = $(".dashboard-header, .splunk-dashboard-header, header.main-section-header").first();
-        if (!$header.length) {
-            $header = $(".dashboard-body").first();
+        // Place the bell in the app navigation bar row.
+        // Try known Splunk nav bar selectors; fall back to fixed positioning.
+        var $navBar = $("#placeholder-app-bar, .app-bar").first();
+        if (!$navBar.length) {
+            $navBar = $(".navbar.shared-appbar").first();
         }
-        if (!$header.length) return;
+        var useFixed = !$navBar.length;
+
+        if (!useFixed) {
+            if ($navBar.css("position") === "static") {
+                $navBar.css("position", "relative");
+            }
+        }
+
+        // fixed fallback: top:43px aligns with the app nav row in Splunk 9.x
+        var posStyle = useFixed
+            ? "position:fixed;top:43px;right:90px;z-index:10000"
+            : "position:absolute;top:50%;right:12px;transform:translateY(-50%);z-index:10000";
 
         var bellHtml =
-            '<div class="wl-notif-container" style="position:fixed;top:8px;right:60px;z-index:10000">' +
+            '<div class="wl-notif-container" style="' + posStyle + '">' +
                 '<div class="wl-notif-bell" id="wl-notif-bell" title="Notifications">' +
                     '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" ' +
                         'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
@@ -79,7 +104,11 @@ require([
                 '</div>' +
             '</div>';
 
-        $("body").append(bellHtml);
+        if (useFixed) {
+            $("body").append(bellHtml);
+        } else {
+            $navBar.append(bellHtml);
+        }
         bellInjected = true;
 
         // Toggle dropdown on bell click
@@ -126,48 +155,63 @@ require([
             var csvFile = $(this).data("csv-file") || "";
             var detectionRule = $(this).data("detection-rule") || "";
 
-            // Determine where to navigate based on action type + who sees the notification.
-            // notifType "new_request"/"cancelled" → admin-targeted
-            // notifType "approved"/"rejected"     → analyst-targeted
-            var isAdminNotif = (notifType === "new_request" || notifType === "cancelled");
+            // Route based on WHO the user is (admin vs analyst), not notifType.
+            // notifType "cancelled" can go to BOTH roles (analyst manual cancel
+            // → admin notif; auto-cancel on rule removal → analyst notif).
+            var cpUrl = Splunk.util.make_url(
+                "/app/wl_manager/control_panel") + "?tab=queue";
+            var wmBase = Splunk.util.make_url("/app/wl_manager/whitelist_manager");
 
-            // create_csv / create_rule: admins go to Control Panel queue to preview;
-            // analysts go to the CSV only if approved (it now exists), otherwise nowhere.
-            if (actionType === "create_csv" || actionType === "create_rule") {
-                if (isAdminNotif) {
-                    // Admin: go to Control Panel → Approval Queue
-                    window.location.href = Splunk.util.make_url(
-                        "/app/wl_manager/control_panel") + "?tab=queue";
+            if (isAdmin) {
+                // Admins: always go to Control Panel for actionable items
+                // (new requests, cancellations, pending reviews)
+                if (notifType === "new_request" || notifType === "cancelled") {
+                    window.location.href = cpUrl;
                     return;
                 }
-                // Analyst: approved create_csv → CSV now exists, navigate to it
+                // Admin seeing approved/rejected (rare — from their own actions)
+                // Navigate to the CSV if available
+                if (detectionRule) {
+                    var adminParams = ["rule=" + encodeURIComponent(detectionRule)];
+                    if (csvFile && csvFile !== "__rule_operation__") {
+                        adminParams.push("csv=" + encodeURIComponent(csvFile));
+                    }
+                    window.location.href = wmBase + "?" + adminParams.join("&");
+                    return;
+                }
+                window.location.href = cpUrl;
+                return;
+            }
+
+            // ── Analyst routing ──
+            // create_csv / create_rule actions
+            if (actionType === "create_csv" || actionType === "create_rule") {
+                // Approved create_csv → CSV now exists, navigate to it
                 if (notifType === "approved" && actionType === "create_csv" &&
                     detectionRule && csvFile) {
-                    var wmUrl = Splunk.util.make_url("/app/wl_manager/whitelist_manager") +
+                    window.location.href = wmBase +
                         "?rule=" + encodeURIComponent(detectionRule) +
                         "&csv=" + encodeURIComponent(csvFile);
-                    window.location.href = wmUrl;
                     return;
                 }
-                // Analyst: rejected, or create_rule approved (no CSV to show) → stay
+                // Rejected, cancelled, or create_rule approved (no CSV) → just close
                 $("#wl-notif-dropdown").hide();
                 return;
             }
 
-            // All other action types: navigate to the Whitelist Manager with rule + CSV
+            // Other analyst notifications → navigate to the CSV in Whitelist Manager
             if (!csvFile && !detectionRule) {
                 $("#wl-notif-dropdown").hide();
                 return;
             }
-            var url = Splunk.util.make_url("/app/wl_manager/whitelist_manager");
             var params = [];
             if (detectionRule) { params.push("rule=" + encodeURIComponent(detectionRule)); }
             if (csvFile && csvFile !== "__rule_operation__") {
                 params.push("csv=" + encodeURIComponent(csvFile));
             }
-            if (params.length) { url += "?" + params.join("&"); }
-            window.location.href = url;
+            window.location.href = wmBase + (params.length ? "?" + params.join("&") : "");
         });
+
     }
 
     // ── Badge update ─────────────────────────────────────────────
@@ -208,7 +252,7 @@ require([
                 ' data-detection-rule="' + _.escape(n.detection_rule || "") + '">' +
                 '<span class="wl-notif-icon">' + icon + '</span>' +
                 '<div class="wl-notif-content">' +
-                    '<div class="wl-notif-message">' + _.escape(n.message) + '</div>' +
+                    '<div class="wl-notif-message" title="' + _.escape(n.message) + '">' + _.escape(n.message) + '</div>' +
                     '<div class="wl-notif-time">' + timeAgo(n.timestamp) + '</div>' +
                 '</div>' +
             '</div>';
@@ -230,13 +274,31 @@ require([
         restGet({ action: "get_notifications" })
         .done(function (data) {
             updateBadge(data.unread_count || 0);
+            var notifs = data.notifications || [];
+            window.__wlNotifCallbacks.forEach(function (cb) {
+                try { cb(notifs); } catch (e) { /* ignore */ }
+            });
         });
+    }
+
+    // ── Dark theme detection (runs on every page that loads notifications) ──
+    function ensureDarkTheme() {
+        if ($("body").hasClass("wl-dark")) return;
+        var bg = window.getComputedStyle(document.body).backgroundColor;
+        var m = bg.match(/(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+        if (m) {
+            var brightness = (parseInt(m[1]) + parseInt(m[2]) + parseInt(m[3])) / 3;
+            if (brightness < 128) {
+                $("body").addClass("wl-dark");
+            }
+        }
     }
 
     // ── Init ─────────────────────────────────────────────────────
     $(function () {
         // Wait a moment for Splunk dashboard to fully render
         setTimeout(function () {
+            ensureDarkTheme();
             injectBell();
             pollCount();
             setInterval(pollCount, POLL_INTERVAL);
