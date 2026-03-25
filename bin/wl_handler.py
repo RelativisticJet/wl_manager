@@ -88,10 +88,21 @@ EXPIRE_COLUMN_NAMES = {
 
 # Roles allowed to WRITE (POST). Everyone authenticated can READ (GET).
 # Both old (wl_editor) and new (wl_analyst_editor) names accepted.
-EDIT_ROLES = {"wl_editor", "wl_analyst_editor", "wl_admin", "admin", "sc_admin"}
+EDIT_ROLES = {
+    "wl_editor", "wl_analyst_editor",
+    "wl_admin", "wl_superadmin", "admin", "sc_admin",
+}
 
 # Roles allowed to APPROVE/REJECT requests and access the Control Panel.
-ADMIN_ROLES = {"admin", "sc_admin", "wl_admin"}
+ADMIN_ROLES = {"admin", "sc_admin", "wl_admin", "wl_superadmin"}
+
+# Roles allowed to manage admin limits, trash retention, and system config.
+SUPERADMIN_ROLES = {"wl_superadmin"}
+
+# Trash / soft-delete constants
+TRASH_DIR = "_trash"
+DEFAULT_TRASH_RETENTION_DAYS = 30  # auto-purge after this many days
+TRASH_CONFIG_FILE = "_trash_config.json"
 
 # Detection rule registry (rules without CSV mappings)
 DETECTION_RULES_FILE = "_detection_rules.json"
@@ -156,6 +167,15 @@ DEFAULT_LIMITS = {
     "require_reason_csv_creation": False,
     "require_reason_rule_deletion": False,
     "require_reason_csv_deletion": False,
+}
+
+# Admin-specific daily limits (2x editor defaults by default).
+# These limit admin actions; set by super-admin only.
+DEFAULT_ADMIN_LIMITS = {
+    "rule_deletion": 2,         # rules soft-deleted per period
+    "csv_deletion": 2,          # CSVs soft-deleted per period
+    "approval_count": 20,       # approvals per period
+    "limit_changes": 5,         # limit config changes per period
 }
 
 # Fallback constants (used only if config read fails)
@@ -576,6 +596,107 @@ def _write_approval_queue(queue):
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
+@contextmanager
+def _approval_queue_lock():
+    """Acquire an exclusive lock around approval queue read-modify-write cycles.
+
+    Prevents two concurrent approval operations from overwriting each other.
+    On Windows (no fcntl), this is a no-op.
+    """
+    if not fcntl:
+        yield
+        return
+    lock_path = _get_approval_queue_path() + ".lock"
+    fh = open(lock_path, "w")  # noqa: SIM115
+    try:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (IOError, OSError):
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        fh.close()
+        try:
+            os.remove(lock_path)
+        except OSError:
+            pass
+
+
+def _cancel_conflicting_requests(queue, detection_rule, csv_file,
+                                 trigger_action, trigger_request_id,
+                                 audit_fn):
+    """Cancel pending requests that conflict with a destructive action.
+
+    Called after a rule or CSV is removed (either directly by admin
+    or via approval replay) to invalidate orphaned pending requests.
+
+    Args:
+        queue: The approval queue list (modified in place).
+        detection_rule: The rule that was removed/affected.
+        csv_file: The CSV that was removed (or "" for rule removal).
+        trigger_action: "remove_rule" or "remove_csv".
+        trigger_request_id: Request ID that triggered the cancel (or "").
+        audit_fn: Callable(event_dict) to write audit events.
+    """
+    now = int(time.time())
+    cancelled = []
+    for entry in queue:
+        if entry.get("request_id") == trigger_request_id:
+            continue
+        if entry.get("status") != "pending":
+            continue
+        conflict = False
+        if trigger_action == "remove_rule":
+            if entry.get("detection_rule") == detection_rule:
+                conflict = True
+        elif trigger_action == "remove_csv":
+            if (entry.get("csv_file") == csv_file and
+                    entry.get("detection_rule") == detection_rule):
+                conflict = True
+        if not conflict:
+            continue
+
+        entry["status"] = "cancelled"
+        entry["resolved_by"] = "system"
+        entry["resolved_at"] = now
+        entry["cancellation_reason"] = (
+            "Auto-cancelled: {} was approved, invalidating this "
+            "request".format(trigger_action.replace("_", " ")))
+        cancelled.append(entry)
+
+        entity = detection_rule if trigger_action == "remove_rule" \
+            else csv_file
+        _add_notification(
+            entry["analyst"], "cancelled",
+            "Your {} request was auto-cancelled because {} '{}' "
+            "was removed".format(
+                entry["action_type"].replace("_", " "),
+                "rule" if trigger_action == "remove_rule" else "CSV",
+                entity),
+            entry["request_id"],
+            {"csv_file": entry.get("csv_file", ""),
+             "detection_rule": entry.get("detection_rule", ""),
+             "action_type": entry["action_type"]})
+
+    if cancelled:
+        _write_approval_queue(queue)
+        for entry in cancelled:
+            audit_fn({
+                "timestamp": now,
+                "analyst": "system",
+                "action": "request_auto_cancelled",
+                "status": "cancelled",
+                "detection_rule": entry.get("detection_rule", ""),
+                "csv_file": entry.get("csv_file", ""),
+                "request_id": entry["request_id"],
+                "trigger_request_id": trigger_request_id,
+                "comment": "Auto-cancelled due to {} approval".format(
+                    trigger_action.replace("_", " ")),
+            })
+    return cancelled
+
+
 # ---------------------------------------------------------------------------
 # Notification helpers (module-level)
 # ---------------------------------------------------------------------------
@@ -732,6 +853,67 @@ def _write_limit_config(config):
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
+def _read_admin_limits():
+    """Read admin-specific limits from the config file."""
+    config = _read_limit_config()
+    admin_cfg = config.get("admin_limits", {})
+    # Ensure all default admin limit keys exist
+    for k, v in DEFAULT_ADMIN_LIMITS.items():
+        if k not in admin_cfg:
+            admin_cfg[k] = v
+    return admin_cfg
+
+
+def _write_admin_limits(admin_limits):
+    """Write admin-specific limits to the config file."""
+    config = _read_limit_config()
+    config["admin_limits"] = admin_limits
+    _write_limit_config(config)
+
+
+def _check_admin_daily_limit(user, action_type, action_count=1):
+    """Check if an admin has exceeded their daily limit for an action.
+
+    Returns (allowed, current_count, maximum).
+    Uses the same counter structure as editor limits:
+      counters[period_key][user][action_type]
+    with "admin_" prefix on the action type.
+    """
+    admin_cfg = _read_admin_limits()
+    max_count = admin_cfg.get(action_type,
+                              DEFAULT_ADMIN_LIMITS.get(action_type, 999))
+    if max_count == 0:  # 0 = unlimited
+        return True, 0, 0
+
+    admin_action = "admin_" + action_type
+    counters = _read_daily_limits()
+    period_key = _get_counter_period_key()
+    period_data = counters.get(period_key, {})
+    user_data = period_data.get(user, {})
+    current = user_data.get(admin_action, 0)
+
+    allowed = (current + action_count) <= max_count
+    return allowed, current, max_count
+
+
+def _increment_admin_daily_limit(user, action_type, count=1):
+    """Increment an admin's daily counter for an action type.
+
+    Counter structure: counters[period_key][user][action_type]
+    matches the existing editor counter layout.
+    """
+    admin_action = "admin_" + action_type
+    counters = _read_daily_limits()
+    period_key = _get_counter_period_key()
+    if period_key not in counters:
+        counters[period_key] = {}
+    if user not in counters[period_key]:
+        counters[period_key][user] = {}
+    counters[period_key][user][admin_action] = \
+        counters[period_key][user].get(admin_action, 0) + count
+    _write_daily_limits(counters)
+
+
 def _get_daily_limits_path():
     """Return path to the daily limits counters JSON file."""
     versions_dir = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
@@ -765,6 +947,424 @@ def _write_daily_limits(counters):
         finally:
             if fcntl:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+# ══════════════════════════════════════════════════════════════════
+# Trash / soft-delete helpers
+# ══════════════════════════════════════════════════════════════════
+
+def _get_trash_dir():
+    """Return path to the trash directory, creating it if needed."""
+    trash = os.path.join(OWN_LOOKUPS, TRASH_DIR)
+    os.makedirs(trash, exist_ok=True)
+    return trash
+
+
+def _read_trash_config():
+    """Read trash config (retention days). Returns dict."""
+    path = os.path.join(
+        OWN_LOOKUPS, VERSIONS_DIR, TRASH_CONFIG_FILE)
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"retention_days": DEFAULT_TRASH_RETENTION_DAYS}
+
+
+def _write_trash_config(config):
+    """Write trash config to disk."""
+    versions_dir = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
+    os.makedirs(versions_dir, exist_ok=True)
+    path = os.path.join(versions_dir, TRASH_CONFIG_FILE)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(config, fh, indent=2)
+
+
+def _move_to_trash(item_type, name, user, comment, app_context="",
+                   rule_name="", associated_csvs=None):
+    """Move a CSV or rule to the trash directory.
+
+    Edge case mitigations:
+    - EC3: If a trash entry already exists for this name, overwrite it
+           (prevents storage flood from delete→restore→delete cycles)
+    - EC8: Retention date computed from server config, not stored metadata
+
+    Args:
+        item_type: "csv" or "rule"
+        name: CSV filename or rule name
+        user: who deleted it
+        comment: reason for deletion
+        app_context: app context for CSV path resolution
+        rule_name: detection rule (for CSV items)
+        associated_csvs: list of {csv_file, app_context} dicts (for rule items)
+
+    Returns:
+        trash_id: unique identifier for the trashed item
+    """
+    trash_dir = _get_trash_dir()
+    now = int(time.time())
+    now_str = time.strftime("%Y%m%d_%H%M%S", time.gmtime(now))
+
+    # EC3: Use a deterministic trash ID based on name + type
+    # so repeated delete→restore→delete overwrites, not accumulates
+    trash_id = "{}__{}_{}".format(name, item_type, now_str)
+
+    # EC3: Remove any existing trash entry for this exact name+type
+    for existing in os.listdir(trash_dir):
+        if existing.startswith("{}__{}".format(name, item_type)):
+            old_path = os.path.join(trash_dir, existing)
+            if os.path.isdir(old_path):
+                import shutil
+                shutil.rmtree(old_path, ignore_errors=True)
+
+    item_dir = os.path.join(trash_dir, trash_id)
+    os.makedirs(item_dir, exist_ok=True)
+
+    config = _read_trash_config()
+    # EC8: Compute expiry from config, not metadata — prevents tamper
+    retention_days = config.get("retention_days",
+                                DEFAULT_TRASH_RETENTION_DAYS)
+    expiry_ts = now + (retention_days * 86400)
+
+    metadata = {
+        "item_type": item_type,
+        "name": name,
+        "deleted_by": user,
+        "deleted_at": now,
+        "deleted_at_human": time.strftime(
+            "%Y-%m-%d %H:%M:%S UTC", time.gmtime(now)),
+        "comment": comment,
+        "expiry_ts": expiry_ts,
+        "expiry_human": time.strftime(
+            "%Y-%m-%d %H:%M:%S UTC", time.gmtime(expiry_ts)),
+        "retention_days": retention_days,
+        "rule_name": rule_name,
+        "app_context": app_context,
+    }
+
+    if item_type == "csv":
+        # Move the CSV file itself
+        csv_path = _build_csv_path(name, app_context)
+        if csv_path and os.path.isfile(csv_path):
+            import shutil
+            shutil.move(csv_path, os.path.join(item_dir, name))
+
+        # Copy version snapshots for this CSV
+        versions_src = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
+        base = name.replace(".csv", "")
+        manifest_name = "{}_versions.json".format(base)
+        manifest_path = os.path.join(versions_src, manifest_name)
+
+        if os.path.isfile(manifest_path):
+            import shutil
+            # Move manifest
+            shutil.move(manifest_path,
+                        os.path.join(item_dir, manifest_name))
+            # Move snapshot CSV files
+            try:
+                with open(os.path.join(item_dir, manifest_name),
+                          "r", encoding="utf-8") as fh:
+                    manifest = json.load(fh)
+                # Manifest can be a list (array) or dict with "versions" key
+                ver_list = manifest if isinstance(manifest, list) \
+                    else manifest.get("versions", [])
+                for ver in ver_list:
+                    vf = ver.get("filename", "")
+                    vf_path = os.path.join(versions_src, vf)
+                    if vf and os.path.isfile(vf_path):
+                        shutil.move(vf_path,
+                                    os.path.join(item_dir, vf))
+            except (json.JSONDecodeError, OSError):
+                pass  # manifest unreadable — snapshot files lost
+
+        metadata["original_path"] = csv_path or ""
+
+    elif item_type == "rule":
+        metadata["associated_csvs"] = associated_csvs or []
+        # Move each associated CSV into the trash bundle
+        for csv_info in (associated_csvs or []):
+            csv_name = csv_info.get("csv_file", "")
+            csv_app = csv_info.get("app_context", "")
+            csv_path = _build_csv_path(csv_name, csv_app)
+            if csv_path and os.path.isfile(csv_path):
+                import shutil
+                shutil.move(csv_path, os.path.join(item_dir, csv_name))
+            # Also move version snapshots for each CSV
+            versions_src = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
+            base = csv_name.replace(".csv", "")
+            manifest_name = "{}_versions.json".format(base)
+            manifest_path = os.path.join(versions_src, manifest_name)
+            if os.path.isfile(manifest_path):
+                import shutil
+                shutil.move(manifest_path,
+                            os.path.join(item_dir, manifest_name))
+                try:
+                    with open(os.path.join(item_dir, manifest_name),
+                              "r", encoding="utf-8") as fh:
+                        manifest = json.load(fh)
+                    # Manifest can be a list or dict with "versions" key
+                    ver_list = manifest if isinstance(manifest, list) \
+                        else manifest.get("versions", [])
+                    for ver in ver_list:
+                        vf = ver.get("filename", "")
+                        vf_path = os.path.join(versions_src, vf)
+                        if vf and os.path.isfile(vf_path):
+                            shutil.move(vf_path,
+                                        os.path.join(item_dir, vf))
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+    # Write metadata last (after all files are moved)
+    with open(os.path.join(item_dir, "metadata.json"),
+              "w", encoding="utf-8") as fh:
+        json.dump(metadata, fh, indent=2)
+
+    return trash_id
+
+
+def _list_trash():
+    """List all items in the trash directory.
+
+    Returns list of metadata dicts, sorted by deletion time (newest first).
+    EC8: Recomputes expiry from config — ignores stored expiry.
+    """
+    trash_dir = _get_trash_dir()
+    config = _read_trash_config()
+    retention_days = config.get("retention_days",
+                                DEFAULT_TRASH_RETENTION_DAYS)
+    items = []
+    for entry_name in os.listdir(trash_dir):
+        entry_path = os.path.join(trash_dir, entry_name)
+        if not os.path.isdir(entry_path):
+            continue
+        meta_path = os.path.join(entry_path, "metadata.json")
+        if not os.path.isfile(meta_path):
+            continue
+        try:
+            with open(meta_path, "r", encoding="utf-8") as fh:
+                meta = json.load(fh)
+            # EC8: Recompute expiry from current config
+            deleted_at = meta.get("deleted_at", 0)
+            meta["expiry_ts"] = deleted_at + (retention_days * 86400)
+            meta["expiry_human"] = time.strftime(
+                "%Y-%m-%d %H:%M:%S UTC",
+                time.gmtime(meta["expiry_ts"]))
+            meta["trash_id"] = entry_name
+            meta["days_remaining"] = max(
+                0, (meta["expiry_ts"] - int(time.time())) // 86400)
+            items.append(meta)
+        except (json.JSONDecodeError, OSError):
+            continue
+    items.sort(key=lambda x: x.get("deleted_at", 0), reverse=True)
+    return items
+
+
+def _restore_from_trash(trash_id):
+    """Restore a trashed item back to its original location.
+
+    Edge case mitigations:
+    - EC1: For rules, recreates the rule mapping AND rule registry entry
+    - EC2: If name conflicts (new item with same name exists), returns error
+
+    Returns:
+        (success, message, metadata) tuple
+    """
+    trash_dir = _get_trash_dir()
+    item_dir = os.path.join(trash_dir, trash_id)
+    if not os.path.isdir(item_dir):
+        return False, "Trash item not found", {}
+
+    meta_path = os.path.join(item_dir, "metadata.json")
+    if not os.path.isfile(meta_path):
+        return False, "Trash metadata missing", {}
+
+    with open(meta_path, "r", encoding="utf-8") as fh:
+        meta = json.load(fh)
+
+    item_type = meta.get("item_type", "")
+    name = meta.get("name", "")
+    import shutil
+
+    if item_type == "csv":
+        csv_name = name
+        app_ctx = meta.get("app_context", "")
+        rule_name = meta.get("rule_name", "")
+
+        # EC2: Check for name conflict
+        dest_path = _build_csv_path(csv_name, app_ctx)
+        if dest_path and os.path.isfile(dest_path):
+            return False, ("Cannot restore: '{}' already exists. "
+                           "Rename or delete the existing file "
+                           "first.").format(csv_name), meta
+
+        # Restore CSV file
+        src = os.path.join(item_dir, csv_name)
+        if os.path.isfile(src) and dest_path:
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            shutil.move(src, dest_path)
+
+        # Restore version snapshots
+        versions_dst = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
+        os.makedirs(versions_dst, exist_ok=True)
+        for fname in os.listdir(item_dir):
+            if fname == "metadata.json" or fname == csv_name:
+                continue
+            shutil.move(os.path.join(item_dir, fname),
+                        os.path.join(versions_dst, fname))
+
+        # EC1: Restore rule mapping if rule still exists or re-register
+        if rule_name:
+            mapping = _read_csv_mapping()
+            existing = [e for e in mapping
+                        if e.get("csv_file") == csv_name
+                        and e.get("rule_name") == rule_name]
+            if not existing:
+                mapping.append({
+                    "rule_name": rule_name,
+                    "csv_file": csv_name,
+                    "app_context": app_ctx,
+                })
+                with open(MAPPING_FILE, "w", newline="",
+                          encoding="utf-8") as fh:
+                    writer = csv.DictWriter(
+                        fh,
+                        fieldnames=["rule_name", "csv_file",
+                                    "app_context"],
+                        extrasaction="ignore")
+                    writer.writeheader()
+                    writer.writerows(mapping)
+
+            # Also ensure the rule is in the registry
+            registered = _read_detection_rules()
+            if rule_name not in registered:
+                registered.append(rule_name)
+                _write_detection_rules(registered)
+
+    elif item_type == "rule":
+        rule_name = name
+        associated_csvs = meta.get("associated_csvs", [])
+
+        # EC2: Check if rule already exists
+        registered = _read_detection_rules()
+        mapping = _read_csv_mapping()
+        existing_rule_csvs = [e for e in mapping
+                              if e.get("rule_name") == rule_name]
+        if rule_name in registered or existing_rule_csvs:
+            return False, ("Cannot restore: rule '{}' already exists. "
+                           "Remove the existing rule first.").format(
+                               rule_name), meta
+
+        # Restore each associated CSV file
+        versions_dst = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
+        os.makedirs(versions_dst, exist_ok=True)
+        restored_csvs = []
+
+        for csv_info in associated_csvs:
+            csv_name = csv_info.get("csv_file", "")
+            csv_app = csv_info.get("app_context", "")
+            src = os.path.join(item_dir, csv_name)
+            dest = _build_csv_path(csv_name, csv_app)
+            if os.path.isfile(src) and dest:
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                shutil.move(src, dest)
+                restored_csvs.append(csv_name)
+
+        # Restore version files (manifests + snapshots)
+        for fname in os.listdir(item_dir):
+            if fname == "metadata.json":
+                continue
+            if fname in [c.get("csv_file", "") for c in associated_csvs]:
+                continue  # already moved above
+            shutil.move(os.path.join(item_dir, fname),
+                        os.path.join(versions_dst, fname))
+
+        # EC1: Recreate rule mapping entries
+        for csv_info in associated_csvs:
+            mapping.append({
+                "rule_name": rule_name,
+                "csv_file": csv_info.get("csv_file", ""),
+                "app_context": csv_info.get("app_context", ""),
+            })
+        with open(MAPPING_FILE, "w", newline="",
+                  encoding="utf-8") as fh:
+            writer = csv.DictWriter(
+                fh,
+                fieldnames=["rule_name", "csv_file", "app_context"],
+                extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(mapping)
+
+        # Re-register the rule
+        registered.append(rule_name)
+        _write_detection_rules(registered)
+
+    # Clean up the trash entry directory
+    shutil.rmtree(item_dir, ignore_errors=True)
+
+    return True, "Restored '{}' successfully".format(name), meta
+
+
+def _purge_trash_item(trash_id):
+    """Permanently delete a trashed item (no recovery).
+
+    Returns (success, message).
+    """
+    trash_dir = _get_trash_dir()
+    item_dir = os.path.join(trash_dir, trash_id)
+    if not os.path.isdir(item_dir):
+        return False, "Trash item not found"
+    import shutil
+    shutil.rmtree(item_dir, ignore_errors=True)
+    return True, "Permanently purged"
+
+
+def _auto_cleanup_trash():
+    """Remove trash items past their retention period.
+
+    EC6: This is called lazily (on trash list/access), not via a
+    background thread, so it cannot race with active browsing.
+    EC8: Expiry computed from config, not stored metadata.
+
+    Returns count of purged items.
+    """
+    config = _read_trash_config()
+    retention_days = config.get("retention_days",
+                                DEFAULT_TRASH_RETENTION_DAYS)
+    now = int(time.time())
+    trash_dir = _get_trash_dir()
+    purged = 0
+
+    for entry_name in os.listdir(trash_dir):
+        entry_path = os.path.join(trash_dir, entry_name)
+        if not os.path.isdir(entry_path):
+            continue
+        meta_path = os.path.join(entry_path, "metadata.json")
+        if not os.path.isfile(meta_path):
+            continue
+        try:
+            with open(meta_path, "r", encoding="utf-8") as fh:
+                meta = json.load(fh)
+            deleted_at = meta.get("deleted_at", 0)
+            # EC8: Use config retention, not stored expiry
+            expiry = deleted_at + (retention_days * 86400)
+            if now >= expiry:
+                import shutil
+                shutil.rmtree(entry_path, ignore_errors=True)
+                purged += 1
+        except (json.JSONDecodeError, OSError):
+            continue
+    return purged
+
+
+def _read_csv_mapping():
+    """Read rule_csv_map.csv and return list of dicts."""
+    if not os.path.isfile(MAPPING_FILE):
+        return []
+    with open(MAPPING_FILE, "r", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        return list(reader)
 
 
 def _generate_request_id(user, csv_file="", detection_rule=""):
@@ -1350,7 +1950,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             roles = self._get_roles(request)
             if not roles.intersection(ADMIN_ROLES):
                 return self._resp(403, {
-                    "error": "Only admins can access request CSV data"})
+                    "error": "Requires admin role to access request CSV data"})
             request_id = query.get("request_id", "")
             if not request_id:
                 return self._resp(400, {"error": "request_id is required"})
@@ -1746,6 +2346,15 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         user = self._get_user(request)
         roles = self._get_roles(request)
 
+        # Reject unidentified users — "unknown" means the session is
+        # missing or expired.  All POST actions require a real identity
+        # for audit trail, rate limiting, and self-approval checks.
+        if user == "unknown":
+            return self._resp(401, {
+                "error": "Session expired or user identity could not be "
+                         "determined. Please log in again.",
+            })
+
         payload = json.loads(request.get("payload", "{}"))
         action = payload.get("action", "")
 
@@ -1793,68 +2402,273 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if action == "process_approval":
             if not roles.intersection(ADMIN_ROLES):
                 return self._resp(403, {
-                    "error": "Only admin, sc_admin, or wl_admin roles can process approvals"
+                    "error": "Requires admin role to process approvals"
                 })
             return self._process_approval(request, payload, user)
 
         if action == "get_approval_queue":
             if not roles.intersection(ADMIN_ROLES):
                 return self._resp(403, {
-                    "error": "Only admin, sc_admin, or wl_admin roles can view the approval queue"
+                    "error": "Requires admin role to view the approval queue"
                 })
             return self._get_approval_queue_action()
 
         if action == "get_daily_limits":
             if not roles.intersection(ADMIN_ROLES):
                 return self._resp(403, {
-                    "error": "Only admin, sc_admin, or wl_admin roles can view daily limits"
+                    "error": "Requires admin role to view daily limits"
                 })
             return self._get_daily_limits_action()
 
         if action == "set_daily_limits":
             if not roles.intersection(ADMIN_ROLES):
                 return self._resp(403, {
-                    "error": "Only admin, sc_admin, or wl_admin roles can set daily limits"
+                    "error": "Requires admin role to set daily limits"
                 })
             return self._set_daily_limits_action(request, payload, user)
 
         if action == "get_analyst_usage":
             if not roles.intersection(ADMIN_ROLES):
                 return self._resp(403, {
-                    "error": "Only admin, sc_admin, or wl_admin roles can view analyst usage"
+                    "error": "Requires admin role to view analyst usage"
                 })
             return self._get_analyst_usage_action(payload)
 
         if action == "reset_daily_usage":
             if not roles.intersection(ADMIN_ROLES):
                 return self._resp(403, {
-                    "error": "Only admin, sc_admin, or wl_admin roles can reset daily usage"
+                    "error": "Requires admin role to reset daily usage"
                 })
             return self._reset_daily_usage_action(payload, user)
 
         if action == "reset_daily_limits":
             if not roles.intersection(ADMIN_ROLES):
                 return self._resp(403, {
-                    "error": "Only admin, sc_admin, or wl_admin roles "
-                             "can reset limits"
+                    "error": "Requires admin role to reset limits"
                 })
             return self._reset_daily_limits_action(request, user)
 
         if action == "save_as_default":
             if not roles.intersection(ADMIN_ROLES):
                 return self._resp(403, {
-                    "error": "Only admin, sc_admin, or wl_admin roles "
-                             "can save custom defaults"
+                    "error": "Requires admin role to save custom defaults"
                 })
             return self._save_as_default_action(request, user)
 
         if action == "reset_factory_defaults":
             if not roles.intersection(ADMIN_ROLES):
                 return self._resp(403, {
-                    "error": "Only admin, sc_admin, or wl_admin roles "
-                             "can reset to factory defaults"
+                    "error": "Requires admin role to reset to factory defaults"
                 })
             return self._reset_factory_defaults_action(request, user)
+
+        # ── Trash management endpoints ─────────────────────────────────
+        if action == "list_trash":
+            if not roles.intersection(ADMIN_ROLES):
+                return self._resp(403, {
+                    "error": "Requires admin role to view trash"})
+            # Lazy auto-cleanup on access (EC6)
+            purged = _auto_cleanup_trash()
+            items = _list_trash()
+            return self._resp(200, {
+                "trash": items,
+                "auto_purged": purged,
+            })
+
+        if action == "restore_from_trash":
+            if not roles.intersection(ADMIN_ROLES):
+                return self._resp(403, {
+                    "error": "Requires admin role to restore from trash"})
+            trash_id = payload.get("trash_id", "")
+            if not trash_id:
+                return self._resp(400, {
+                    "error": "trash_id is required"})
+            # Sanitize: trash_id should only contain safe chars
+            if not all(c.isalnum() or c in "_-." for c in trash_id):
+                return self._resp(400, {
+                    "error": "Invalid trash_id"})
+            restore_comment = _sanitize_text(
+                payload.get("comment", ""))[:500]
+            success, msg, meta = _restore_from_trash(trash_id)
+            if success:
+                self._index_audit(request, {
+                    "action": "trash_restored",
+                    "timestamp": int(time.time()),
+                    "analyst": user,
+                    "item_type": meta.get("item_type", ""),
+                    "name": meta.get("name", ""),
+                    "detection_rule": meta.get("rule_name", ""),
+                    "original_deleted_by": meta.get("deleted_by", ""),
+                    "original_deleted_at": meta.get(
+                        "deleted_at_human", ""),
+                    "comment": restore_comment or "Restored from trash",
+                })
+                return self._resp(200, {
+                    "success": True, "message": msg})
+            return self._resp(409, {"error": msg})
+
+        if action == "purge_trash":
+            # Permanent purge — requires dual-admin approval.
+            # Direct purge only allowed from dual-approval replay.
+            if not roles.intersection(SUPERADMIN_ROLES):
+                return self._resp(403, {
+                    "error": "Requires super-admin role to permanently "
+                             "purge trash items"})
+            trash_id = payload.get("trash_id", "")
+            if not trash_id:
+                return self._resp(400, {
+                    "error": "trash_id is required"})
+            if not all(c.isalnum() or c in "_-." for c in trash_id):
+                return self._resp(400, {
+                    "error": "Invalid trash_id"})
+            purge_comment = _sanitize_text(
+                payload.get("comment", ""))[:500]
+            if not purge_comment:
+                return self._resp(400, {
+                    "error": "A reason is required for permanent purge"})
+            # Require dual-approval unless replayed from approved request
+            if not payload.get("_from_dual_approval"):
+                return self._resp(403, {
+                    "error": "Permanent purge requires dual-admin approval. "
+                             "Submit via the dual-approval workflow.",
+                    "requires_dual_approval": True,
+                })
+            # Read metadata before purging for audit
+            trash_dir = _get_trash_dir()
+            meta_path = os.path.join(
+                trash_dir, trash_id, "metadata.json")
+            meta = {}
+            if os.path.isfile(meta_path):
+                try:
+                    with open(meta_path, "r",
+                              encoding="utf-8") as fh:
+                        meta = json.load(fh)
+                except (json.JSONDecodeError, OSError):
+                    pass
+            success, msg = _purge_trash_item(trash_id)
+            if success:
+                self._index_audit(request, {
+                    "action": "trash_purged",
+                    "timestamp": int(time.time()),
+                    "analyst": user,
+                    "item_type": meta.get("item_type", ""),
+                    "name": meta.get("name", ""),
+                    "detection_rule": meta.get("rule_name", ""),
+                    "original_deleted_by": meta.get("deleted_by", ""),
+                    "comment": purge_comment,
+                    "dual_approved": True,
+                })
+                return self._resp(200, {
+                    "success": True, "message": msg})
+            return self._resp(404, {"error": msg})
+
+        if action == "set_trash_retention":
+            if not roles.intersection(SUPERADMIN_ROLES):
+                return self._resp(403, {
+                    "error": "Requires super-admin role to set trash "
+                             "retention period"})
+            days = payload.get("retention_days")
+            try:
+                days = int(days)
+            except (ValueError, TypeError):
+                return self._resp(400, {
+                    "error": "retention_days must be an integer"})
+            if days < 1 or days > 365:
+                return self._resp(400, {
+                    "error": "retention_days must be between 1 and 365"})
+            config = _read_trash_config()
+            old_days = config.get("retention_days",
+                                  DEFAULT_TRASH_RETENTION_DAYS)
+            config["retention_days"] = days
+            _write_trash_config(config)
+            self._index_audit(request, {
+                "action": "trash_retention_changed",
+                "timestamp": int(time.time()),
+                "analyst": user,
+                "old_retention_days": old_days,
+                "new_retention_days": days,
+                "comment": _sanitize_text(
+                    payload.get("comment", ""))[:500],
+            })
+            return self._resp(200, {
+                "success": True,
+                "message": "Trash retention set to {} days".format(days),
+            })
+
+        if action == "get_trash_config":
+            if not roles.intersection(ADMIN_ROLES):
+                return self._resp(403, {
+                    "error": "Requires admin role to view trash config"})
+            config = _read_trash_config()
+            return self._resp(200, {"config": config})
+
+        # ── Admin limits (superadmin-only) ─────────────────────────────
+        if action == "get_admin_limits":
+            if not roles.intersection(ADMIN_ROLES):
+                return self._resp(403, {
+                    "error": "Requires admin role to view admin limits"})
+            admin_lim = _read_admin_limits()
+            return self._resp(200, {
+                "admin_limits": admin_lim,
+                "defaults": dict(DEFAULT_ADMIN_LIMITS),
+            })
+
+        if action == "set_admin_limits":
+            if not roles.intersection(SUPERADMIN_ROLES):
+                return self._resp(403, {
+                    "error": "Requires super-admin role to set admin "
+                             "daily limits"})
+            new_limits = payload.get("limits", {})
+            if not isinstance(new_limits, dict):
+                return self._resp(400, {
+                    "error": "limits must be a dict"})
+            comment = _sanitize_text(
+                payload.get("comment", ""))[:500]
+            admin_cfg = _read_admin_limits()
+            old_values = {}
+            for key in DEFAULT_ADMIN_LIMITS:
+                if key in new_limits:
+                    try:
+                        val = int(new_limits[key])
+                    except (ValueError, TypeError):
+                        return self._resp(400, {
+                            "error": "{} must be an integer".format(key)})
+                    if val < 0 or val > 9999:
+                        return self._resp(400, {
+                            "error": "{} must be 0-9999".format(key)})
+                    old_values[key] = admin_cfg.get(key,
+                        DEFAULT_ADMIN_LIMITS.get(key, 0))
+                    admin_cfg[key] = val
+            _write_admin_limits(admin_cfg)
+            self._index_audit(request, {
+                "action": "admin_limits_changed",
+                "timestamp": int(time.time()),
+                "analyst": user,
+                "old_values": json.dumps(old_values),
+                "new_values": json.dumps(
+                    {k: admin_cfg[k] for k in old_values}),
+                "comment": comment,
+            })
+            return self._resp(200, {
+                "success": True,
+                "message": "Admin limits updated",
+                "admin_limits": admin_cfg,
+            })
+
+        # ── Dual-admin approval for destructive admin actions ──────────
+        if action == "submit_dual_approval":
+            if not roles.intersection(ADMIN_ROLES):
+                return self._resp(403, {
+                    "error": "Requires admin role to submit dual-approval"
+                             " requests"})
+            return self._submit_dual_approval(request, payload, user)
+
+        if action == "process_dual_approval":
+            if not roles.intersection(ADMIN_ROLES):
+                return self._resp(403, {
+                    "error": "Requires admin role to process dual-approval"
+                             " requests"})
+            return self._process_dual_approval(request, payload, user)
 
         if action == "create_rule":
             is_admin = bool(roles.intersection(ADMIN_ROLES))
@@ -2349,10 +3163,47 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if not comment:
             return self._resp(400, {"error": "A reason is required"})
 
+        # Admin daily limit for rule deletion
+        if removal_type == "permanent":
+            roles = self._get_roles(request)
+            if roles.intersection(ADMIN_ROLES) and \
+               not roles.intersection(SUPERADMIN_ROLES):
+                allowed, current, maximum = _check_admin_daily_limit(
+                    user, "rule_deletion")
+                if not allowed:
+                    return self._resp(429, {
+                        "error": "Admin daily limit exceeded for rule "
+                                 "deletions ({}/{} used). Contact your "
+                                 "super-admin.".format(current, maximum),
+                        "limit_type": "admin_rule_deletion",
+                        "current": current,
+                        "maximum": maximum,
+                    })
+
         mapping = self._read_mapping()
         affected_entries = [e for e in mapping
                            if e.get("rule_name") == rule_name]
         affected_csvs = [e["csv_file"] for e in affected_entries]
+
+        # ── Dual-admin check for rules with 3+ CSVs ──────────────────
+        # Skip if this is a replay from the dual-approval queue
+        _from_dual = payload.get("_from_dual_approval", False)
+        if removal_type == "permanent" and not _from_dual:
+            roles = self._get_roles(request) if not hasattr(self, '_remove_rule_roles') else roles
+            is_superadmin = bool(self._get_roles(request).intersection(
+                SUPERADMIN_ROLES))
+            csv_count = len(affected_csvs)
+
+            # Dual-admin required if rule has 3+ CSVs
+            if csv_count >= 3 and not is_superadmin:
+                return self._resp(403, {
+                    "error": "Deleting rule '{}' with {} CSV files "
+                             "requires a second admin's approval. "
+                             "Please submit via the dual-approval "
+                             "workflow.".format(rule_name, csv_count),
+                    "requires_dual_approval": True,
+                    "csv_count": csv_count,
+                })
 
         if not affected_csvs:
             # Check if it's a registered rule without CSVs
@@ -2370,6 +3221,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     "csv_files": "",
                     "comment": comment,
                 })
+                # Auto-cancel pending requests for this rule
+                queue = _read_approval_queue()
+                _cancel_conflicting_requests(
+                    queue, rule_name, "", "remove_rule", "",
+                    lambda evt: self._index_audit(request, evt))
                 return self._resp(200, {
                     "success": True,
                     "message": "Rule '{}' removed (had no CSV files)".format(
@@ -2395,40 +3251,78 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             registered.remove(rule_name)
             _write_detection_rules(registered)
 
-        deleted_files = []
+        trashed = False
+        trash_id = ""
         if removal_type == "permanent":
-            for entry in affected_entries:
-                csv_name = entry["csv_file"]
-                app_ctx = entry.get("app_context", "")
-                csv_path = _build_csv_path(csv_name, app_ctx)
-                if csv_path and os.path.isfile(csv_path):
-                    try:
-                        os.remove(csv_path)
-                        deleted_files.append(csv_name)
-                    except OSError:
-                        pass  # log but continue
+            # Soft delete: move rule + all CSVs to trash as a bundle
+            associated = [{"csv_file": e["csv_file"],
+                           "app_context": e.get("app_context", "")}
+                          for e in affected_entries]
+            try:
+                trash_id = _move_to_trash(
+                    "rule", rule_name, user, comment,
+                    associated_csvs=associated)
+                trashed = True
+            except OSError as exc:
+                _logger.error("Failed to move rule to trash: %s", exc)
+                # Fallback: hard delete individual CSVs
+                for entry in affected_entries:
+                    csv_name = entry["csv_file"]
+                    app_ctx = entry.get("app_context", "")
+                    csv_path = _build_csv_path(csv_name, app_ctx)
+                    if csv_path and os.path.isfile(csv_path):
+                        try:
+                            os.remove(csv_path)
+                        except OSError:
+                            pass
 
         self._index_audit(request, {
             "action": "rule_removed",
-            "removal_type": removal_type,
+            "removal_type": "trashed" if trashed else removal_type,
             "timestamp": int(time.time()),
             "analyst": user,
             "detection_rule": rule_name,
             "csv_count": len(affected_csvs),
             "csv_files": ", ".join(affected_csvs),
-            "deleted_files": ", ".join(deleted_files) if deleted_files else "",
+            "trash_id": trash_id,
             "comment": comment,
         })
 
-        verb = "permanently deleted" if removal_type == "permanent" \
-            else "unlinked"
+        # Auto-cancel pending approval requests for this rule
+        queue = _read_approval_queue()
+        _cancel_conflicting_requests(
+            queue, rule_name, "", "remove_rule", "",
+            lambda evt: self._index_audit(request, evt))
+
+        if trashed:
+            verb = "moved to trash"
+        elif removal_type == "permanent":
+            verb = "deleted"
+        else:
+            verb = "unlinked"
+
+        msg = "Rule '{}' {} ({} CSV file{})".format(
+            rule_name, verb, len(affected_csvs),
+            "s" if len(affected_csvs) != 1 else "")
+        if trashed:
+            config = _read_trash_config()
+            days = config.get("retention_days",
+                              DEFAULT_TRASH_RETENTION_DAYS)
+            msg += ". Recoverable for {} days.".format(days)
+
+        # Increment admin daily limit counter for rule deletion
+        if trashed:
+            roles_check = self._get_roles(request)
+            if roles_check.intersection(ADMIN_ROLES) and \
+               not roles_check.intersection(SUPERADMIN_ROLES):
+                _increment_admin_daily_limit(user, "rule_deletion")
+
         return self._resp(200, {
             "success": True,
-            "message": "Rule '{}' {} ({} CSV file{})".format(
-                rule_name, verb, len(affected_csvs),
-                "s" if len(affected_csvs) != 1 else ""),
+            "message": msg,
             "affected_csvs": affected_csvs,
-            "deleted_files": deleted_files,
+            "trashed": trashed,
+            "trash_id": trash_id,
         })
 
     # ------------------------------------------------------------------
@@ -2449,6 +3343,23 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 "error": "removal_type must be 'unlink' or 'permanent'"})
         if not comment:
             return self._resp(400, {"error": "A reason is required"})
+
+        # Admin daily limit for CSV deletion (soft delete)
+        if removal_type == "permanent":
+            roles = self._get_roles(request)
+            if roles.intersection(ADMIN_ROLES) and \
+               not roles.intersection(SUPERADMIN_ROLES):
+                allowed, current, maximum = _check_admin_daily_limit(
+                    user, "csv_deletion")
+                if not allowed:
+                    return self._resp(429, {
+                        "error": "Admin daily limit exceeded for CSV "
+                                 "deletions ({}/{} used). Contact your "
+                                 "super-admin.".format(current, maximum),
+                        "limit_type": "admin_csv_deletion",
+                        "current": current,
+                        "maximum": maximum,
+                    })
 
         mapping = self._read_mapping()
 
@@ -2483,39 +3394,79 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             writer.writeheader()
             writer.writerows(new_mapping)
 
-        deleted = False
+        trashed = False
+        trash_id = ""
         if removal_type == "permanent":
-            csv_path = _build_csv_path(csv_file, app_context)
-            if csv_path and os.path.isfile(csv_path):
-                try:
-                    os.remove(csv_path)
-                    deleted = True
-                except OSError:
-                    pass
+            # Soft delete: move to trash instead of permanent deletion.
+            # Files are recoverable until the retention period expires.
+            try:
+                trash_id = _move_to_trash(
+                    "csv", csv_file, user, comment,
+                    app_context=app_context, rule_name=rule_name)
+                trashed = True
+            except OSError as exc:
+                _logger.error("Failed to move CSV to trash: %s", exc)
+                # Fall back — don't leave partial state
+                csv_path = _build_csv_path(csv_file, app_context)
+                if csv_path and os.path.isfile(csv_path):
+                    try:
+                        os.remove(csv_path)
+                    except OSError:
+                        pass
 
         self._index_audit(request, {
             "action": "csv_removed",
-            "removal_type": removal_type,
+            "removal_type": "trashed" if trashed else removal_type,
             "timestamp": int(time.time()),
             "analyst": user,
             "detection_rule": rule_name,
             "csv_file": csv_file,
             "app_context": app_context,
             "rule_also_removed": rule_also_removed,
-            "file_deleted": deleted,
+            "file_deleted": trashed,
+            "trash_id": trash_id,
             "comment": comment,
         })
 
-        verb = "permanently deleted" if removal_type == "permanent" \
-            else "unlinked"
+        # Auto-cancel pending requests for this CSV (or rule if last CSV)
+        queue = _read_approval_queue()
+        if rule_also_removed:
+            _cancel_conflicting_requests(
+                queue, rule_name, "", "remove_rule", "",
+                lambda evt: self._index_audit(request, evt))
+        else:
+            _cancel_conflicting_requests(
+                queue, rule_name, csv_file, "remove_csv", "",
+                lambda evt: self._index_audit(request, evt))
+
+        if trashed:
+            verb = "moved to trash"
+        elif removal_type == "permanent":
+            verb = "deleted"
+        else:
+            verb = "unlinked"
         msg = "CSV '{}' {}".format(csv_file, verb)
         if rule_also_removed:
             msg += " (last CSV — rule '{}' also removed)".format(rule_name)
+        if trashed:
+            config = _read_trash_config()
+            days = config.get("retention_days",
+                              DEFAULT_TRASH_RETENTION_DAYS)
+            msg += ". Recoverable for {} days.".format(days)
+
+        # Increment admin daily limit counter for CSV deletion
+        if trashed:
+            roles = self._get_roles(request)
+            if roles.intersection(ADMIN_ROLES) and \
+               not roles.intersection(SUPERADMIN_ROLES):
+                _increment_admin_daily_limit(user, "csv_deletion")
 
         return self._resp(200, {
             "success": True,
             "message": msg,
             "rule_also_removed": rule_also_removed,
+            "trashed": trashed,
+            "trash_id": trash_id,
         })
 
     def _save_csv(self, request, payload, user, _from_approval=False):
@@ -2749,16 +3700,23 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # ── Optimistic locking — reject if file changed since load ───
         if expected_mtime is not None:
             try:
+                expected_int = int(expected_mtime)
+            except (ValueError, TypeError):
+                return self._resp(400, {
+                    "error": "Invalid expected_mtime value. Please reload "
+                             "the file and try again.",
+                })
+            try:
                 current_mtime = int(os.path.getmtime(path))
-                if current_mtime != int(expected_mtime):
+                if current_mtime != expected_int:
                     return self._resp(409, {
                         "error": "Conflict: the CSV file was modified by another "
                                  "user or process since you loaded it. Please "
                                  "reload the file and try again.",
                         "current_mtime": current_mtime,
                     })
-            except (ValueError, TypeError, OSError):
-                pass  # If mtime check fails, proceed without locking
+            except OSError:
+                pass  # File not yet on disk (new CSV) — skip check
 
         # ── Read BEFORE state ─────────────────────────────────────────
         old_headers, old_rows = _read_csv(path)
@@ -2830,9 +3788,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 })
 
         # ── Determine which limit actions apply to this save ──────────
-        # Server-side: use actual diff count rather than trusting client
-        bulk_edit_count = diff.get("edited_count", 0) if \
-            payload.get("_bulk_edit_count", 0) else 0
+        # Server-side: determine "bulk edit" from actual diff, not client flag.
+        # An edit is "bulk" if 2+ rows were edited in one save (regardless of
+        # what the client claims via _bulk_edit_count).
+        actual_edited = diff.get("edited_count", 0)
+        is_bulk_edit = actual_edited >= 2
         limit_actions = []
         if bulk_removal and len(bulk_removal) >= 2:
             limit_actions.append("bulk_row_removal")
@@ -2840,9 +3800,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             limit_actions.append("row_removal")
         if column_removal_reasons:
             limit_actions.append("column_removal")
-        if bulk_edit_count and diff["edited_count"] > 0:
+        if is_bulk_edit and actual_edited > 0:
             limit_actions.append("bulk_row_edit")
-        elif diff["edited_count"] > 0 and not has_col_changes:
+        elif actual_edited > 0 and not has_col_changes:
             limit_actions.append("row_edit")
         if diff["added_count"] > 0:
             limit_actions.append("row_addition")
@@ -2869,9 +3829,13 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             else:
                 action_counts[limit_action] = 1
 
-        # ── Daily limit enforcement (block only direct actions, not
-        #    admin-approved replays — those were checked at submission) ─
-        if not _from_approval:
+        # ── Determine if user is admin (for gate + limit exemptions) ──
+        user_roles = self._get_roles(request) if request else set()
+        is_admin_user = bool(user_roles.intersection(ADMIN_ROLES))
+
+        # ── Daily limit enforcement (block only direct analyst actions,
+        #    not admin-approved replays or admin direct actions) ────────
+        if not _from_approval and not is_admin_user:
             for limit_action in limit_actions:
                 count = action_counts.get(limit_action, 1)
                 allowed, current, maximum = _check_daily_limit(
@@ -2892,7 +3856,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # ── Server-side approval gate enforcement ─────────────────────
         # Prevent direct API callers from bypassing the approval workflow.
-        if not _from_approval:
+        # Admins are exempt — they ARE the approvers.
+        if not _from_approval and not is_admin_user:
             # Bulk row removal gate
             actual_removed = diff.get("removed_count", 0)
             if actual_removed >= _get_threshold("bulk_row_removal_threshold"):
@@ -2901,9 +3866,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                              "Use the approval workflow.".format(actual_removed),
                     "requires_approval": True,
                 })
-            # Bulk row edit gate
-            actual_edited = diff.get("edited_count", 0)
-            if bulk_edit_count and actual_edited >= _get_threshold("bulk_row_edit_threshold"):
+            # Bulk row edit gate (server-computed, not client flag)
+            if is_bulk_edit and actual_edited >= _get_threshold("bulk_row_edit_threshold"):
                 return self._resp(403, {
                     "error": "Bulk editing {} rows requires admin approval. "
                              "Use the approval workflow.".format(actual_edited),
@@ -2917,11 +3881,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                              "Use the approval workflow.".format(actual_added),
                     "requires_approval": True,
                 })
-            # NOTE: Individual inline edits (no _bulk_edit_count) are NOT
+            # NOTE: Single-row inline edits (edited_count < 2) are NOT
             # subject to an approval gate.  They are governed by the
-            # "row_edit" daily limit enforced above (lines 1522-1535).
-            # Only the dedicated Bulk Edit feature (which sets
-            # _bulk_edit_count) triggers the bulk_row_edit approval gate.
+            # "row_edit" daily limit enforced above.  Only edits
+            # touching 2+ rows trigger the bulk_row_edit approval gate.
             # Column removal gate (non-empty cells)
             for cr in column_removal_reasons:
                 col = cr.get("column", "")
@@ -3198,24 +4161,28 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             self._index_audit(request, evt)
 
         # ── Increment daily limit counters (by actual change count) ───
-        for limit_action in limit_actions:
-            if limit_action == "bulk_row_removal":
-                actual_count = diff.get("removed_count", 1)
-            elif limit_action == "row_removal":
-                actual_count = diff.get("removed_count", 1)
-            elif limit_action == "column_removal":
-                actual_count = len(column_removal_reasons) or 1
-            elif limit_action == "bulk_row_edit":
-                actual_count = diff.get("edited_count", 1)
-            elif limit_action == "row_edit":
-                actual_count = diff.get("edited_count", 1)
-            elif limit_action == "row_addition":
-                actual_count = diff.get("added_count", 1)
-            elif limit_action == "column_addition":
-                actual_count = len(diff.get("added_columns", [])) or 1
-            else:
-                actual_count = 1
-            _increment_daily_limit(user, limit_action, count=actual_count)
+        # Skip for approval replays — the admin took responsibility by
+        # approving, and the limit was already checked at submission time.
+        # Incrementing days later would charge the wrong period.
+        if not _from_approval:
+            for limit_action in limit_actions:
+                if limit_action == "bulk_row_removal":
+                    actual_count = diff.get("removed_count", 1)
+                elif limit_action == "row_removal":
+                    actual_count = diff.get("removed_count", 1)
+                elif limit_action == "column_removal":
+                    actual_count = len(column_removal_reasons) or 1
+                elif limit_action == "bulk_row_edit":
+                    actual_count = diff.get("edited_count", 1)
+                elif limit_action == "row_edit":
+                    actual_count = diff.get("edited_count", 1)
+                elif limit_action == "row_addition":
+                    actual_count = diff.get("added_count", 1)
+                elif limit_action == "column_addition":
+                    actual_count = len(diff.get("added_columns", [])) or 1
+                else:
+                    actual_count = 1
+                _increment_daily_limit(user, limit_action, count=actual_count)
 
         return self._resp(200, {
             "message": "CSV saved successfully",
@@ -3837,7 +4804,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         _notify_admins(
             "new_request",
             "{} requests {}: {}".format(
-                user, action_type.replace("_", " "), description[:100]),
+                user, action_type.replace("_", " "), description),
             request_id, extra=_notif_extra, session_key=sys_key)
 
         return self._resp(200, {
@@ -3947,8 +4914,373 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "request_id": request_id,
         })
 
+    # ==================================================================
+    # Dual-admin approval for destructive admin operations
+    # ==================================================================
+
+    def _submit_dual_approval(self, request, payload, user):
+        """Submit a destructive admin action for second-admin approval.
+
+        Supported action_types:
+        - admin_delete_rule: soft-delete a rule with 3+ CSVs
+        - admin_delete_csv: soft-delete CSV when admin daily limit exceeded
+        - admin_purge_trash: permanently purge a trashed item
+        """
+        action_type = payload.get("action_type", "")
+        comment = _sanitize_text(payload.get("comment", ""))[:500]
+
+        valid_types = {
+            "admin_delete_rule", "admin_delete_csv", "admin_purge_trash",
+        }
+        if action_type not in valid_types:
+            return self._resp(400, {
+                "error": "Invalid dual-approval action_type. "
+                         "Valid: " + ", ".join(sorted(valid_types))})
+        if not comment:
+            return self._resp(400, {
+                "error": "A reason is required"})
+
+        # Build request metadata based on action type
+        meta = {
+            "rule_name": payload.get("rule_name", ""),
+            "csv_file": payload.get("csv_file", ""),
+            "trash_id": payload.get("trash_id", ""),
+            "removal_type": payload.get("removal_type", "permanent"),
+        }
+
+        # EC2: Record current state for re-validation at approval time
+        if action_type == "admin_delete_rule":
+            rule_name = meta["rule_name"]
+            if not rule_name:
+                return self._resp(400, {
+                    "error": "rule_name is required"})
+            mapping = self._read_mapping()
+            csv_count = len([e for e in mapping
+                             if e.get("rule_name") == rule_name])
+            meta["csv_count_at_submission"] = csv_count
+
+        # EC5: Validate trash_id exists for purge requests
+        if action_type == "admin_purge_trash":
+            tid = meta["trash_id"]
+            if not tid:
+                return self._resp(400, {
+                    "error": "trash_id is required"})
+            # Require super-admin for purge submissions
+            roles = self._get_roles(request)
+            if not roles.intersection(SUPERADMIN_ROLES):
+                return self._resp(403, {
+                    "error": "Requires super-admin role to submit "
+                             "trash purge requests"})
+            trash_dir = _get_trash_dir()
+            if not os.path.isdir(os.path.join(trash_dir, tid)):
+                return self._resp(404, {
+                    "error": "Trash item not found"})
+
+        # Create the dual-approval request in the queue
+        request_id = _generate_request_id(user)
+        now = int(time.time())
+        entry = {
+            "request_id": request_id,
+            "analyst": user,
+            "action_type": action_type,
+            "status": "pending",
+            "submitted_at": now,
+            "submitted_at_human": time.strftime(
+                "%Y-%m-%d %H:%M:%S UTC", time.gmtime(now)),
+            "comment": comment,
+            "meta": meta,
+            "is_dual_admin": True,
+        }
+
+        with _approval_queue_lock():
+            queue = _read_approval_queue()
+            queue.append(entry)
+            _write_approval_queue(queue)
+
+        # Notify other admins
+        desc_map = {
+            "admin_delete_rule": "delete rule '{}'".format(
+                meta.get("rule_name", "")),
+            "admin_delete_csv": "delete CSV '{}'".format(
+                meta.get("csv_file", "")),
+            "admin_purge_trash": "permanently purge '{}' from trash".format(
+                meta.get("trash_id", "")[:40]),
+        }
+        desc = desc_map.get(action_type, action_type)
+        sys_key = request.get("system_authtoken",
+                              request.get("session", {}).get(
+                                  "authtoken", ""))
+        _notify_admins(
+            "new_request",
+            "{} requests dual-approval to {}: {}".format(
+                user, desc, comment[:100]),
+            request_id,
+            extra={
+                "action_type": action_type,
+                "detection_rule": meta.get("rule_name", ""),
+                "csv_file": meta.get("csv_file", ""),
+            },
+            session_key=sys_key,
+        )
+
+        self._index_audit(request, {
+            "action": "dual_approval_submitted",
+            "timestamp": now,
+            "analyst": user,
+            "approval_action_type": action_type,
+            "detection_rule": meta.get("rule_name", ""),
+            "csv_file": meta.get("csv_file", ""),
+            "trash_id": meta.get("trash_id", ""),
+            "comment": comment,
+            "request_id": request_id,
+        })
+
+        return self._resp(200, {
+            "success": True,
+            "message": "Dual-approval request submitted. A second admin "
+                       "must approve this action.",
+            "request_id": request_id,
+        })
+
+    def _process_dual_approval(self, request, payload, admin_user):
+        """Approve or reject a dual-admin approval request.
+
+        Edge case mitigations:
+        - EC1: Self-approval blocked (submitter cannot approve own request)
+        - EC2: Re-validates state at approval time (CSV count, trash existence)
+        - EC4: Daily limit NOT reset — dual-approval is additional gate, not bypass
+        """
+        request_id = payload.get("request_id", "")
+        decision = payload.get("decision", "")
+        admin_comment = _sanitize_text(
+            payload.get("admin_comment", ""))[:500]
+
+        if decision not in ("approve", "reject"):
+            return self._resp(400, {
+                "error": "Decision must be 'approve' or 'reject'"})
+        if decision == "reject" and not admin_comment:
+            return self._resp(400, {
+                "error": "Rejection reason is required"})
+
+        with _approval_queue_lock():
+            queue = _read_approval_queue()
+            target = None
+            for item in queue:
+                if item["request_id"] == request_id:
+                    target = item
+                    break
+
+            if not target:
+                return self._resp(404, {
+                    "error": "Dual-approval request not found"})
+            if target["status"] != "pending":
+                return self._resp(409, {
+                    "error": "Already {}".format(target["status"])})
+            if not target.get("is_dual_admin"):
+                return self._resp(400, {
+                    "error": "This is not a dual-admin request. "
+                             "Use process_approval instead."})
+
+            # EC1: Self-approval blocked
+            if target["analyst"] == admin_user:
+                return self._resp(403, {
+                    "error": "Self-approval is not allowed. A different "
+                             "admin must approve this request."})
+
+            action_type = target["action_type"]
+            meta = target.get("meta", {})
+            now = int(time.time())
+
+            if decision == "reject":
+                target["status"] = "rejected"
+                target["resolved_by"] = admin_user
+                target["resolved_at"] = now
+                target["admin_comment"] = admin_comment
+                _write_approval_queue(queue)
+
+                # Notify submitter
+                _add_notification(
+                    target["analyst"], "rejected",
+                    "Your {} request was rejected by {}: {}".format(
+                        action_type.replace("_", " "),
+                        admin_user, admin_comment),
+                    request_id)
+
+                self._index_audit(request, {
+                    "action": "dual_approval_rejected",
+                    "timestamp": now,
+                    "analyst": admin_user,
+                    "requester": target["analyst"],
+                    "approval_action_type": action_type,
+                    "rejection_reason": admin_comment,
+                    "request_id": request_id,
+                })
+
+                return self._resp(200, {
+                    "success": True,
+                    "message": "Dual-approval request rejected."})
+
+            # ── APPROVE path ──────────────────────────────────────────
+            # EC2: Re-validate preconditions before executing
+
+            if action_type == "admin_delete_rule":
+                rule_name = meta.get("rule_name", "")
+                mapping = self._read_mapping()
+                current_csvs = [e for e in mapping
+                                if e.get("rule_name") == rule_name]
+                if not current_csvs:
+                    # Rule was already deleted or has no CSVs
+                    registered = _read_detection_rules()
+                    if rule_name not in registered:
+                        target["status"] = "failed"
+                        target["failure_reason"] = "Rule no longer exists"
+                        _write_approval_queue(queue)
+                        return self._resp(409, {
+                            "error": "Rule '{}' no longer exists".format(
+                                rule_name)})
+
+                # Execute the deletion with _from_dual_approval flag
+                target["status"] = "approved"
+                target["resolved_by"] = admin_user
+                target["resolved_at"] = now
+                target["admin_comment"] = admin_comment
+                _write_approval_queue(queue)
+
+            elif action_type == "admin_delete_csv":
+                csv_file = meta.get("csv_file", "")
+                mapping = self._read_mapping()
+                found = any(e.get("csv_file") == csv_file for e in mapping)
+                if not found:
+                    target["status"] = "failed"
+                    target["failure_reason"] = "CSV no longer exists"
+                    _write_approval_queue(queue)
+                    return self._resp(409, {
+                        "error": "CSV '{}' no longer exists".format(
+                            csv_file)})
+
+                target["status"] = "approved"
+                target["resolved_by"] = admin_user
+                target["resolved_at"] = now
+                target["admin_comment"] = admin_comment
+                _write_approval_queue(queue)
+
+            elif action_type == "admin_purge_trash":
+                trash_id = meta.get("trash_id", "")
+                trash_dir = _get_trash_dir()
+                if not os.path.isdir(os.path.join(trash_dir, trash_id)):
+                    target["status"] = "failed"
+                    target["failure_reason"] = "Trash item no longer exists"
+                    _write_approval_queue(queue)
+                    return self._resp(409, {
+                        "error": "Trash item no longer exists"})
+
+                target["status"] = "approved"
+                target["resolved_by"] = admin_user
+                target["resolved_at"] = now
+                target["admin_comment"] = admin_comment
+                _write_approval_queue(queue)
+
+            else:
+                return self._resp(400, {
+                    "error": "Unknown dual-approval action type"})
+
+        # ── Execute the approved action (outside the queue lock) ──────
+        self._index_audit(request, {
+            "action": "dual_approval_approved",
+            "timestamp": now,
+            "analyst": admin_user,
+            "requester": target["analyst"],
+            "approval_action_type": action_type,
+            "admin_comment": admin_comment,
+            "request_id": request_id,
+        })
+
+        exec_result = None
+        if action_type == "admin_delete_rule":
+            exec_payload = {
+                "rule_name": meta.get("rule_name", ""),
+                "removal_type": meta.get("removal_type", "permanent"),
+                "comment": "Dual-approved by {}: {}".format(
+                    admin_user, meta.get("rule_name", "")),
+                "_from_dual_approval": True,
+            }
+            exec_result = self._remove_rule(
+                request, exec_payload, target["analyst"])
+
+        elif action_type == "admin_delete_csv":
+            exec_payload = {
+                "csv_file": meta.get("csv_file", ""),
+                "rule_name": meta.get("rule_name", ""),
+                "removal_type": meta.get("removal_type", "permanent"),
+                "comment": "Dual-approved by {}: {}".format(
+                    admin_user, meta.get("csv_file", "")),
+                "_from_dual_approval": True,
+            }
+            exec_result = self._remove_csv(
+                request, exec_payload, target["analyst"])
+
+        elif action_type == "admin_purge_trash":
+            purge_comment = "Dual-approved purge by {}".format(admin_user)
+            # Read metadata before purging for audit
+            trash_dir = _get_trash_dir()
+            trash_meta = {}
+            meta_path = os.path.join(
+                trash_dir, meta.get("trash_id", ""), "metadata.json")
+            if os.path.isfile(meta_path):
+                try:
+                    with open(meta_path, "r", encoding="utf-8") as fh:
+                        trash_meta = json.load(fh)
+                except (json.JSONDecodeError, OSError):
+                    pass
+            success, msg = _purge_trash_item(meta.get("trash_id", ""))
+            if success:
+                self._index_audit(request, {
+                    "action": "trash_purged",
+                    "timestamp": int(time.time()),
+                    "analyst": admin_user,
+                    "requester": target["analyst"],
+                    "item_type": trash_meta.get("item_type", ""),
+                    "name": trash_meta.get("name", ""),
+                    "comment": purge_comment,
+                    "dual_approved": True,
+                })
+            exec_result = self._resp(
+                200 if success else 500,
+                {"success": success, "message": msg})
+
+        # Notify submitter
+        _add_notification(
+            target["analyst"], "approved",
+            "Your {} request was approved by {}".format(
+                action_type.replace("_", " "), admin_user),
+            request_id)
+
+        return exec_result or self._resp(200, {
+            "success": True,
+            "message": "Dual-approval action executed."})
+
     def _process_approval(self, request, payload, admin_user):
-        """Approve, reject, or cancel a pending approval request."""
+        """Approve, reject, or cancel a pending approval request.
+
+        Uses a file lock to prevent concurrent approval operations
+        from racing on the same queue entry.
+        """
+        with _approval_queue_lock():
+            result = self._process_approval_inner(
+                request, payload, admin_user)
+
+        # Increment admin approval counter on success
+        decision = payload.get("decision", "")
+        resp_body = json.loads(result.get("payload", "{}"))
+        if decision == "approve" and resp_body.get("success"):
+            admin_roles = self._get_roles(request)
+            if admin_roles.intersection(ADMIN_ROLES) and \
+               not admin_roles.intersection(SUPERADMIN_ROLES):
+                _increment_admin_daily_limit(admin_user, "approval_count")
+
+        return result
+
+    def _process_approval_inner(self, request, payload, admin_user):
         request_id = payload.get("request_id", "")
         decision = payload.get("decision", "")
         rejection_reason = _sanitize_text(
@@ -3964,6 +5296,23 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             return self._resp(400, {"error": "Cancellation reason is required"})
         if decision == "reject" and not rejection_reason.strip():
             return self._resp(400, {"error": "Rejection reason is required"})
+
+        # Admin daily limit for approvals (not applied to super-admins)
+        if decision == "approve":
+            admin_roles = self._get_roles(request)
+            if admin_roles.intersection(ADMIN_ROLES) and \
+               not admin_roles.intersection(SUPERADMIN_ROLES):
+                allowed, current, maximum = _check_admin_daily_limit(
+                    admin_user, "approval_count")
+                if not allowed:
+                    return self._resp(429, {
+                        "error": "Admin daily limit exceeded for "
+                                 "approvals ({}/{} used). Contact your "
+                                 "super-admin.".format(current, maximum),
+                        "limit_type": "admin_approval_count",
+                        "current": current,
+                        "maximum": maximum,
+                    })
 
         queue = _expire_pending_approvals()
         target = None
@@ -4061,7 +5410,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 target["analyst"], "rejected",
                 "Your {} request was rejected by {}: {}".format(
                     target["action_type"].replace("_", " "),
-                    admin_user, rejection_reason[:100]),
+                    admin_user, rejection_reason),
                 request_id,
                 {"admin_comment": rejection_reason[:500],
                  "csv_file": target["csv_file"],
@@ -4146,11 +5495,18 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 else:
                     keep_rows.append(row)
 
-            if not removed_entries:
+            requested_count = len(row_keys)
+            actual_count = len(removed_entries)
+            if actual_count < requested_count:
+                fail_msg = ("Only {} of {} target rows still exist in CSV. "
+                            "CSV was modified since submission.".format(
+                                actual_count, requested_count)
+                            if actual_count > 0
+                            else "Locked rows no longer found in CSV")
                 target["status"] = "failed"
                 target["resolved_by"] = admin_user
                 target["resolved_at"] = now
-                target["rejection_reason"] = "Locked rows no longer found in CSV"
+                target["rejection_reason"] = fail_msg
                 _write_approval_queue(queue)
                 _failed_evt = {
                     "timestamp": now, "analyst": admin_user,
@@ -4160,7 +5516,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     "request_id": request_id,
                     "requester": target["analyst"],
                     "approval_action_type": action_type,
-                    "failure_reason": "Locked rows no longer found in CSV",
+                    "failure_reason": fail_msg,
+                    "requested_count": requested_count,
+                    "actual_count": actual_count,
                     "comment": "{} failed to approve {} request created by {}".format(
                         admin_user, action_type.replace("_", " "),
                         target["analyst"]),
@@ -4168,9 +5526,16 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 _failed_evt.update(self._extract_request_reasons(
                     action_type, stored_payload))
                 self._index_audit(request, _failed_evt)
+                _add_notification(
+                    target["analyst"], "rejected",
+                    "Your {} request failed: {}".format(
+                        action_type.replace("_", " "), fail_msg),
+                    request_id,
+                    {"csv_file": csv_file,
+                     "detection_rule": target["detection_rule"],
+                     "action_type": action_type})
                 return self._resp(409, {
-                    "error": "The rows from this request no longer exist "
-                             "in the CSV. Request has been marked as failed.",
+                    "error": fail_msg,
                     "request_id": request_id,
                 })
 
@@ -4296,6 +5661,50 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     "request_id": request_id,
                 })
 
+            # Check for duplicates — rows that already exist in current CSV
+            cur_key_counts = Counter(
+                json.dumps([row.get(h, "") for h in lock_h])
+                for row in cur_rows
+            )
+            dup_count = 0
+            for row in new_rows_to_add:
+                key = json.dumps([row.get(h, "") for h in lock_h])
+                if cur_key_counts.get(key, 0) > 0:
+                    dup_count += 1
+            if dup_count:
+                dup_fail_msg = ("{} of {} rows already exist in CSV. "
+                                "CSV was modified since submission.".format(
+                                    dup_count, len(new_rows_to_add)))
+                target["status"] = "failed"
+                target["resolved_by"] = admin_user
+                target["resolved_at"] = now
+                target["rejection_reason"] = dup_fail_msg
+                _write_approval_queue(queue)
+                self._index_audit(request, {
+                    "timestamp": now, "analyst": admin_user,
+                    "action": "request_failed", "status": "failed",
+                    "detection_rule": target["detection_rule"],
+                    "csv_file": csv_file, "app_context": app_context,
+                    "request_id": request_id,
+                    "requester": target["analyst"],
+                    "approval_action_type": action_type,
+                    "failure_reason": dup_fail_msg,
+                    "duplicate_count": dup_count,
+                    "comment": dup_fail_msg,
+                })
+                _add_notification(
+                    target["analyst"], "rejected",
+                    "Your {} request failed: {}".format(
+                        action_type.replace("_", " "), dup_fail_msg),
+                    request_id,
+                    {"csv_file": csv_file,
+                     "detection_rule": target["detection_rule"],
+                     "action_type": action_type})
+                return self._resp(409, {
+                    "error": dup_fail_msg,
+                    "request_id": request_id,
+                })
+
             # Merge headers — use current CSV headers, add any new ones
             # from the stored payload that don't already exist
             merged_headers = list(cur_headers)
@@ -4378,11 +5787,17 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     locked_counts[key] -= 1
                 new_rows.append(row)
 
-            if not edited_count:
+            edit_requested = len(row_keys)
+            if edited_count < edit_requested:
+                edit_fail_msg = ("Only {} of {} target rows still match in "
+                                 "CSV. CSV was modified since submission."
+                                 .format(edited_count, edit_requested)
+                                 if edited_count > 0
+                                 else "Target rows no longer found in CSV")
                 target["status"] = "failed"
                 target["resolved_by"] = admin_user
                 target["resolved_at"] = now
-                target["rejection_reason"] = "Target rows no longer found in CSV"
+                target["rejection_reason"] = edit_fail_msg
                 _write_approval_queue(queue)
                 _failed_evt = {
                     "timestamp": now, "analyst": admin_user,
@@ -4392,7 +5807,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     "request_id": request_id,
                     "requester": target["analyst"],
                     "approval_action_type": action_type,
-                    "failure_reason": "Target rows no longer found in CSV",
+                    "failure_reason": edit_fail_msg,
+                    "requested_count": edit_requested,
+                    "actual_count": edited_count,
                     "comment": "{} failed to approve {} request created by {}".format(
                         admin_user, action_type.replace("_", " "),
                         target["analyst"]),
@@ -4400,9 +5817,16 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 _failed_evt.update(self._extract_request_reasons(
                     action_type, stored_payload))
                 self._index_audit(request, _failed_evt)
+                _add_notification(
+                    target["analyst"], "rejected",
+                    "Your {} request failed: {}".format(
+                        action_type.replace("_", " "), edit_fail_msg),
+                    request_id,
+                    {"csv_file": csv_file,
+                     "detection_rule": target["detection_rule"],
+                     "action_type": action_type})
                 return self._resp(409, {
-                    "error": "The rows from this request no longer exist "
-                             "in the CSV. Request has been marked as failed.",
+                    "error": edit_fail_msg,
                     "request_id": request_id,
                 })
 
@@ -4511,6 +5935,60 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             }
             method = _method_map[action_type]
 
+            # ── Option B: Validate preconditions before replay ──────
+            target_rule = target.get("detection_rule", "")
+            target_csv = csv_file
+            mapping = self._read_mapping()
+            rule_exists = any(m["rule_name"] == target_rule for m in mapping)
+            csv_exists = any(
+                m["rule_name"] == target_rule and m["csv_file"] == target_csv
+                for m in mapping
+            )
+
+            precondition_error = None
+            if action_type == "create_csv" and not rule_exists:
+                precondition_error = (
+                    "Detection rule '{}' no longer exists. "
+                    "Cannot create CSV for a deleted rule.".format(target_rule))
+            elif action_type == "remove_rule" and not rule_exists:
+                precondition_error = (
+                    "Detection rule '{}' has already been removed.".format(
+                        target_rule))
+            elif action_type == "remove_csv" and not csv_exists:
+                precondition_error = (
+                    "CSV file '{}' for rule '{}' has already been "
+                    "removed.".format(target_csv, target_rule))
+
+            if precondition_error:
+                target["status"] = "failed"
+                target["resolved_by"] = admin_user
+                target["resolved_at"] = now
+                target["rejection_reason"] = precondition_error
+                _write_approval_queue(queue)
+                self._index_audit(request, {
+                    "timestamp": now, "analyst": admin_user,
+                    "action": "request_failed", "status": "failed",
+                    "detection_rule": target_rule,
+                    "csv_file": target_csv, "app_context": app_context,
+                    "request_id": request_id,
+                    "requester": target["analyst"],
+                    "approval_action_type": action_type,
+                    "failure_reason": precondition_error,
+                    "comment": precondition_error,
+                })
+                _add_notification(
+                    target["analyst"], "rejected",
+                    "Your {} request failed: {}".format(
+                        action_type.replace("_", " "), precondition_error),
+                    request_id,
+                    {"csv_file": target_csv,
+                     "detection_rule": target_rule,
+                     "action_type": action_type})
+                return self._resp(409, {
+                    "error": precondition_error,
+                    "request_id": request_id,
+                })
+
             replay_payload = dict(stored_payload)
             replay_payload["_from_approval"] = True
             # Ensure key fields are present even if original_payload was
@@ -4579,6 +6057,14 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 {"csv_file": target["csv_file"],
                  "detection_rule": target["detection_rule"],
                  "action_type": action_type})
+
+            # Auto-cancel conflicting pending requests
+            if action_type in ("remove_rule", "remove_csv"):
+                _cancel_conflicting_requests(
+                    queue, target["detection_rule"],
+                    csv_file if action_type == "remove_csv" else "",
+                    action_type, request_id,
+                    lambda evt: self._index_audit(request, evt))
 
             return self._resp(200, {
                 "message": "{} request approved and executed.".format(

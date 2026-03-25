@@ -66,6 +66,10 @@
       <choice value="request_rejected">Request Rejected</choice>
       <choice value="request_failed">Request Failed</choice>
       <choice value="request_cancelled">Request Cancelled</choice>
+      <choice value="request_auto_cancelled">Request Auto-Cancelled</choice>
+      <choice value="trash_restored">Trash Restored</choice>
+      <choice value="trash_purged">Trash Purged</choice>
+      <choice value="trash_retention_changed">Trash Retention Changed</choice>
       <default>*</default>
     </input>
 
@@ -416,7 +420,7 @@
             index=wl_audit sourcetype=wl_audit
               action=$action_filter$*
               analyst=$analyst_filter$ detection_rule=$rule_filter$
-            | where NOT match(action, "^request_|^audit_exported$|^csv_exported$|^csv_imported$|^csv_created$|^dr_created$|^rule_removed$|^csv_removed$")
+            | where NOT match(action, "^request_|^audit_exported$|^csv_exported$|^csv_imported$|^csv_created$|^dr_created$|^rule_removed$|^csv_removed$|^trash_")
             | stats values(value{}) as value values(*) as * by action csv_file analyst timestamp
             | sort -timestamp
             | eval timestamp=if(match(timestamp, "^\d+\.?\d*$"), strftime(timestamp, "%d-%m-%Y %H:%M:%S GMT%:::z"), timestamp)
@@ -494,7 +498,7 @@
             index=wl_audit sourcetype=wl_audit
               action=$action_filter$*
               analyst=$analyst_filter$ detection_rule=$rule_filter$
-            | where match(action, "^request_|^audit_exported$|^csv_exported$|^csv_imported$|^csv_created$|^dr_created$|^rule_removed$|^csv_removed$")
+            | where match(action, "^request_|^audit_exported$|^csv_exported$|^csv_imported$|^csv_created$|^dr_created$|^rule_removed$|^csv_removed$|^trash_")
             | eval csv_file=if(isnull(csv_file) OR csv_file="", "N/A", csv_file)
             | stats values(*) as * by action csv_file analyst timestamp
             | sort -timestamp
@@ -512,7 +516,11 @@
                 action=="request_approved",     "approved request",
                 action=="request_rejected",     "rejected request",
                 action=="request_failed",       "failed request",
-                action=="request_cancelled",   "cancelled request"
+                action=="request_cancelled",       "cancelled request",
+                action=="request_auto_cancelled", "auto-cancelled request",
+                action=="trash_restored",         "restored from trash",
+                action=="trash_purged",           "permanently purged",
+                action=="trash_retention_changed","changed trash retention"
               )
 
             | eval summary=case(
@@ -527,9 +535,9 @@
                 action=="dr_created",
                   "User ".analyst." created new detection rule ".detection_rule." at ".timestamp,
                 action=="rule_removed",
-                  "User ".analyst." ".if(removal_type=="permanent","permanently deleted","unlinked")." rule ".detection_rule." (".csv_count." CSV file(s): ".csv_files.") — ".comment." at ".timestamp,
+                  "User ".analyst." ".case(removal_type=="trashed","moved to trash",removal_type=="permanent","permanently deleted",1==1,"unlinked")." rule ".detection_rule." (".csv_count." CSV file(s): ".csv_files.") — ".comment." at ".timestamp,
                 action=="csv_removed",
-                  "User ".analyst." ".if(removal_type=="permanent","permanently deleted","unlinked")." CSV ".csv_file." from rule ".detection_rule.if(rule_also_removed=="true"," (last CSV — rule also removed)","")." — ".comment." at ".timestamp,
+                  "User ".analyst." ".case(removal_type=="trashed","moved to trash",removal_type=="permanent","permanently deleted",1==1,"unlinked")." CSV ".csv_file." from rule ".detection_rule.if(rule_also_removed=="true"," (last CSV — rule also removed)","")." — ".comment." at ".timestamp,
                 action=="request_submitted",
                   "User ".analyst." submitted ".approval_action_type." request for ".csv_file." - ".description." (detection rule - ".detection_rule.") at ".timestamp,
                 action=="request_approved",
@@ -539,7 +547,15 @@
                 action=="request_failed",
                   "User ".analyst." failed to approve ".approval_action_type." request created by ".requester." for ".csv_file." (reason: ".failure_reason.") (detection rule - ".detection_rule.") at ".timestamp,
                 action=="request_cancelled",
-                  "User ".analyst." cancelled their ".approval_action_type." request for ".csv_file." (reason: ".cancellation_reason.") (detection rule - ".detection_rule.") at ".timestamp
+                  "User ".analyst." cancelled their ".approval_action_type." request for ".csv_file." (reason: ".cancellation_reason.") (detection rule - ".detection_rule.") at ".timestamp,
+                action=="request_auto_cancelled",
+                  "System auto-cancelled ".approval_action_type." request by ".analyst." for ".csv_file." (detection rule - ".detection_rule.") — ".comment." at ".timestamp,
+                action=="trash_restored",
+                  "User ".analyst." restored ".item_type." '".name."' from trash (originally deleted by ".original_deleted_by." on ".original_deleted_at.") — ".comment." at ".timestamp,
+                action=="trash_purged",
+                  "User ".analyst." permanently purged ".item_type." '".name."' from trash — ".comment." at ".timestamp,
+                action=="trash_retention_changed",
+                  "User ".analyst." changed trash retention from ".old_retention_days." to ".new_retention_days." days — ".comment." at ".timestamp
               )
             | eval reason=coalesce(remove_reason, row_add_reason, revert_reason, rejection_reason, failure_reason, cancellation_reason, comment, "")
             | table timestamp action analyst csv_file detection_rule reason request_id approval_action_type requester status export_file summary
