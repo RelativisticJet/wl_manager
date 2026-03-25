@@ -35,6 +35,8 @@ require([
     // Current user detection
     // ══════════════════════════════════════════════════════════════════
     var cpCurrentUser = "";
+    var cpIsSuperAdmin = false;  // Set from get_approval_queue response
+
     (function detectCurrentUser() {
         try {
             var envModel = mvc.Components.getInstance("env");
@@ -204,6 +206,7 @@ require([
         }
         $("#wl-cp-loading").hide();
         $("#wl-cp-content").show();
+        cpIsSuperAdmin = !!data.is_superadmin;
         initControlPanel(data.queue || []);
     })
     .fail(function (xhr) {
@@ -265,14 +268,31 @@ require([
             '<div class="wl-cp-tab-bar">' +
             '<span class="btn btn-primary wl-cp-tab" data-tab="queue">Approval Queue</span> ' +
             '<span class="btn wl-cp-tab" data-tab="usage">Analyst Usage</span> ' +
-            '<span class="btn wl-cp-tab" data-tab="limits">Limits & Permissions</span>' +
-            '</div>';
+            '<span class="btn wl-cp-tab" data-tab="limits">Limits & Permissions</span> ' +
+            '<span class="btn wl-cp-tab" data-tab="trash">Trash Management</span>';
+        if (cpIsSuperAdmin) {
+            html += ' <span class="btn wl-cp-tab" data-tab="admin-limits">Admin Limits</span>';
+        }
+        html += '</div>';
         $("#wl-cp-tabs").html(html);
+
+        // Add trash and admin-limits containers if not present
+        if (!$("#wl-cp-trash").length) {
+            $("#wl-cp-content").append(
+                '<div id="wl-cp-trash" style="display:none"></div>');
+        }
+        if (!$("#wl-cp-admin-limits").length) {
+            $("#wl-cp-content").append(
+                '<div id="wl-cp-admin-limits" style="display:none"></div>');
+        }
+
+        var allPanels = "#wl-cp-approval-queue, #wl-cp-daily-limits, " +
+            "#wl-cp-analyst-usage, #wl-cp-trash, #wl-cp-admin-limits";
 
         function switchTab(tab) {
             $(".wl-cp-tab").removeClass("btn-primary");
             $(".wl-cp-tab[data-tab='" + tab + "']").addClass("btn-primary");
-            $("#wl-cp-approval-queue, #wl-cp-daily-limits, #wl-cp-analyst-usage").hide();
+            $(allPanels).hide();
             if (typeof stopUsagePoll === "function") { stopUsagePoll(); }
             if (tab === "queue") { $("#wl-cp-approval-queue").show(); }
             if (tab === "limits") { $("#wl-cp-daily-limits").show(); }
@@ -280,15 +300,25 @@ require([
                 $("#wl-cp-analyst-usage").show();
                 loadAnalystUsage();
             }
+            if (tab === "trash") {
+                $("#wl-cp-trash").show();
+                loadTrash();
+            }
+            if (tab === "admin-limits") {
+                $("#wl-cp-admin-limits").show();
+                loadAdminLimits();
+            }
         }
 
         $(".wl-cp-tab").on("click", function () {
             switchTab($(this).data("tab"));
         });
 
-        // Support ?tab=queue|limits|usage from URL (e.g. notification redirect)
+        // Support ?tab= from URL (e.g. notification redirect)
+        var validTabs = ["queue", "limits", "usage", "trash"];
+        if (cpIsSuperAdmin) { validTabs.push("admin-limits"); }
         var urlTab = new URLSearchParams(window.location.search).get("tab");
-        if (urlTab && ["queue", "limits", "usage"].indexOf(urlTab) !== -1) {
+        if (urlTab && validTabs.indexOf(urlTab) !== -1) {
             switchTab(urlTab);
         }
     }
@@ -353,9 +383,11 @@ require([
                                 'style="background:#f39c12;color:#fff;margin-right:4px">Cancel</span>'
                             : '<span class="btn btn-small wl-cp-approve-btn" ' +
                                 'data-id="' + _.escape(item.request_id) + '" ' +
+                                'data-dual="' + (item.is_dual_admin ? 'true' : 'false') + '" ' +
                                 'style="background:#27ae60;color:#fff;margin-right:4px">Approve</span>' +
                               '<span class="btn btn-small wl-cp-reject-btn" ' +
                                 'data-id="' + _.escape(item.request_id) + '" ' +
+                                'data-dual="' + (item.is_dual_admin ? 'true' : 'false') + '" ' +
                                 'style="background:#e74c3c;color:#fff;margin-right:4px">Reject</span>'
                         ) +
                         '<span class="btn btn-small wl-cp-download-btn" ' +
@@ -475,16 +507,19 @@ require([
     function bindApprovalActions() {
         $(".wl-cp-approve-btn").off("click").on("click", function () {
             var requestId = $(this).data("id");
+            var isDual = $(this).data("dual") === true || $(this).data("dual") === "true";
             var $btn = $(this);
             showCpConfirm("Approve Request",
+                isDual ? "Approve this dual-admin request? The destructive action will be executed." :
                 "Approve this request? The action will be executed immediately.",
                 "Approve",
                 function () {
                     $btn.text("Approving...").css("pointer-events", "none");
                     restPost({
-                        action: "process_approval",
+                        action: isDual ? "process_dual_approval" : "process_approval",
                         request_id: requestId,
-                        decision: "approve"
+                        decision: "approve",
+                        admin_comment: "Approved via Control Panel"
                     }).done(function (data) {
                         if (data.error) {
                             showCpAlert("Error", data.error, "error");
@@ -504,7 +539,8 @@ require([
 
         $(".wl-cp-reject-btn").off("click").on("click", function () {
             var requestId = $(this).data("id");
-            showRejectModal(requestId);
+            var isDual = $(this).data("dual") === true || $(this).data("dual") === "true";
+            showRejectModal(requestId, isDual);
         });
 
         $(".wl-cp-download-btn").off("click").on("click", function () {
@@ -615,7 +651,7 @@ require([
         });
     }
 
-    function showRejectModal(requestId) {
+    function showRejectModal(requestId, isDual) {
         $(".wl-modal-overlay").remove();
         var $modal = $(
             '<div class="wl-modal-overlay">' +
@@ -649,10 +685,11 @@ require([
             if (!reason) { return; }
             $modal.remove();
             restPost({
-                action: "process_approval",
+                action: isDual ? "process_dual_approval" : "process_approval",
                 request_id: requestId,
                 decision: "reject",
-                rejection_reason: reason
+                rejection_reason: reason,
+                admin_comment: reason
             }).done(function (data) {
                 if (data.error) {
                     showCpAlert("Error", data.error, "error");
@@ -1617,5 +1654,368 @@ require([
 
         // Start auto-refresh polling
         startUsagePoll();
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Trash Management
+    // ══════════════════════════════════════════════════════════════════
+
+    function loadTrash() {
+        restPost({ action: "list_trash" })
+        .done(function (data) {
+            if (data.error) {
+                $("#wl-cp-trash").html(
+                    '<p style="color:#dc3545;padding:16px">' +
+                    _.escape(data.error) + '</p>');
+                return;
+            }
+            renderTrashTable(data.trash || [], data.auto_purged || 0);
+        })
+        .fail(function () {
+            $("#wl-cp-trash").html(
+                '<p style="color:#dc3545;padding:16px">Error loading trash</p>');
+        });
+    }
+
+    function renderTrashTable(items, autoPurged) {
+        var html = '<h3 style="margin:8px 0 12px">Trash (' +
+            items.length + ' items)</h3>';
+
+        if (autoPurged > 0) {
+            html += '<p style="color:var(--wl-muted,#888);font-size:12px;margin-bottom:8px">' +
+                autoPurged + ' expired item(s) auto-purged.</p>';
+        }
+
+        // Trash config
+        html += '<div style="margin-bottom:12px">';
+        restPost({ action: "get_trash_config" }).done(function (cfg) {
+            var days = (cfg.config || {}).retention_days || 30;
+            var configHtml = '<span style="color:var(--wl-muted,#888);font-size:12px">' +
+                'Retention period: <strong>' + days + ' days</strong>';
+            if (cpIsSuperAdmin) {
+                configHtml += ' &mdash; <span class="wl-link" id="wl-trash-change-retention" ' +
+                    'style="cursor:pointer;color:var(--wl-accent,#2962ff)">Change</span>';
+            }
+            configHtml += '</span>';
+            $("#wl-trash-config-display").html(configHtml);
+        });
+        html += '<span id="wl-trash-config-display"></span></div>';
+
+        if (items.length === 0) {
+            html += '<p style="color:var(--wl-muted,#888);padding:20px;text-align:center">' +
+                'Trash is empty. Deleted rules and CSV files will appear here.</p>';
+            $("#wl-cp-trash").html(html);
+            return;
+        }
+
+        html += '<table class="wl-table" style="width:100%">' +
+            '<thead><tr>' +
+            '<th>Name</th><th>Type</th><th>Deleted By</th><th>Deleted At</th>' +
+            '<th>Days Remaining</th><th>Reason</th><th>Actions</th>' +
+            '</tr></thead><tbody>';
+
+        items.forEach(function (item) {
+            var tid = _.escape(item.trash_id || "");
+            var daysLeft = item.days_remaining || 0;
+            var daysClass = daysLeft <= 7 ? 'color:#dc3545;font-weight:bold' :
+                daysLeft <= 14 ? 'color:#ffc107' : '';
+
+            html += '<tr>' +
+                '<td>' + _.escape(item.name || "") + '</td>' +
+                '<td>' + _.escape(item.item_type || "") + '</td>' +
+                '<td>' + _.escape(item.deleted_by || "") + '</td>' +
+                '<td>' + _.escape(item.deleted_at_human || "") + '</td>' +
+                '<td style="' + daysClass + '">' + daysLeft + '</td>' +
+                '<td title="' + _.escape(item.comment || "") + '">' +
+                _.escape((item.comment || "").substring(0, 60)) +
+                (item.comment && item.comment.length > 60 ? "..." : "") + '</td>' +
+                '<td>' +
+                '<span class="wl-btn wl-btn-primary wl-trash-restore" ' +
+                'data-trash-id="' + tid + '" style="cursor:pointer;margin-right:4px">' +
+                'Restore</span>';
+
+            if (cpIsSuperAdmin) {
+                html += '<span class="wl-btn wl-btn-danger wl-trash-purge" ' +
+                    'data-trash-id="' + tid + '" data-name="' +
+                    _.escape(item.name || "") + '" style="cursor:pointer">' +
+                    'Request Purge</span>';
+            }
+            html += '</td></tr>';
+        });
+        html += '</tbody></table>';
+        $("#wl-cp-trash").html(html);
+
+        // Restore handler
+        $(".wl-trash-restore").on("click", function () {
+            var trashId = $(this).data("trash-id");
+            showCpConfirm("Restore from Trash",
+                "Restore this item to its original location?",
+                function () {
+                    restPost({
+                        action: "restore_from_trash",
+                        trash_id: trashId,
+                        comment: "Restored via Control Panel"
+                    })
+                    .done(function (d) {
+                        if (d.success) {
+                            showCpAlert("Restored", d.message, "success");
+                            loadTrash();
+                        } else {
+                            showCpAlert("Error", d.error || d.message, "error");
+                        }
+                    })
+                    .fail(function () {
+                        showCpAlert("Error", "Failed to restore", "error");
+                    });
+                }
+            );
+        });
+
+        // Purge handler (superadmin submits dual-approval request)
+        $(".wl-trash-purge").on("click", function () {
+            var trashId = $(this).data("trash-id");
+            var name = $(this).data("name");
+            showCpPrompt("Permanent Purge",
+                "This will submit a dual-approval request to permanently " +
+                "delete '" + _.escape(name) + "'. A second admin must approve. " +
+                "Enter your reason:",
+                function (reason) {
+                    if (!reason || !reason.trim()) {
+                        showCpAlert("Error", "A reason is required", "error");
+                        return;
+                    }
+                    restPost({
+                        action: "submit_dual_approval",
+                        action_type: "admin_purge_trash",
+                        trash_id: trashId,
+                        comment: reason
+                    })
+                    .done(function (d) {
+                        if (d.success) {
+                            showCpAlert("Submitted",
+                                "Dual-approval request submitted. A second " +
+                                "admin must approve the purge.", "success");
+                        } else {
+                            showCpAlert("Error", d.error, "error");
+                        }
+                    })
+                    .fail(function () {
+                        showCpAlert("Error", "Failed to submit request", "error");
+                    });
+                }
+            );
+        });
+
+        // Retention change handler
+        $(document).off("click", "#wl-trash-change-retention").on("click",
+            "#wl-trash-change-retention", function () {
+            showCpPrompt("Set Trash Retention",
+                "Enter new retention period in days (7-365). " +
+                "Minimum 7 days ensures a recovery window:",
+                function (val) {
+                    var days = parseInt(val, 10);
+                    if (isNaN(days) || days < 7 || days > 365) {
+                        showCpAlert("Error",
+                            "Must be a number between 7 and 365", "error");
+                        return;
+                    }
+                    restPost({
+                        action: "set_trash_retention",
+                        retention_days: days,
+                        comment: "Changed via Control Panel"
+                    })
+                    .done(function (d) {
+                        if (d.success) {
+                            showCpAlert("Updated", d.message, "success");
+                            loadTrash();
+                        } else {
+                            showCpAlert("Error", d.error, "error");
+                        }
+                    });
+                }
+            );
+        });
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Admin Limits (superadmin-only)
+    // ══════════════════════════════════════════════════════════════════
+
+    function loadAdminLimits() {
+        if (!cpIsSuperAdmin) {
+            $("#wl-cp-admin-limits").html(
+                '<p style="color:var(--wl-muted,#888);padding:20px">' +
+                'Only super-admins can view and modify admin limits.</p>');
+            return;
+        }
+        restPost({ action: "get_admin_limits" })
+        .done(function (data) {
+            if (data.error) {
+                $("#wl-cp-admin-limits").html(
+                    '<p style="color:#dc3545;padding:16px">' +
+                    _.escape(data.error) + '</p>');
+                return;
+            }
+            renderAdminLimitsForm(
+                data.admin_limits || {},
+                data.defaults || {});
+        })
+        .fail(function () {
+            $("#wl-cp-admin-limits").html(
+                '<p style="color:#dc3545;padding:16px">' +
+                'Error loading admin limits</p>');
+        });
+    }
+
+    function renderAdminLimitsForm(limits, defaults) {
+        var fields = [
+            {key: "rule_deletion", label: "Rule deletions per period",
+             desc: "Max rules an admin can soft-delete per period"},
+            {key: "csv_deletion", label: "CSV deletions per period",
+             desc: "Max CSVs an admin can soft-delete per period"},
+            {key: "approval_count", label: "Approvals per period",
+             desc: "Max approval actions an admin can perform per period"},
+            {key: "limit_changes", label: "Limit config changes per period",
+             desc: "Max times an admin can change editor limits per period"},
+        ];
+
+        var html = '<h3 style="margin:8px 0 4px">Admin Daily Limits</h3>' +
+            '<p style="color:var(--wl-muted,#888);font-size:12px;margin-bottom:12px">' +
+            'These limits restrict admin actions. Super-admins are exempt. ' +
+            'Set 0 for unlimited.</p>';
+
+        html += '<table class="wl-table" style="width:auto;min-width:500px">' +
+            '<thead><tr><th>Limit</th><th>Current</th><th>Default</th>' +
+            '<th>New Value</th></tr></thead><tbody>';
+
+        fields.forEach(function (f) {
+            var cur = limits[f.key];
+            var def = defaults[f.key];
+            if (cur === undefined) cur = def;
+            html += '<tr>' +
+                '<td title="' + _.escape(f.desc) + '">' + _.escape(f.label) + '</td>' +
+                '<td>' + cur + '</td>' +
+                '<td style="color:var(--wl-muted,#888)">' + def + '</td>' +
+                '<td><input type="number" class="wl-admin-limit-input" ' +
+                'data-key="' + f.key + '" value="' + cur + '" ' +
+                'min="0" max="9999" style="width:80px;padding:4px 8px;' +
+                'background:var(--wl-bg-main,#1a1c1e);color:var(--wl-text,#e0e0e0);' +
+                'border:1px solid var(--wl-border,#444);border-radius:4px"></td>' +
+                '</tr>';
+        });
+        html += '</tbody></table>';
+
+        html += '<div style="margin-top:12px">' +
+            '<span class="wl-btn wl-btn-primary" id="wl-save-admin-limits" ' +
+            'style="cursor:pointer">Save Admin Limits</span> ' +
+            '<span class="wl-btn" id="wl-reset-admin-limits" ' +
+            'style="cursor:pointer">Reset to Defaults</span></div>';
+
+        $("#wl-cp-admin-limits").html(html);
+
+        // Save handler
+        $("#wl-save-admin-limits").on("click", function () {
+            var newLimits = {};
+            var changed = false;
+            $(".wl-admin-limit-input").each(function () {
+                var key = $(this).data("key");
+                var val = parseInt($(this).val(), 10);
+                if (!isNaN(val) && val !== limits[key]) {
+                    newLimits[key] = val;
+                    changed = true;
+                }
+            });
+            if (!changed) {
+                showCpAlert("No Changes", "No values were changed.", "info");
+                return;
+            }
+            restPost({
+                action: "set_admin_limits",
+                limits: newLimits,
+                comment: "Updated via Control Panel"
+            })
+            .done(function (d) {
+                if (d.success) {
+                    showCpAlert("Saved", "Admin limits updated.", "success");
+                    loadAdminLimits();
+                } else {
+                    showCpAlert("Error", d.error, "error");
+                }
+            })
+            .fail(function () {
+                showCpAlert("Error", "Failed to save admin limits", "error");
+            });
+        });
+
+        // Reset handler
+        $("#wl-reset-admin-limits").on("click", function () {
+            showCpConfirm("Reset Admin Limits",
+                "Reset all admin limits to factory defaults?",
+                function () {
+                    restPost({
+                        action: "set_admin_limits",
+                        limits: defaults,
+                        comment: "Reset to factory defaults"
+                    })
+                    .done(function (d) {
+                        if (d.success) {
+                            showCpAlert("Reset", "Admin limits reset to defaults.", "success");
+                            loadAdminLimits();
+                        } else {
+                            showCpAlert("Error", d.error, "error");
+                        }
+                    });
+                }
+            );
+        });
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Prompt modal helper (for text input)
+    // ══════════════════════════════════════════════════════════════════
+
+    function showCpPrompt(title, message, onConfirm) {
+        var html =
+            '<div class="wl-modal-overlay" id="wl-cp-prompt-overlay" ' +
+            'style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10000;' +
+            'display:flex;align-items:center;justify-content:center">' +
+            '<div class="wl-modal" style="background:var(--wl-bg-main,#1a1c1e);' +
+            'border:1px solid var(--wl-border,#444);border-radius:8px;padding:24px;' +
+            'width:450px;max-width:90%">' +
+            '<h3 style="margin:0 0 8px;color:var(--wl-text,#e0e0e0)">' +
+            _.escape(title) + '</h3>' +
+            '<p style="margin:0 0 12px;color:var(--wl-muted,#888)">' +
+            _.escape(message) + '</p>' +
+            '<input type="text" id="wl-cp-prompt-input" style="width:100%;padding:8px;' +
+            'background:var(--wl-bg-row,#23272b);color:var(--wl-text,#e0e0e0);' +
+            'border:1px solid var(--wl-border,#444);border-radius:4px;margin-bottom:12px;' +
+            'box-sizing:border-box">' +
+            '<div style="text-align:right">' +
+            '<span class="wl-btn" id="wl-cp-prompt-cancel" style="cursor:pointer;margin-right:8px">' +
+            'Cancel</span>' +
+            '<span class="wl-btn wl-btn-primary" id="wl-cp-prompt-ok" style="cursor:pointer">' +
+            'OK</span></div></div></div>';
+
+        $("body").append(html);
+        $("#wl-cp-prompt-input").focus();
+
+        function close() {
+            $("#wl-cp-prompt-overlay").remove();
+        }
+
+        $("#wl-cp-prompt-cancel").on("click", close);
+        $("#wl-cp-prompt-ok").on("click", function () {
+            var val = $("#wl-cp-prompt-input").val();
+            close();
+            onConfirm(val);
+        });
+        $("#wl-cp-prompt-input").on("keydown", function (e) {
+            if (e.key === "Enter") {
+                var val = $(this).val();
+                close();
+                onConfirm(val);
+            }
+            if (e.key === "Escape") { close(); }
+        });
     }
 });
