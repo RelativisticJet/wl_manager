@@ -617,8 +617,30 @@ require([
             var urlParams = new URLSearchParams(window.location.search);
             var paramRule = urlParams.get("rule");
             var paramCsv = urlParams.get("csv");
-            if (paramRule && allRules.indexOf(paramRule) !== -1) {
-                selectRule(paramRule, paramCsv || undefined);
+            if (paramRule) {
+                if (allRules.indexOf(paramRule) === -1) {
+                    // Rule doesn't exist — show error
+                    $table.html(
+                        '<div class="wl-alert wl-alert-warning">' +
+                            '<strong>Detection rule "' + _.escape(paramRule) +
+                            '" was not found.</strong>' +
+                            '<br><span style="font-size:13px;margin-top:4px;display:inline-block">' +
+                                'It may have been removed or the link may be outdated.' +
+                            '</span>' +
+                            '<br><span class="btn btn-primary" id="wl-go-home" ' +
+                                'style="margin-top:8px">Back to Whitelist Manager</span>' +
+                        '</div>'
+                    );
+                } else {
+                    selectRule(paramRule, paramCsv || undefined);
+                    // Check if a specific CSV was requested but doesn't exist for this rule
+                    if (paramCsv && selectedCsv !== paramCsv) {
+                        showMsg(
+                            'CSV file "' + _.escape(paramCsv) +
+                            '" was not found for rule "' + _.escape(paramRule) +
+                            '". Showing available CSV instead.', "warning");
+                    }
+                }
             }
         })
         .fail(function () {
@@ -635,27 +657,15 @@ require([
                 '<div class="wl-dropdown-item wl-dropdown-create-rule" data-value="' +
                     CREATE_RULE_SENTINEL + '" style="border-bottom:1px solid var(--wl-border);' +
                     'font-style:italic;color:var(--wl-link)">' +
-                    '+ Create new detection rule\u2026' +
+                    '+ Create new detection rule' +
                 '</div>';
         }
 
         if (!rules.length) {
-            var typed = ($ruleSearch.val() || "").trim();
-            if (typed && canCreateRules) {
-                $ruleList.html(
-                    createBtn +
-                    '<div class="wl-dropdown-item wl-dropdown-create-rule" data-value="' +
-                        _.escape(typed) + '" style="font-style:italic;color:var(--wl-link)">' +
-                        'Use "<strong>' + _.escape(typed) + '</strong>" as new rule' +
-                    '</div>' +
-                    '<div class="wl-dropdown-no-match">No other matching rules</div>'
-                );
-            } else {
-                $ruleList.html(
-                    createBtn +
-                    '<div class="wl-dropdown-no-match">No matching rules</div>'
-                );
-            }
+            $ruleList.html(
+                createBtn +
+                '<div class="wl-dropdown-no-match">No matching rules</div>'
+            );
             return;
         }
         var html = createBtn;
@@ -730,6 +740,8 @@ require([
 
     $ruleClear.on("click", function () {
         selectedRule = "";
+        selectedCsv = "";
+        selectedApp = "";
         $ruleSearch.val("");
         $ruleClear.hide();
         renderRuleList(allRules);
@@ -737,8 +749,7 @@ require([
         csvDisabled = true;
         $csvDisplay.text("-- Select a Detection Rule first --").addClass("wl-disabled");
         $csvList.empty().removeClass("wl-open");
-        selectedCsv = "";
-        selectedApp = "";
+        updateUrlParams();
         stopChangeMonitoring();
         loadedMtime = null;
         loadedPendingCount = 0;
@@ -759,11 +770,14 @@ require([
     }
 
     function selectRule(rule, preferCsv) {
+        if (!rule) { return; }
         selectedRule = rule;
+        selectedCsv = "";
         $ruleSearch.val(rule);
         $ruleClear.show();
         renderRuleList(allRules);
         clearUndo();
+        updateUrlParams();
 
         var csvEntries = mappingData.filter(function (m) {
             return m.rule_name === rule;
@@ -818,7 +832,7 @@ require([
         if (canCreateCsv) {
             html += '<div class="wl-dropdown-item wl-dropdown-create-csv" ' +
                     'style="border-bottom:1px solid var(--wl-border);' +
-                    'font-style:italic;color:var(--wl-link)">+ Create new CSV\u2026</div>';
+                    'font-style:italic;color:var(--wl-link)">+ Create new CSV</div>';
         }
         entries.forEach(function (entry) {
             var cls = "wl-dropdown-item";
@@ -883,6 +897,17 @@ require([
         if (csv) { showRemoveModal("csv", csv, rule); }
     });
 
+    // Keep the URL in sync with current selection (no page reload)
+    function updateUrlParams() {
+        var params = new URLSearchParams(window.location.search);
+        if (selectedRule) { params.set("rule", selectedRule); } else { params.delete("rule"); }
+        if (selectedCsv) { params.set("csv", selectedCsv); } else { params.delete("csv"); }
+        var newUrl = window.location.pathname;
+        var qs = params.toString();
+        if (qs) { newUrl += "?" + qs; }
+        window.history.replaceState(null, "", newUrl);
+    }
+
     function onCsvSelected(csvFile, appCtx) {
         // Save current column widths before switching
         if (selectedCsv && Object.keys(colWidths).length) {
@@ -895,6 +920,7 @@ require([
         selectedApp = appCtx || "";
         colWidths = allColWidths[selectedCsv] ? $.extend({}, allColWidths[selectedCsv]) : {};
         clearUndo();
+        updateUrlParams();
         // Update selected highlight in dropdown
         $csvList.find(".wl-csv-item").removeClass("wl-selected");
         $csvList.find(".wl-csv-item").filter(function () {
@@ -912,6 +938,11 @@ require([
     $table.on("click", "#wl-create-csv-btn", function () {
         if (!selectedRule) { return; }
         showCreateCsvModal(selectedRule);
+    });
+
+    // "Back to Whitelist Manager" button on invalid URL param error
+    $table.on("click", "#wl-go-home", function () {
+        window.location.href = window.location.pathname;
     });
 
     // ══════════════════════════════════════════════════════════════════
@@ -6339,6 +6370,41 @@ require([
     // Initialization
     // ══════════════════════════════════════════════════════════════════
     loadRules();
+
+    // Auto-refresh when a create_csv or create_rule approval comes through
+    // for the currently selected rule (so analyst doesn't need to reload).
+    var _seenApprovalIds = {};
+    var _notifFirstPoll = true;
+    window.__wlNotifCallbacks = window.__wlNotifCallbacks || [];
+    window.__wlNotifCallbacks.push(function (notifs) {
+        if (_notifFirstPoll) {
+            // Seed with all existing notifications so we only react to NEW ones
+            notifs.forEach(function (n) { _seenApprovalIds[n.id] = true; });
+            _notifFirstPoll = false;
+            return;
+        }
+        var needsRefresh = false;
+        notifs.forEach(function (n) {
+            if (_seenApprovalIds[n.id]) return;
+            _seenApprovalIds[n.id] = true;
+            if (n.type !== "approved" && n.type !== "cancelled") return;
+            var actionType = n.action_type || "";
+            var relevant = ["create_csv", "create_rule", "remove_csv", "remove_rule"];
+            if (relevant.indexOf(actionType) === -1) return;
+            needsRefresh = true;
+        });
+        if (needsRefresh) {
+            var ruleToRefresh = selectedRule;
+            loadRules();
+            if (ruleToRefresh) {
+                setTimeout(function () {
+                    if (selectedRule === ruleToRefresh) {
+                        selectRule(ruleToRefresh);
+                    }
+                }, 500);
+            }
+        }
+    });
 
     // Start presence monitoring whenever CSV is loaded
     var origLoadCsv = loadCsv;

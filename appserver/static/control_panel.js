@@ -206,8 +206,22 @@ require([
         $("#wl-cp-content").show();
         initControlPanel(data.queue || []);
     })
-    .fail(function () {
-        showAccessDenied();
+    .fail(function (xhr) {
+        // Distinguish authorization failure from transient errors.
+        // 403 = access denied (user lacks admin role)
+        // Anything else = network/server issue — don't lock out admins
+        if (xhr && (xhr.status === 403 || xhr.status === 401)) {
+            showAccessDenied();
+        } else {
+            $("#wl-cp-loading").html(
+                '<div style="padding:20px;color:#ffc107;text-align:center;">' +
+                '<p style="font-size:18px;font-weight:bold;">Error loading Control Panel</p>' +
+                '<p>The server may be restarting or temporarily unavailable. ' +
+                'Please try refreshing the page.</p>' +
+                '<span class="wl-btn wl-btn-primary" style="margin-top:10px;' +
+                'cursor:pointer;" onclick="location.reload()">Refresh</span></div>'
+            );
+        }
     });
 
     // ══════════════════════════════════════════════════════════════════
