@@ -1577,7 +1577,7 @@ def _get_pending_for_csv(csv_file):
     """Return pending approval items for a specific CSV file."""
     queue = _expire_pending_approvals()
     return [item for item in queue
-            if item["csv_file"] == csv_file and item["status"] == "pending"]
+            if item.get("csv_file") == csv_file and item.get("status") == "pending"]
 
 
 def _count_nonempty_cells(rows, col_name):
@@ -2093,7 +2093,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                         "action": "auto_removed",
                         "removed_row_count": auto_removed_count,
                         "value": value_lines,
-                        "remove_reason": "Expired",
+                        "row_remove_reason": "Expired",
                     }
                     _logger.info("Auto-removed %d expired rows from %s, indexing audit event", auto_removed_count, csv_file)
                     self._index_audit(request, evt)
@@ -2641,9 +2641,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     except (ValueError, TypeError):
                         return self._resp(400, {
                             "error": "{} must be an integer".format(key)})
-                    if val < 0 or val > 9999:
+                    if val < 0 or val > 100:
                         return self._resp(400, {
-                            "error": "{} must be 0-9999".format(key)})
+                            "error": "{} must be 0-100".format(key)})
                     old_values[key] = admin_cfg.get(key,
                         DEFAULT_ADMIN_LIMITS.get(key, 0))
                     admin_cfg[key] = val
@@ -2909,10 +2909,19 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             return self._resp(400, {
                 "error": "At least one non-empty column header is required"
             })
-        if len(headers) > MAX_COLUMNS:
+        # Block user-created "_" prefix columns (reserved for internal metadata)
+        for h in headers:
+            if h.startswith("_"):
+                return self._resp(400, {
+                    "error": "Column names starting with '_' are reserved "
+                             "for internal use. Rename '{}' to remove the "
+                             "underscore prefix.".format(h)
+                })
+        visible_headers = [h for h in headers if not h.startswith("_")]
+        if len(visible_headers) > MAX_COLUMNS:
             return self._resp(400, {
                 "error": "Too many columns: {} (max {})".format(
-                    len(headers), MAX_COLUMNS)
+                    len(visible_headers), MAX_COLUMNS)
             })
         # Check for duplicate headers, length, and dangerous chars
         seen = set()
@@ -3559,10 +3568,25 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 "error": "Row limit exceeded: {} rows submitted, maximum is {}."
                          .format(len(new_rows), MAX_ROWS)
             })
-        if len(new_headers) > MAX_COLUMNS:
+
+        # Block user-created columns starting with "_" — reserved for
+        # internal metadata (_added_by, _added_at, _review_status).
+        # Without this check, a user could bypass column limits and
+        # hide data from diffs/audits by using "_" prefixed names.
+        INTERNAL_COLUMNS = {"_added_by", "_added_at", "_review_status"}
+        for h in new_headers:
+            if h.startswith("_") and h not in INTERNAL_COLUMNS:
+                return self._resp(400, {
+                    "error": "Column names starting with '_' are reserved "
+                             "for internal use. Rename '{}' to remove the "
+                             "underscore prefix.".format(h)
+                })
+
+        visible_new_headers = [h for h in new_headers if not h.startswith("_")]
+        if len(visible_new_headers) > MAX_COLUMNS:
             return self._resp(400, {
                 "error": "Column limit exceeded: {} columns submitted, maximum is {}."
-                         .format(len(new_headers), MAX_COLUMNS)
+                         .format(len(visible_new_headers), MAX_COLUMNS)
             })
 
         # ── Validate and sanitize cell values ───────────────────────
@@ -4040,7 +4064,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 "action": "row_removed_multiple" if diff["removed_count"] > 1 else "row_removed",
                 "removed_row_count": diff["removed_count"],
                 "value": removed_values,
-                "remove_reason": bulk_reason,
+                "row_remove_reason": bulk_reason,
                 "removed_by": user,
                 "removed_at": ts,
             })
@@ -4058,7 +4082,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 "action": "row_removed",
                 "removed_row_count": diff["removed_count"],
                 "value": removed_values,
-                "remove_reason": single_reason,
+                "row_remove_reason": single_reason,
                 "removed_by": user,
                 "removed_at": ts,
             })
@@ -4088,7 +4112,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 "action": "row_edited",
                 "edited_row_count": diff["edited_count"],
                 "value": edit_value_lines,
-                "comment": edit_comment,
+                "row_edit_reason": edit_comment,
                 "edited_by": user,
                 "edited_at": ts,
             })
@@ -4114,7 +4138,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 "column_count": len(diff["removed_columns"]),
                 "columns": diff["removed_columns"],
                 "value": value_lines,
-                "remove_reason": col_reason,
+                "column_remove_reason": col_reason,
                 "changed_by": user,
                 "changed_at": ts,
             })
@@ -4169,28 +4193,28 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             self._index_audit(request, evt)
 
         # ── Increment daily limit counters (by actual change count) ───
-        # Skip for approval replays — the admin took responsibility by
-        # approving, and the limit was already checked at submission time.
-        # Incrementing days later would charge the wrong period.
-        if not _from_approval:
-            for limit_action in limit_actions:
-                if limit_action == "bulk_row_removal":
-                    actual_count = diff.get("removed_count", 1)
-                elif limit_action == "row_removal":
-                    actual_count = diff.get("removed_count", 1)
-                elif limit_action == "column_removal":
-                    actual_count = len(column_removal_reasons) or 1
-                elif limit_action == "bulk_row_edit":
-                    actual_count = diff.get("edited_count", 1)
-                elif limit_action == "row_edit":
-                    actual_count = diff.get("edited_count", 1)
-                elif limit_action == "row_addition":
-                    actual_count = diff.get("added_count", 1)
-                elif limit_action == "column_addition":
-                    actual_count = len(diff.get("added_columns", [])) or 1
-                else:
-                    actual_count = 1
-                _increment_daily_limit(user, limit_action, count=actual_count)
+        # Always increment for usage tracking visibility, even for
+        # approval replays.  The limit CHECK is already skipped for
+        # replays and admins (line ~3846), but usage must be recorded
+        # so Analyst Usage dashboard reflects all activity accurately.
+        for limit_action in limit_actions:
+            if limit_action == "bulk_row_removal":
+                actual_count = diff.get("removed_count", 1)
+            elif limit_action == "row_removal":
+                actual_count = diff.get("removed_count", 1)
+            elif limit_action == "column_removal":
+                actual_count = len(column_removal_reasons) or 1
+            elif limit_action == "bulk_row_edit":
+                actual_count = diff.get("edited_count", 1)
+            elif limit_action == "row_edit":
+                actual_count = diff.get("edited_count", 1)
+            elif limit_action == "row_addition":
+                actual_count = diff.get("added_count", 1)
+            elif limit_action == "column_addition":
+                actual_count = len(diff.get("added_columns", [])) or 1
+            else:
+                actual_count = 1
+            _increment_daily_limit(user, limit_action, count=actual_count)
 
         return self._resp(200, {
             "message": "CSV saved successfully",
@@ -4534,7 +4558,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         """Extract user-provided reason fields from a stored approval payload.
 
         Returns a dict with the appropriate reason fields based on action type:
-          bulk_row_removal / column_removal → remove_reason
+          bulk_row_removal / column_removal → row_remove_reason / column_remove_reason
           bulk_row_addition                 → row_add_reason
           revert                            → revert_reason
         """
@@ -4544,14 +4568,14 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if action_type == "bulk_row_removal":
             br = stored_payload.get("bulk_removal", [])
             if br and isinstance(br, list) and len(br) > 0:
-                reasons["remove_reason"] = br[0].get("reason", "")[:500]
+                reasons["row_remove_reason"] = br[0].get("reason", "")[:500]
         elif action_type == "bulk_row_addition":
             reasons["row_add_reason"] = stored_payload.get(
                 "row_add_reason", "")[:500]
         elif action_type == "column_removal":
             cr = stored_payload.get("column_removal_reasons", [])
             if cr and isinstance(cr, list) and len(cr) > 0:
-                reasons["remove_reason"] = cr[0].get("reason", "")[:500]
+                reasons["row_remove_reason"] = cr[0].get("reason", "")[:500]
         elif action_type == "revert":
             reasons["revert_reason"] = stored_payload.get(
                 "revert_reason", "")[:500]
@@ -4646,7 +4670,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                                      detection_rule)
                     })
             else:
-                if item["csv_file"] == csv_file:
+                if item.get("csv_file") == csv_file:
                     return self._resp(409, {
                         "error": "You already have a pending {} request "
                                  "for this CSV. "
@@ -4716,6 +4740,26 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     payload_size / (1024 * 1024))
             })
 
+        # ── Sanitize text fields inside original_payload ──────────────
+        # The original_payload is stored as-is for replay, but reason
+        # fields displayed in the UI must be sanitized to prevent
+        # injection of misleading text or unsanitized characters.
+        if "comment" in original_payload:
+            original_payload["comment"] = _sanitize_text(
+                original_payload.get("comment", ""))
+        if "revert_reason" in original_payload:
+            original_payload["revert_reason"] = _sanitize_text(
+                original_payload.get("revert_reason", ""))
+        if "row_add_reason" in original_payload:
+            original_payload["row_add_reason"] = _sanitize_text(
+                original_payload.get("row_add_reason", ""))
+        for cr in original_payload.get("column_removal_reasons", []):
+            if isinstance(cr, dict) and "reason" in cr:
+                cr["reason"] = _sanitize_text(cr.get("reason", ""))
+        for br in original_payload.get("bulk_removal", []):
+            if isinstance(br, dict) and "reason" in br:
+                br["reason"] = _sanitize_text(br.get("reason", ""))
+
         # ── Validate pending_highlight.row_keys size ─────────────────
         pending_highlight = payload.get("pending_highlight", {})
         if isinstance(pending_highlight, dict):
@@ -4728,6 +4772,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         else:
             pending_highlight = {}
 
+        comment = _sanitize_text(payload.get("comment", ""))
+
         entry = {
             "request_id": request_id,
             "timestamp": int(time.time()),
@@ -4737,6 +4783,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "detection_rule": payload.get("detection_rule", ""),
             "action_type": action_type,
             "description": description,
+            "comment": comment,
             "status": "pending",
             "payload": original_payload,
             "expected_mtime": payload.get("expected_mtime"),
@@ -5746,6 +5793,84 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         elif action_type == "bulk_row_edit":
             edit_col = stored_payload.get("bulk_edit_column", "")
             edit_val = stored_payload.get("bulk_edit_value", "")
+
+            # Inline multi-row edits don't have a bulk_edit_column — they
+            # store the full modified rows.  Replay as a full save_csv.
+            if not edit_col and stored_payload.get("rows"):
+                replay_payload = dict(stored_payload)
+                replay_payload["_from_approval"] = True
+                replay_payload["_approval_request_id"] = request_id
+                replay_payload["_bulk_edit_count"] = stored_payload.get(
+                    "_bulk_edit_count", 0)
+                result = self._save_csv(
+                    request, replay_payload, target["analyst"],
+                    _from_approval=True)
+                resp_body = json.loads(result.get("payload", "{}"))
+                if resp_body.get("error"):
+                    target["status"] = "failed"
+                    target["resolved_by"] = admin_user
+                    target["resolved_at"] = now
+                    target["rejection_reason"] = resp_body["error"]
+                    _write_approval_queue(queue)
+                    return result
+
+                # Fix counter: the diff at replay time may misclassify
+                # edits as adds due to similarity drift.  Use the
+                # submitted edit count (what the analyst actually did)
+                # to correct the usage counters.
+                submitted_count = stored_payload.get(
+                    "_bulk_edit_count", 0)
+                if submitted_count:
+                    replay_diff = resp_body.get("diff", {})
+                    drift_adds = replay_diff.get("added_count", 0)
+                    drift_edits = replay_diff.get("edited_count", 0)
+                    # If diff split edits into adds+edits, correct it:
+                    # undo the wrong counters and set the right one
+                    if drift_adds > 0 and (drift_adds + drift_edits) > 0:
+                        analyst = target["analyst"]
+                        # Undo the misclassified add counter
+                        _increment_daily_limit(
+                            analyst, "row_addition",
+                            count=-drift_adds)
+                        # Undo the partial edit counter
+                        if drift_edits > 0:
+                            _increment_daily_limit(
+                                analyst, "bulk_row_edit",
+                                count=-drift_edits)
+                        # Set the correct total as bulk_row_edit
+                        _increment_daily_limit(
+                            analyst, "bulk_row_edit",
+                            count=submitted_count)
+
+                target["status"] = "approved"
+                target["resolved_by"] = admin_user
+                target["resolved_at"] = now
+                target["admin_comment"] = admin_comment if admin_comment \
+                    else "Approved"
+                _write_approval_queue(queue)
+                _add_notification(
+                    target["analyst"], "approved",
+                    "Your {} request was approved by {}".format(
+                        action_type.replace("_", " "), admin_user),
+                    request_id,
+                    extra={"action_type": action_type,
+                           "detection_rule": target.get("detection_rule", ""),
+                           "csv_file": csv_file})
+                self._index_audit(request, {
+                    "timestamp": now, "analyst": admin_user,
+                    "action": "request_approved", "status": "approved",
+                    "detection_rule": target.get("detection_rule", ""),
+                    "csv_file": csv_file,
+                    "request_id": request_id,
+                    "requester": target["analyst"],
+                    "approval_action_type": action_type,
+                    "edited_row_count": submitted_count or
+                        resp_body.get("diff", {}).get("edited_count", 0),
+                    "comment": "{} approved inline multi-edit by {}".format(
+                        admin_user, target["analyst"]),
+                })
+                return result
+
             lock_h = hl.get("headers") or [
                 h for h in cur_headers if not h.startswith("_")
             ]
@@ -6377,7 +6502,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         for key in LIMIT_KEYS:
             if key in new_limits:
                 val = new_limits[key]
-                if isinstance(val, int) and 0 <= val <= 1000:
+                if isinstance(val, int) and 0 <= val <= 100:
                     config[key] = val
         for key in BOOL_KEYS:
             if key in new_limits:
@@ -6677,7 +6802,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if today not in counters:
             return self._resp(200, {"message": "No usage to reset."})
 
-        if analyst:
+        if analyst and analyst != "all":
             if analyst in counters[today]:
                 del counters[today][analyst]
                 _write_daily_limits(counters)

@@ -3253,7 +3253,7 @@ require([
         var originalPayload = {};
 
         if (actionType === "bulk_row_removal") {
-            description = "Remove " + rowIndices.length + " selected rows";
+            description = reason || "Remove " + rowIndices.length + " selected rows";
             var visHeaders = currentHeaders.filter(function (h) { return h.charAt(0) !== "_"; });
             var rowKeys = rowIndices.map(function (idx) {
                 return visHeaders.map(function (h) { return currentRows[idx][h] || ""; });
@@ -3294,7 +3294,7 @@ require([
                 addedRowKeys.push(visHeadersAdd.map(function (h) { return currentRows[ai][h] || ""; }));
             }
             highlight = { type: "rows", row_keys: addedRowKeys, headers: visHeadersAdd };
-            description = "Add " + addedCount + " new rows";
+            description = reason || "Add " + addedCount + " new rows";
             originalPayload = {
                 action: "save_csv",
                 csv_file: selectedCsv,
@@ -3307,7 +3307,7 @@ require([
                 removal_reasons: []
             };
         } else if (actionType === "column_removal") {
-            description = "Remove column '" + colName + "'";
+            description = reason || "Remove column '" + colName + "'";
             highlight = { type: "column", column_name: colName };
 
             var headersCopy = currentHeaders.slice();
@@ -3325,7 +3325,7 @@ require([
                 detection_rule: selectedRule || "",
                 headers: headersCopy,
                 rows: rowsCopyCol,
-                comment: "Column removal - approved",
+                comment: reason || "Column removal - approved",
                 removal_reasons: [],
                 column_removal_reasons: [{ column: colName, reason: reason }]
             };
@@ -3350,6 +3350,7 @@ require([
             app_context: selectedApp,
             detection_rule: selectedRule || "",
             description: description,
+            comment: reason || "",
             original_payload: originalPayload,
             expected_mtime: loadedMtime,
             pending_highlight: highlight,
@@ -3469,6 +3470,54 @@ require([
         })
         .fail(function (xhr) {
             var err = "Failed to submit bulk edit approval.";
+            try { err = JSON.parse(xhr.responseText).error || err; } catch (e) {}
+            showMsg(_.escape(err), "error");
+        });
+    }
+
+    function submitInlineMultiEditApproval(changedCount, reason) {
+        syncInputs();
+        var autoDesc = "Inline edit of " + changedCount + " rows in " +
+            (selectedCsv || "unknown CSV");
+
+        showMsg("Submitting edit approval request&hellip;", "info");
+
+        restPost({
+            action: "submit_approval",
+            approval_action_type: "bulk_row_edit",
+            csv_file: selectedCsv,
+            app_context: selectedApp,
+            detection_rule: selectedRule || "",
+            description: reason || autoDesc,
+            comment: reason,
+            original_payload: {
+                action: "save_csv",
+                csv_file: selectedCsv,
+                app_context: selectedApp,
+                detection_rule: selectedRule || "",
+                headers: currentHeaders,
+                rows: currentRows,
+                comment: reason || ("Inline multi-edit (" + changedCount + " rows) - approved"),
+                _bulk_edit_count: changedCount
+            },
+            expected_mtime: loadedMtime,
+            selected_count: changedCount
+        })
+        .done(function (data) {
+            if (data.error) {
+                showMsg(_.escape(data.error), "error");
+                return;
+            }
+            showMsg(
+                "Edit requires approval. Your request has been submitted. " +
+                "Request ID: <strong>" + _.escape(data.request_id) + "</strong>",
+                "success"
+            );
+            // Revert local edits since they're pending approval
+            loadCsv(selectedCsv, selectedApp);
+        })
+        .fail(function (xhr) {
+            var err = "Failed to submit edit approval.";
             try { err = JSON.parse(xhr.responseText).error || err; } catch (e) {}
             showMsg(_.escape(err), "error");
         });
@@ -3608,16 +3657,16 @@ require([
                 var reason = extractApprovalReason(pa);
                 var hl = pa.pending_highlight || {};
                 var hasRowHighlight = (hl.type === "rows" && hl.row_keys && hl.row_keys.length > 0);
+                // Use comment (user's typed reason) or description, avoid duplication
+                var displayReason = pa.comment || pa.description || "";
                 var descTitle = pa.action_type.replace(/_/g, " ") +
-                    ' by ' + pa.analyst + ' — ' + pa.description +
-                    (reason ? ' — Reason: ' + reason : '');
+                    ' by ' + pa.analyst + ' — ' + displayReason;
                 barHtml +=
                     '<div class="wl-approval-item">' +
                         '<span class="wl-approval-desc" title="' + _.escape(descTitle) + '">' +
                             '<strong>' + _.escape(pa.action_type.replace(/_/g, " ")) + '</strong>' +
                             ' by ' + _.escape(pa.analyst) +
-                            ' &mdash; ' + _.escape(pa.description) +
-                            (reason ? ' &mdash; Reason: <em>' + _.escape(reason) + '</em>' : '') +
+                            ' &mdash; ' + _.escape(displayReason) +
                         '</span>' +
                         (isSelfRequest
                             ? '<span class="btn btn-warning wl-cancel-request-btn" data-id="' +
@@ -4063,7 +4112,7 @@ require([
             detection_rule:  selectedRule || "",
             headers:         currentHeaders,
             rows:            currentRows,
-            comment:         "Column removal",
+            comment:         reason || "Column removal",
             removal_reasons: [],
             column_removal_reasons: [{ column: colName, reason: reason }],
             expected_mtime:  loadedMtime
@@ -5276,13 +5325,15 @@ require([
             needsGateCheck = true;
             gateAction = "bulk_row_addition";
             gateCount = addedCount;
-        } else if (editedCount > 0 && pendingBulkEditCount > 0) {
-            // Edits from Bulk Edit feature — check bulk_row_edit gate + limit
+        } else if (editedCount >= 2) {
+            // 2+ row edits = bulk edit (matches server-side is_bulk_edit
+            // = edited_count >= 2) — check bulk_row_edit gate + limit
+            // regardless of whether the Bulk Edit button was used
             needsGateCheck = true;
             gateAction = "bulk_row_edit";
             gateCount = editedCount;
         } else if (editedCount > 0) {
-            // Inline edits only need a daily limit check, not approval
+            // Single inline edit — daily limit check only, no approval gate
             needsGateCheck = true;
             gateAction = "inline_row_edit";
             gateCount = editedCount;
@@ -5310,9 +5361,9 @@ require([
                             if (gateAction === "bulk_row_addition") {
                                 submitApprovalRequest("bulk_row_addition", reason, null, null);
                             } else if (gateAction === "bulk_row_edit") {
-                                // Bulk edit approval uses its dedicated function
-                                // (already handled in the Bulk Edit modal flow)
-                                submitBulkEditApproval(null, null, [], gateCount, reason);
+                                // Submit full save payload for approval
+                                // (inline multi-row edits don't have a single col/val)
+                                submitInlineMultiEditApproval(gateCount, reason);
                             }
                         },
                         {
@@ -5484,42 +5535,241 @@ require([
         var html = '<div class="wl-diff">';
         html += "<h4>Change Summary</h4>";
 
-        if (diff.added && diff.added.length) {
-            html += '<div class="wl-diff-section wl-diff-added">';
-            html += "<h5>Added (" + diff.added.length + " row" + (diff.added.length > 1 ? "s" : "") + ")</h5><ul>";
-            diff.added.forEach(function (row) {
-                html += "<li>" + _.escape(JSON.stringify(row)) + "</li>";
-            });
-            html += "</ul></div>";
+        // ── Stats bar ────────────────────────────────────────────
+        var stats = [];
+        if (diff.added_count) stats.push(
+            '<span style="color:var(--wl-diff-add)">+' + diff.added_count + ' added</span>');
+        if (diff.removed_count) stats.push(
+            '<span style="color:var(--wl-diff-rm)">&minus;' + diff.removed_count + ' removed</span>');
+        if (diff.edited_count) stats.push(
+            '<span style="color:var(--wl-accent,#2962ff)">' + diff.edited_count + ' edited</span>');
+        if (diff.added_columns && diff.added_columns.length) stats.push(
+            '<span style="color:var(--wl-diff-add)">+' + diff.added_columns.length + ' column(s)</span>');
+        if (diff.removed_columns && diff.removed_columns.length) stats.push(
+            '<span style="color:var(--wl-diff-rm)">&minus;' + diff.removed_columns.length + ' column(s)</span>');
+        if (stats.length) {
+            html += '<div style="margin-bottom:12px;font-size:13px">' + stats.join(' &nbsp;&bull;&nbsp; ') + '</div>';
         }
 
-        if (diff.removed && diff.removed.length) {
-            html += '<div class="wl-diff-section wl-diff-removed">';
-            html += "<h5>Removed (" + diff.removed.length + " row" + (diff.removed.length > 1 ? "s" : "") + ")</h5><ul>";
-            diff.removed.forEach(function (row) {
-                html += "<li>" + _.escape(JSON.stringify(row)) + "</li>";
+        // ── Column changes (badges) ──────────────────────────────
+        if ((diff.added_columns && diff.added_columns.length) ||
+            (diff.removed_columns && diff.removed_columns.length)) {
+            html += '<div class="wl-diff-section"><h5>Column Changes</h5><div>';
+            (diff.added_columns || []).forEach(function (col) {
+                html += '<span class="wl-diff-col-badge wl-diff-col-add">+ ' + _.escape(col) + '</span>';
             });
-            html += "</ul></div>";
+            (diff.removed_columns || []).forEach(function (col) {
+                html += '<span class="wl-diff-col-badge wl-diff-col-rm">&minus; ' + _.escape(col) + '</span>';
+            });
+            html += '</div></div>';
         }
 
-        if (diff.text_diff && diff.text_diff.length) {
-            html += '<div class="wl-diff-section"><h5>Unified Diff</h5><pre class="wl-diff-pre">';
-            diff.text_diff.forEach(function (line) {
-                var cls = "";
-                if (line.charAt(0) === "+" && line.charAt(1) !== "+") {
-                    cls = "wl-diff-line-add";
-                } else if (line.charAt(0) === "-" && line.charAt(1) !== "-") {
-                    cls = "wl-diff-line-rm";
-                } else if (line.charAt(0) === "@") {
-                    cls = "wl-diff-line-info";
+        // ── Edited rows (side-by-side) ───────────────────────────
+        var DIFF_MAX_ROWS = 10;     // show detail for first N edits
+        var DIFF_MAX_COLS = 8;      // max columns per pane (key + changed + context)
+
+        if (diff.edited && diff.edited.length) {
+            var totalEdited = diff.edited.length;
+            var showCount = Math.min(totalEdited, DIFF_MAX_ROWS);
+
+            html += '<div class="wl-diff-section">';
+            html += '<h5>Edited Rows (' + totalEdited + ')';
+            if (totalEdited > showCount) {
+                html += ' <span style="font-weight:normal;color:var(--wl-muted,#888)">' +
+                    '— showing first ' + showCount + '</span>';
+            }
+            html += '</h5>';
+
+            // Container for expandable rows
+            html += '<div id="wl-diff-edited-detail">';
+
+            diff.edited.slice(0, showCount).forEach(function (edit, idx) {
+                var oldRow = edit.old_row || {};
+                var newRow = edit.new_row || {};
+                var changedFields = edit.changed_fields || [];
+                var changes = {};
+                changedFields.forEach(function (cf) {
+                    changes[cf.field] = true;
+                });
+                var rowNum = edit.row_num || edit.old_row_num || (idx + 1);
+
+                // Smart column selection: show key col + changed cols + context
+                var allHeaders = [];
+                var seen = {};
+                [oldRow, newRow].forEach(function (r) {
+                    Object.keys(r).forEach(function (k) {
+                        if (!k.startsWith("_") && !seen[k]) {
+                            seen[k] = true;
+                            allHeaders.push(k);
+                        }
+                    });
+                });
+
+                var changedKeys = Object.keys(changes);
+                var displayHeaders;
+                var truncatedCols = false;
+
+                if (allHeaders.length <= DIFF_MAX_COLS) {
+                    // Few columns — show all
+                    displayHeaders = allHeaders;
+                } else {
+                    // Many columns — show key column + changed columns + fill up to max
+                    displayHeaders = [];
+                    var keyCol = allHeaders[0]; // first column = identifier
+                    displayHeaders.push(keyCol);
+                    changedKeys.forEach(function (ck) {
+                        if (ck !== keyCol && displayHeaders.length < DIFF_MAX_COLS) {
+                            displayHeaders.push(ck);
+                        }
+                    });
+                    // Fill remaining slots with unchanged columns for context
+                    allHeaders.forEach(function (h) {
+                        if (displayHeaders.indexOf(h) === -1 &&
+                            displayHeaders.length < DIFF_MAX_COLS) {
+                            displayHeaders.push(h);
+                        }
+                    });
+                    truncatedCols = allHeaders.length > displayHeaders.length;
                 }
-                html += '<span class="' + cls + '">' + _.escape(line) + "</span>\n";
+
+                html += '<div class="wl-diff-sbs">';
+
+                // Before pane
+                html += '<div class="wl-diff-pane wl-diff-pane-before">';
+                html += '<div class="wl-diff-pane-header">Before (Row ' + rowNum + ')';
+                if (truncatedCols) {
+                    html += ' <span style="font-weight:normal;font-size:11px;opacity:0.7">' +
+                        '— ' + changedKeys.length + ' changed of ' +
+                        allHeaders.length + ' columns</span>';
+                }
+                html += '</div>';
+                html += '<table><thead><tr>';
+                displayHeaders.forEach(function (h) {
+                    html += '<th>' + _.escape(h) + '</th>';
+                });
+                html += '</tr></thead><tbody><tr>';
+                displayHeaders.forEach(function (h) {
+                    var cls = changes[h] ? ' class="wl-diff-cell-changed"' : '';
+                    html += '<td' + cls + '>' + _.escape(oldRow[h] || '') + '</td>';
+                });
+                html += '</tr></tbody></table></div>';
+
+                // After pane
+                html += '<div class="wl-diff-pane wl-diff-pane-after">';
+                html += '<div class="wl-diff-pane-header">After (Row ' + rowNum + ')';
+                if (truncatedCols) {
+                    html += ' <span style="font-weight:normal;font-size:11px;opacity:0.7">' +
+                        '— ' + changedKeys.length + ' changed of ' +
+                        allHeaders.length + ' columns</span>';
+                }
+                html += '</div>';
+                html += '<table><thead><tr>';
+                displayHeaders.forEach(function (h) {
+                    html += '<th>' + _.escape(h) + '</th>';
+                });
+                html += '</tr></thead><tbody><tr>';
+                displayHeaders.forEach(function (h) {
+                    var cls = changes[h] ? ' class="wl-diff-cell-changed"' : '';
+                    html += '<td' + cls + '>' + _.escape(newRow[h] || '') + '</td>';
+                });
+                html += '</tr></tbody></table></div>';
+
+                html += '</div>'; // .wl-diff-sbs
             });
-            html += "</pre></div>";
+
+            html += '</div>'; // #wl-diff-edited-detail
+
+            // Collapsed rows summary
+            if (totalEdited > showCount) {
+                var remaining = totalEdited - showCount;
+                html += '<div id="wl-diff-edited-collapsed" style="margin-top:8px">';
+                html += '<div style="padding:8px 12px;background:var(--wl-bg-row,#23272b);' +
+                    'border:1px solid var(--wl-border,#444);border-radius:4px;font-size:12px;' +
+                    'color:var(--wl-muted,#888)">';
+                html += '<span id="wl-diff-expand-btn" style="cursor:pointer;' +
+                    'color:var(--wl-accent,#2962ff);text-decoration:underline">' +
+                    'Show ' + remaining + ' more edited row' +
+                    (remaining > 1 ? 's' : '') + '</span>';
+                html += ' (compact summary)';
+                html += '</div>';
+                // Pre-build compact summary for collapsed rows
+                html += '<div id="wl-diff-edited-expanded" style="display:none;margin-top:6px">';
+                html += '<table class="wl-table" style="font-size:11px;width:100%">';
+                html += '<thead><tr><th>Row</th><th>Changed Fields</th><th>Before → After</th></tr></thead>';
+                html += '<tbody>';
+                diff.edited.slice(showCount).forEach(function (edit) {
+                    var rn = edit.row_num || edit.old_row_num || "?";
+                    html += '<tr><td>' + rn + '</td>';
+                    var fieldChanges = (edit.changed_fields || []).map(function (cf) {
+                        return _.escape(cf.field);
+                    }).join(", ");
+                    html += '<td>' + fieldChanges + '</td>';
+                    var valueChanges = (edit.changed_fields || []).slice(0, 3).map(function (cf) {
+                        return '<span style="color:var(--wl-diff-rm)">' +
+                            _.escape((cf.before || "").substring(0, 30)) + '</span>' +
+                            ' → <span style="color:var(--wl-diff-add)">' +
+                            _.escape((cf.after || "").substring(0, 30)) + '</span>';
+                    }).join("; ");
+                    if ((edit.changed_fields || []).length > 3) {
+                        valueChanges += " +" + ((edit.changed_fields || []).length - 3) + " more";
+                    }
+                    html += '<td>' + valueChanges + '</td></tr>';
+                });
+                html += '</tbody></table></div>';
+                html += '</div>';
+            }
+
+            html += '</div>';
+        }
+
+        // ── Added rows ───────────────────────────────────────────
+        if (diff.added && diff.added.length) {
+            html += '<div class="wl-diff-section">';
+            html += '<h5 style="color:var(--wl-diff-add)">Added Rows (' + diff.added.length + ')</h5>';
+            html += '<ul class="wl-diff-row-list">';
+            diff.added.forEach(function (row) {
+                var parts = [];
+                Object.keys(row).forEach(function (k) {
+                    if (!k.startsWith("_") && row[k]) {
+                        parts.push(_.escape(k) + ': ' + _.escape(row[k]));
+                    }
+                });
+                html += '<li class="wl-diff-row-add">' + parts.join(' &nbsp;|&nbsp; ') + '</li>';
+            });
+            html += '</ul></div>';
+        }
+
+        // ── Removed rows ─────────────────────────────────────────
+        if (diff.removed && diff.removed.length) {
+            html += '<div class="wl-diff-section">';
+            html += '<h5 style="color:var(--wl-diff-rm)">Removed Rows (' + diff.removed.length + ')</h5>';
+            html += '<ul class="wl-diff-row-list">';
+            diff.removed.forEach(function (row) {
+                var parts = [];
+                Object.keys(row).forEach(function (k) {
+                    if (!k.startsWith("_") && row[k]) {
+                        parts.push(_.escape(k) + ': ' + _.escape(row[k]));
+                    }
+                });
+                html += '<li class="wl-diff-row-rm">' + parts.join(' &nbsp;|&nbsp; ') + '</li>';
+            });
+            html += '</ul></div>';
         }
 
         html += "</div>";
         $diff.html(html);
+
+        // Expand handler for collapsed edited rows
+        $("#wl-diff-expand-btn").on("click", function () {
+            var $expanded = $("#wl-diff-edited-expanded");
+            if ($expanded.is(":visible")) {
+                $expanded.hide();
+                $(this).text($(this).text().replace("Hide", "Show"));
+            } else {
+                $expanded.show();
+                $(this).text($(this).text().replace("Show", "Hide"));
+            }
+        });
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -6077,7 +6327,7 @@ require([
             '       "User ".analyst." ".action_label." ".row_change_count." row(s) from ".csv_file." (detection rule - ".detection_rule.") at ".timestamp' +
             '   )' +
             ' | eval value=mvjoin(value, " | ")' +
-            ' | table timestamp action analyst csv_file detection_rule comment remove_reason row_change_count column_change_count status export_file import_mode value summary';
+            ' | table timestamp action analyst csv_file detection_rule comment row_remove_reason row_change_count column_change_count status export_file import_mode value summary';
 
         $.ajax({
             url: Splunk.util.make_url("/splunkd/__raw/services/search/jobs"),
@@ -6098,7 +6348,7 @@ require([
             }
 
             var headers = ["timestamp", "action", "analyst", "csv_file", "detection_rule",
-                           "comment", "remove_reason", "row_change_count", "column_change_count",
+                           "comment", "row_remove_reason", "row_change_count", "column_change_count",
                            "status", "export_file", "import_mode", "value", "summary"];
             var lines = [headers.map(csvEscape).join(",")];
             results.forEach(function (row) {
@@ -6384,23 +6634,40 @@ require([
             return;
         }
         var needsRefresh = false;
+        var needsRuleRefresh = false;
         notifs.forEach(function (n) {
             if (_seenApprovalIds[n.id]) return;
             _seenApprovalIds[n.id] = true;
             if (n.type !== "approved" && n.type !== "cancelled") return;
-            var actionType = n.action_type || "";
-            var relevant = ["create_csv", "create_rule", "remove_csv", "remove_rule"];
-            if (relevant.indexOf(actionType) === -1) return;
-            needsRefresh = true;
+            var extra = n.extra || {};
+            var nRule = extra.detection_rule || "";
+            var nCsv = extra.csv_file || "";
+            // Refresh if the notification affects the currently viewed CSV/rule
+            if (selectedCsv && nCsv === selectedCsv) {
+                needsRefresh = true;
+            } else if (selectedRule && nRule === selectedRule) {
+                needsRefresh = true;
+            }
+            // Rule-level operations (create/remove rule) need full rule list refresh
+            var ruleOps = ["create_rule", "remove_rule",
+                           "create_csv", "remove_csv"];
+            if (ruleOps.indexOf(extra.action_type || "") !== -1) {
+                needsRuleRefresh = true;
+            }
         });
-        if (needsRefresh) {
+        if (needsRefresh || needsRuleRefresh) {
+            if (needsRuleRefresh) { loadRules(); }
             var ruleToRefresh = selectedRule;
-            loadRules();
-            if (ruleToRefresh) {
+            var csvToRefresh = selectedCsv;
+            if (ruleToRefresh && csvToRefresh) {
                 setTimeout(function () {
                     if (selectedRule === ruleToRefresh) {
-                        selectRule(ruleToRefresh);
+                        loadCsv(csvToRefresh, selectedApp);
                     }
+                }, 300);
+            } else if (ruleToRefresh) {
+                setTimeout(function () {
+                    selectRule(ruleToRefresh);
                 }, 500);
             }
         }

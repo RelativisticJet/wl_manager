@@ -641,50 +641,146 @@ body.wl-resizing * {
     margin-bottom: 14px;
 }
 
-.wl-diff-added h5 {
-    color: var(--wl-diff-add);
-    margin: 0 0 4px;
+.wl-diff-section h5 {
+    margin: 0 0 8px;
+    font-size: 13px;
 }
 
-.wl-diff-added li {
-    color: var(--wl-diff-add);
-    font-family: "Courier New", monospace;
-    font-size: 12px;
-    word-break: break-all;
+/* ── Side-by-side diff table ─────────────────────────────────────── */
+
+.wl-diff-sbs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 14px;
 }
 
-.wl-diff-removed h5 {
-    color: var(--wl-diff-rm);
-    margin: 0 0 4px;
-}
-
-.wl-diff-removed li {
-    color: var(--wl-diff-rm);
-    font-family: "Courier New", monospace;
-    font-size: 12px;
-    word-break: break-all;
-}
-
-.wl-diff-pre {
-    background: #1e1e1e;
-    color: #d4d4d4;
-    padding: 12px 14px;
+.wl-diff-pane {
+    border: 1px solid var(--wl-border, #444);
     border-radius: 4px;
+    overflow: hidden;
+}
+
+.wl-diff-pane-header {
+    padding: 6px 12px;
+    font-weight: bold;
     font-size: 12px;
-    overflow-x: auto;
-    line-height: 1.6;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
-.wl-diff-line-add {
-    color: #4ec94e;
+.wl-diff-pane-before .wl-diff-pane-header {
+    background: rgba(198, 40, 40, 0.15);
+    color: var(--wl-diff-rm);
+    border-bottom: 2px solid var(--wl-diff-rm);
 }
 
-.wl-diff-line-rm {
-    color: #f44336;
+.wl-diff-pane-after .wl-diff-pane-header {
+    background: rgba(46, 125, 50, 0.15);
+    color: var(--wl-diff-add);
+    border-bottom: 2px solid var(--wl-diff-add);
 }
 
-.wl-diff-line-info {
-    color: #64b5f6;
+.wl-diff-pane table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    font-family: "Courier New", Consolas, monospace;
+}
+
+.wl-diff-pane th {
+    padding: 4px 8px;
+    text-align: left;
+    font-weight: bold;
+    border-bottom: 1px solid var(--wl-border, #444);
+    background: var(--wl-bg-row, #23272b);
+    color: var(--wl-muted, #888);
+    font-size: 11px;
+}
+
+.wl-diff-pane td {
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--wl-border-section, #333);
+    word-break: break-word;
+    max-width: 300px;
+}
+
+.wl-diff-cell-changed {
+    font-weight: bold;
+}
+
+.wl-diff-pane-before .wl-diff-cell-changed {
+    background: rgba(198, 40, 40, 0.12);
+    color: var(--wl-diff-rm);
+}
+
+.wl-diff-pane-after .wl-diff-cell-changed {
+    background: rgba(46, 125, 50, 0.12);
+    color: var(--wl-diff-add);
+}
+
+/* ── Row-level additions/removals ──────────────────────────────── */
+
+.wl-diff-row-list {
+    padding: 0;
+    margin: 0;
+    list-style: none;
+}
+
+.wl-diff-row-list li {
+    padding: 4px 10px;
+    font-family: "Courier New", Consolas, monospace;
+    font-size: 12px;
+    border-bottom: 1px solid var(--wl-border-section, #333);
+}
+
+.wl-diff-row-add {
+    background: rgba(46, 125, 50, 0.08);
+    color: var(--wl-diff-add);
+}
+
+.wl-diff-row-add::before {
+    content: "+ ";
+    font-weight: bold;
+}
+
+.wl-diff-row-rm {
+    background: rgba(198, 40, 40, 0.08);
+    color: var(--wl-diff-rm);
+}
+
+.wl-diff-row-rm::before {
+    content: "- ";
+    font-weight: bold;
+}
+
+/* ── Column changes ──────────────────────────────────────────────── */
+
+.wl-diff-col-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    margin: 2px 4px 2px 0;
+}
+
+.wl-diff-col-add {
+    background: rgba(46, 125, 50, 0.15);
+    color: var(--wl-diff-add);
+    border: 1px solid var(--wl-diff-add);
+}
+
+.wl-diff-col-rm {
+    background: rgba(198, 40, 40, 0.15);
+    color: var(--wl-diff-rm);
+    border: 1px solid var(--wl-diff-rm);
+}
+
+/* ── Responsive: stack on narrow screens ─────────────────────────── */
+@media (max-width: 900px) {
+    .wl-diff-sbs {
+        grid-template-columns: 1fr;
+    }
 }
 
 /* ── Date/Time Picker ──────────────────────────────────────────────── */

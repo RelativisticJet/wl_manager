@@ -473,7 +473,7 @@
                 1==1,
                   "User ".analyst." ".action_label." ".row_change_count." row(s) from ".csv_file." (detection rule - ".detection_rule.") at ".timestamp
               )
-            | eval reason=coalesce(remove_reason, row_add_reason, revert_reason, "")
+            | eval reason=coalesce(row_remove_reason, row_add_reason, revert_reason, row_edit_reason, column_remove_reason, comment, "")
             | table timestamp action analyst csv_file detection_rule reason row_change_count column_change_count request_id value summary
           </query>
           <earliest>$time_token.earliest$</earliest>
@@ -557,7 +557,7 @@
                 action=="trash_retention_changed",
                   "User ".analyst." changed trash retention from ".old_retention_days." to ".new_retention_days." days — ".comment." at ".timestamp
               )
-            | eval reason=coalesce(remove_reason, row_add_reason, revert_reason, rejection_reason, failure_reason, cancellation_reason, comment, "")
+            | eval reason=coalesce(row_remove_reason, row_add_reason, revert_reason, row_edit_reason, column_remove_reason, rejection_reason, failure_reason, cancellation_reason, comment, "")
             | table timestamp action analyst csv_file detection_rule reason request_id approval_action_type requester status export_file summary
           </query>
           <earliest>$time_token.earliest$</earliest>
