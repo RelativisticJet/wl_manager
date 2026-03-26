@@ -367,7 +367,7 @@ require([
                 var csvDisplay = isRuleOp ? "N/A" : item.csv_file;
                 var ruleDisplay = item.detection_rule || "";
                 // Combine description with payload-extracted reason for full context
-                var analystReason = item.description || extractRequestReason(item) || "";
+                var analystReason = item.comment || item.description || extractRequestReason(item) || "";
                 html += '<tr>' +
                     '<td style="font-size:11px;word-break:break-all">' + _.escape(item.request_id) + '</td>' +
                     '<td>' + _.escape(tsStr) + '</td>' +
@@ -428,7 +428,7 @@ require([
                 var isRuleOp = item.csv_file === "__rule_operation__";
                 var csvDisplay = isRuleOp ? "N/A" : item.csv_file;
                 var ruleDisplay = item.detection_rule || "";
-                var analystReason = item.description || extractRequestReason(item) || "";
+                var analystReason = item.comment || item.description || extractRequestReason(item) || "";
                 var adminResponse = item.rejection_reason || item.cancellation_reason ||
                                     item.admin_comment || "";
                 html += '<tr>' +
@@ -1898,7 +1898,7 @@ require([
                 '<td style="color:var(--wl-muted,#888)">' + def + '</td>' +
                 '<td><input type="number" class="wl-admin-limit-input" ' +
                 'data-key="' + f.key + '" value="' + cur + '" ' +
-                'min="0" max="9999" style="width:80px;padding:4px 8px;' +
+                'min="0" max="100" style="width:80px;padding:4px 8px;' +
                 'background:var(--wl-bg-main,#1a1c1e);color:var(--wl-text,#e0e0e0);' +
                 'border:1px solid var(--wl-border,#444);border-radius:4px"></td>' +
                 '</tr>';
