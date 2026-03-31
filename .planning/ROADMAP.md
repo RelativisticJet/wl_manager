@@ -11,7 +11,7 @@
 
 ## Phases
 
-- [ ] **Phase 1: Backend Foundation** - Extract dependency-free backend modules (constants, validation, RBAC, presence)
+- [x] **Phase 1: Backend Foundation** - Extract dependency-free backend modules (constants, validation, RBAC, presence)
 - [ ] **Phase 2: Backend Core Domain** - Extract data persistence layer (CSV, versions, audit, rules, trash)
 - [ ] **Phase 3: Backend Orchestration** - Extract approval queue and daily limits management
 - [ ] **Phase 4: Backend Integration** - Refactor wl_handler.py as thin REST router
@@ -34,12 +34,39 @@
 
 **Success Criteria** (what must be TRUE when phase completes):
 1. User can load the app and use CSV editor/audit features without functional change (all features still work via existing REST API)
-2. Five new Python modules exist in `bin/` and are imported by wl_handler.py: wl_constants.py, wl_validation.py, wl_rbac.py, wl_presence.py (logic extracted from handler)
+2. Six new Python modules exist in `bin/` and are imported by wl_handler.py: wl_constants.py, wl_logging.py, wl_validation.py, wl_ratelimit.py, wl_rbac.py, wl_presence.py
 3. All magic numbers, regex patterns, role lists, and config defaults are defined in wl_constants.py and used throughout backend (no hardcoded values in other modules)
 4. Every new module has ≥80% unit test coverage with mocked file I/O and Splunk SDK calls
 5. Existing audit events, version manifests, and approval queues continue to function (no API contract change)
 
-**Plans:** TBD
+**Plans:** 4 plans in 2 waves
+
+- [ ] **01-01-PLAN.md** — Test infrastructure (pytest setup, conftest fixtures, Splunk SDK stub)
+  - Requirements: TEST-01
+  - Files: tests/conftest.py, tests/pytest.ini, tests/stubs/splunk/rest.py, requirements-dev.txt
+  - Tasks: 5 (requirements-dev.txt, pytest.ini, stubs, global fixtures, unit fixtures)
+
+- [ ] **01-02-PLAN.md** — Extract wl_constants.py (Layer 0)
+  - Requirements: BMOD-02
+  - Files: bin/wl_constants.py, bin/wl_handler.py, tests/unit/test_constants.py
+  - Tasks: 3 (create wl_constants.py, update wl_handler imports, create unit tests)
+  - Depends on: 01-01
+
+- [ ] **01-03-PLAN.md** — Extract wl_logging.py and wl_validation.py (Layer 1-2)
+  - Requirements: BMOD-03
+  - Files: bin/wl_logging.py, bin/wl_validation.py, bin/wl_handler.py, tests/unit/test_logging.py, tests/unit/test_validation.py
+  - Tasks: 5 (create wl_logging, create wl_validation, update handler, test logging, test validation)
+  - Depends on: 01-02
+
+- [ ] **01-04-PLAN.md** — Extract wl_ratelimit.py, wl_rbac.py, wl_presence.py (Layer 2)
+  - Requirements: BMOD-04, BMOD-05, TEST-01
+  - Files: bin/wl_ratelimit.py, bin/wl_rbac.py, bin/wl_presence.py, bin/wl_handler.py, tests/unit/test_*.py
+  - Tasks: 5 (create ratelimit, create rbac, create presence, update handler, create 3x unit tests)
+  - Depends on: 01-03
+
+**Wave Structure:**
+- **Wave 1:** 01-01 (test infrastructure), 01-02 (constants foundation)
+- **Wave 2:** 01-03 (logging/validation), 01-04 (ratelimit/rbac/presence)
 
 ---
 
@@ -49,7 +76,7 @@
 
 **Depends on:** Phase 1
 
-**Requirements:** BMOD-01, BMOD-06, BMOD-07, BMOD-08, BMOD-09, BMOD-10, BMOD-13 (partial), BMOD-14 (partial), BMOD-15 (partial), TEST-01 (partial)
+**Requirements:** BMOD-06, BMOD-07, BMOD-08, BMOD-09, BMOD-10, BMOD-13 (partial), BMOD-14 (partial), BMOD-15 (partial), TEST-01 (partial)
 
 **Success Criteria** (what must be TRUE when phase completes):
 1. User can load a CSV and save changes with version snapshots recorded, all as before (no functional change)
@@ -59,7 +86,35 @@
 5. Integration tests verify end-to-end chain: CSV save → version snapshot → audit event posting → trash soft-delete (all work as before)
 6. DRY compliance: no duplicated logic for version snapshots, diff computation, or audit field construction across modules
 
-**Plans:** TBD
+**Plans:** 4 plans in 3 waves
+
+- [ ] **02-01-PLAN.md** — Extract wl_csv.py (Layer 3, Wave 1)
+  - Requirements: BMOD-06
+  - Files: bin/wl_csv.py, tests/unit/test_csv.py, bin/wl_handler.py (wire imports)
+  - Tasks: 3 (create wl_csv.py, unit tests, wire handler calls)
+
+- [ ] **02-02-PLAN.md** — Extract wl_rules.py and wl_trash.py (Layer 3, Wave 1)
+  - Requirements: BMOD-09, BMOD-10
+  - Files: bin/wl_rules.py, bin/wl_trash.py, tests/unit/test_rules.py, tests/unit/test_trash.py, bin/wl_handler.py
+  - Tasks: 5 (create wl_rules, create wl_trash, unit tests for each, wire handler)
+  - Depends on: 02-01
+
+- [ ] **02-03-PLAN.md** — Extract wl_versions.py (Layer 3, Wave 2)
+  - Requirements: BMOD-07
+  - Files: bin/wl_versions.py, tests/unit/test_versions.py, bin/wl_handler.py
+  - Tasks: 3 (create wl_versions, unit tests, wire handler)
+  - Depends on: 02-01 (calls wl_csv.read_csv, write_csv)
+
+- [ ] **02-04-PLAN.md** — Extract wl_audit.py and integration tests (Layer 3, Wave 3)
+  - Requirements: BMOD-08, BMOD-13, BMOD-14, BMOD-15, TEST-01
+  - Files: bin/wl_audit.py, tests/unit/test_audit.py, tests/integration/test_persistence.py, bin/wl_handler.py
+  - Tasks: 5 (create wl_audit, unit tests, integration tests, wire handler, verify phase completion)
+  - Depends on: 02-03 (imports from all Phase 2 modules)
+
+**Wave Structure:**
+- **Wave 1:** 02-01 (wl_csv), 02-02 (wl_rules, wl_trash) — independent extraction
+- **Wave 2:** 02-03 (wl_versions) — depends on 02-01 for CSV operations
+- **Wave 3:** 02-04 (wl_audit + integration) — depends on all Phase 2 modules, final wiring
 
 ---
 
@@ -79,7 +134,22 @@
 5. Concurrency tests pass for simultaneous CSV saves, approval races, and file locking under contention (5+ concurrent threads)
 6. Every module has ≥80% unit test coverage; no function >100 lines; CC <15 for all
 
-**Plans:** TBD
+**Plans:** 2 plans in 2 waves
+
+- [ ] **03-01-PLAN.md** — Extract wl_limits.py (Layer 4, Wave 1)
+  - Requirements: BMOD-11, BMOD-13, BMOD-14, BMOD-15, TEST-01
+  - Files: bin/wl_limits.py, tests/unit/test_limits.py, bin/wl_handler.py
+  - Tasks: 3 (create wl_limits.py, unit tests, wire handler)
+
+- [ ] **03-02-PLAN.md** — Extract wl_approval.py and concurrency tests (Layer 4, Wave 2)
+  - Requirements: BMOD-12, BMOD-13, BMOD-14, BMOD-15, TEST-01, TEST-04
+  - Files: bin/wl_approval.py, tests/unit/test_approval.py, tests/integration/test_approval_chain.py, tests/integration/test_concurrency.py, bin/wl_handler.py
+  - Tasks: 6 (create wl_approval.py, unit tests, integration tests, concurrency tests, wire handler, verify phase completion)
+  - Depends on: 03-01 (approval gating checks daily limits)
+
+**Wave Structure:**
+- **Wave 1:** 03-01 (wl_limits) — foundation for approval gating
+- **Wave 2:** 03-02 (wl_approval + tests) — depends on wl_limits for daily limit checks
 
 ---
 
@@ -182,16 +252,16 @@
 
 ## Progress Tracking
 
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 1. Backend Foundation | 0/X | Not started | — |
-| 2. Backend Core Domain | 0/X | Not started | — |
-| 3. Backend Orchestration | 0/X | Not started | — |
-| 4. Backend Integration | 0/X | Not started | — |
-| 5. Frontend Architecture | 0/X | Not started | — |
-| 6. Admin Panel | 0/X | Not started | — |
-| 7. Test Coverage & Validation | 0/X | Not started | — |
-| 8. Splunkbase Readiness | 0/X | Not started | — |
+| Phase | Plans | Status | Started | Completed |
+|-------|-------|--------|---------|-----------|
+| 1. Backend Foundation | 4 plans | Planning complete | — | — |
+| 2. Backend Core Domain | 4 plans | Planning complete | — | — |
+| 3. Backend Orchestration | 2 plans | Planning complete | — | — |
+| 4. Backend Integration | TBD | Not started | — | — |
+| 5. Frontend Architecture | TBD | Not started | — | — |
+| 6. Admin Panel | TBD | Not started | — | — |
+| 7. Test Coverage & Validation | TBD | Not started | — | — |
+| 8. Splunkbase Readiness | TBD | Not started | — | — |
 
 ---
 
@@ -202,4 +272,6 @@
 - **Zero downtime:** Each phase produces a working app; can deploy incrementally
 - **Testing integrated:** Every phase includes its own test suite (not deferred to Phase 7)
 - **Frontend depends on backend:** Phase 5 starts only after Phase 4 completes to ensure stable API
-
+- **Phase 1 planning complete:** 4 executable plans with 2-wave structure, ≥80% coverage targets, ready for execution
+- **Phase 2 planning complete:** 4 executable plans with 3-wave structure, 5 modules extracted, integration tests for persistence chain, ready for execution
+- **Phase 3 planning complete:** 2 executable plans with 2-wave structure, wl_limits + wl_approval with concurrency tests (5+ threads), ready for execution
