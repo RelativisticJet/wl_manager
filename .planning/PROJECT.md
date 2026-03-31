@@ -33,11 +33,12 @@ SOC analysts can safely edit detection-rule whitelists with confidence that ever
 
 ### Active
 
-- [ ] Modular backend architecture (split wl_handler.py into focused modules)
+- [x] Modular backend architecture — Phase 1 complete: 6 modules extracted (constants, logging, validation, ratelimit, rbac, presence)
+- [x] Named constants for all magic numbers and configuration values — wl_constants.py with 80+ constants
+- [x] Comprehensive unit test suite foundation — 127 tests, 97.7% coverage across 6 modules
 - [ ] Modular frontend architecture (split JS into AMD modules via RequireJS)
 - [ ] Shared REST helper module (eliminate 6x duplication across JS files)
-- [ ] Named constants for all magic numbers and configuration values
-- [ ] Comprehensive unit test suite (every backend module)
+- [ ] Comprehensive integration test suite (all API actions)
 - [ ] Comprehensive integration test suite (all API actions)
 - [ ] Browser E2E tests for key workflows
 - [ ] Concurrency test coverage (concurrent writes, approval races)
