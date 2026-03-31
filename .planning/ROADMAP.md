@@ -59,10 +59,11 @@
   - Status: 5/5 tasks completed, 33 tests (32 passed, 1 skipped), 93%+ coverage
   - Depends on: 01-02
 
-- [ ] **01-04-PLAN.md** — Extract wl_ratelimit.py, wl_rbac.py, wl_presence.py (Layer 2)
+- [x] **01-04-PLAN.md** — Extract wl_ratelimit.py, wl_rbac.py, wl_presence.py (Layer 2) — COMPLETED
   - Requirements: BMOD-04, BMOD-05, TEST-01
   - Files: bin/wl_ratelimit.py, bin/wl_rbac.py, bin/wl_presence.py, bin/wl_handler.py, tests/unit/test_*.py
   - Tasks: 5 (create ratelimit, create rbac, create presence, update handler, create 3x unit tests)
+  - Status: 5/5 tasks completed, 62 tests, 97% coverage (100% presence, 99% rbac, 86% ratelimit)
   - Depends on: 01-03
 
 **Wave Structure:**
