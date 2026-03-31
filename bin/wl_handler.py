@@ -32,6 +32,7 @@ import logging.handlers
 import calendar
 import shutil
 import time
+import threading
 try:
     import fcntl
 except ImportError:
@@ -51,141 +52,32 @@ from splunk.persistconn.application import PersistentServerConnectionApplication
 # the log file only in that case.
 
 # ---------------------------------------------------------------------------
-# Constants — adjust if your layout differs
+# Layer 0: Constants (imported from wl_constants module)
 # ---------------------------------------------------------------------------
-APP_NAME = "wl_manager"
-SPLUNK_HOME = os.environ.get("SPLUNK_HOME", "/opt/splunk")
-APPS_DIR = os.path.join(SPLUNK_HOME, "etc", "apps")
-OWN_LOOKUPS = os.path.join(APPS_DIR, APP_NAME, "lookups")
-MAPPING_FILE = os.path.join(OWN_LOOKUPS, "rule_csv_map.csv")
-AUDIT_INDEX = "wl_audit"
-AUDIT_SOURCE = "wl_manager"
-AUDIT_SOURCETYPE = "wl_audit"
-VERSIONS_DIR = "_versions"
-MAX_VERSIONS = 6
-MAX_ROWS = 5000
-MAX_COLUMNS = 100
-MAX_CELL_CHARS = 1000
-MAX_PAYLOAD_BYTES = 10 * 1024 * 1024  # 10 MB max POST body
-MAX_AUDIT_VALUE_LINES = 500           # cap value arrays in audit events
-MAX_DIFF_ROWS = 2000                  # max rows for O(n²) diff matching
-MAX_PRESENCE_USERS = 10               # max tracked users per CSV
-MAX_PRESENCE_FILES = 200              # max tracked CSV files
-PRESENCE_TIMEOUT = 60   # seconds before a user is considered gone (closed tab)
-IDLE_TIMEOUT = 1800     # 30 minutes — user present but not interacting
+sys.path.insert(0, os.path.dirname(__file__))
+from wl_constants import (
+    APP_NAME, SPLUNK_HOME, APPS_DIR, OWN_LOOKUPS, MAPPING_FILE,
+    MAX_ROWS, MAX_COLUMNS, MAX_CELL_CHARS, MAX_PAYLOAD_BYTES,
+    MAX_AUDIT_VALUE_LINES, MAX_DIFF_ROWS, MAX_PRESENCE_USERS, MAX_PRESENCE_FILES,
+    PRESENCE_TIMEOUT, IDLE_TIMEOUT, RATE_WINDOW, RATE_MAX_WRITES, RATE_MAX_READS,
+    EDIT_ROLES, ADMIN_ROLES, SUPERADMIN_ROLES, EXPIRE_COLUMN_NAMES,
+    AUDIT_INDEX, AUDIT_SOURCE, AUDIT_SOURCETYPE, VERSIONS_DIR, MAX_VERSIONS,
+    AUDIT_LOG, TRASH_DIR, MIN_TRASH_RETENTION_DAYS, DEFAULT_TRASH_RETENTION_DAYS,
+    TRASH_CONFIG_FILE, DETECTION_RULES_FILE, MAX_DETECTION_RULES,
+    MAX_CSVS_PER_RULE, MAX_TOTAL_CSV_MAPPINGS, APPROVAL_QUEUE_FILE,
+    DAILY_LIMITS_FILE, LIMIT_CONFIG_FILE, APPROVAL_EXPIRY_DAYS,
+    MAX_PENDING_REQUESTS, MAX_RESOLVED_HISTORY, MAX_TRACKED_ANALYSTS,
+    NOTIFICATION_FILE, MAX_NOTIFICATIONS_PER_USER, NOTIFICATION_MAX_AGE_DAYS,
+    DEFAULT_LIMITS, DEFAULT_ADMIN_LIMITS,
+    APPROVAL_BULK_ROW_THRESHOLD, APPROVAL_BULK_EDIT_THRESHOLD,
+    APPROVAL_COLUMN_NONEMPTY_THRESHOLD, APPROVAL_BULK_ADD_THRESHOLD,
+    APPROVAL_REVERT_ROW_THRESHOLD, APPROVAL_REVERT_COLUMN_THRESHOLD,
+    _CONTROL_CHAR_RE, _SAFE_COLNAME_RE, _SANITIZE_RE,
+    get_splunk_home, get_detection_rules_path, get_approval_queue_path,
+)
 
 # Rate limiting: per-action sliding window
-_rate_limits = {}       # { (user, action): [timestamp, ...] }
-RATE_WINDOW = 60        # seconds
-RATE_MAX_WRITES = 30    # max POST actions per user per window
-RATE_MAX_READS = 120    # max GET actions per user per window
-
-# Column names treated as expiration dates (case-insensitive matching).
-EXPIRE_COLUMN_NAMES = {
-    "expires", "expire", "expiration", "expiration_date",
-    "expiry", "termination", "termination_date",
-}
-
-# Roles allowed to WRITE (POST). Everyone authenticated can READ (GET).
-# Both old (wl_editor) and new (wl_analyst_editor) names accepted.
-EDIT_ROLES = {
-    "wl_editor", "wl_analyst_editor",
-    "wl_admin", "wl_superadmin", "admin", "sc_admin",
-}
-
-# Roles allowed to APPROVE/REJECT requests and access the Control Panel.
-ADMIN_ROLES = {"admin", "sc_admin", "wl_admin", "wl_superadmin"}
-
-# Roles allowed to manage admin limits, trash retention, and system config.
-SUPERADMIN_ROLES = {"wl_superadmin"}
-
-# Trash / soft-delete constants
-TRASH_DIR = "_trash"
-MIN_TRASH_RETENTION_DAYS = 7      # minimum enforced retention (safety floor)
-DEFAULT_TRASH_RETENTION_DAYS = 30  # auto-purge after this many days
-TRASH_CONFIG_FILE = "_trash_config.json"
-
-# Detection rule registry (rules without CSV mappings)
-DETECTION_RULES_FILE = "_detection_rules.json"
-MAX_DETECTION_RULES = 1000
-MAX_CSVS_PER_RULE = 20            # max CSV files attached to one detection rule
-MAX_TOTAL_CSV_MAPPINGS = 5000     # max rows in rule_csv_map.csv
-
-# Approval queue constants
-APPROVAL_QUEUE_FILE = "_approval_queue.json"
-DAILY_LIMITS_FILE = "_daily_limits.json"
-LIMIT_CONFIG_FILE = "_limit_config.json"
-APPROVAL_EXPIRY_DAYS = 30
-MAX_PENDING_REQUESTS = 20     # max pending approval requests
-MAX_RESOLVED_HISTORY = 100    # max resolved entries kept in history
-MAX_TRACKED_ANALYSTS = 100    # max analysts tracked in daily usage
-
-# Notification constants
-NOTIFICATION_FILE = "_notifications.json"
-MAX_NOTIFICATIONS_PER_USER = 20
-NOTIFICATION_MAX_AGE_DAYS = 7
-
-# Regex to strip C0 control characters (except tab, LF, CR which are handled separately)
-_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-
-# Allowed characters in column names: letters, digits, underscore, hyphen, dot, space, parentheses, colon, slash
-_SAFE_COLNAME_RE = re.compile(r"^(?=.*[a-zA-Z0-9])[a-zA-Z0-9_\-\. ()/:#@&+]+$")
-
-# Default daily limits per analyst (across all CSVs)
-DEFAULT_LIMITS = {
-    "row_removal": 10,
-    "bulk_row_removal": 10,
-    "column_removal": 2,
-    "column_addition": 2,
-    "row_edit": 10,
-    "bulk_row_edit": 10,
-    "row_addition": 10,
-    "row_reorder": 10,
-    "column_reorder": 10,
-    "revert": 3,
-    "reset_frequency": "daily",   # never, daily, weekly, monthly, yearly
-    "reset_time_utc": "00:00",
-    "reset_day_of_week": 0,       # 0=Monday .. 6=Sunday (used by weekly)
-    "reset_day_of_month": 1,      # 1-31, clamped to last day (used by monthly)
-    "reset_month": 1,             # 1-12 (used by yearly)
-    "reset_day_of_year": 1,       # 1-31, clamped to last day (used by yearly)
-    # Approval gate thresholds (configurable via Control Panel)
-    "bulk_row_removal_threshold": 3,
-    "bulk_row_edit_threshold": 3,
-    "bulk_row_addition_threshold": 3,
-    "column_nonempty_threshold": 5,
-    "revert_row_threshold": 5,
-    "revert_column_threshold": 3,
-    # Analyst creation permissions (toggled from Control Panel)
-    "allow_analyst_create_rules": False,
-    "allow_analyst_create_csv": False,
-    # Analyst deletion permissions (toggled from Control Panel)
-    "allow_analyst_delete_rules": False,
-    "allow_analyst_delete_csv": False,
-    # Reason gates — require approval for create/delete
-    # (only effective when corresponding allow_* is True)
-    "require_reason_rule_creation": False,
-    "require_reason_csv_creation": False,
-    "require_reason_rule_deletion": False,
-    "require_reason_csv_deletion": False,
-}
-
-# Admin-specific daily limits (2x editor defaults by default).
-# These limit admin actions; set by super-admin only.
-DEFAULT_ADMIN_LIMITS = {
-    "rule_deletion": 2,         # rules soft-deleted per period
-    "csv_deletion": 2,          # CSVs soft-deleted per period
-    "approval_count": 20,       # approvals per period
-    "limit_changes": 5,         # limit config changes per period
-}
-
-# Fallback constants (used only if config read fails)
-APPROVAL_BULK_ROW_THRESHOLD = 3
-APPROVAL_BULK_EDIT_THRESHOLD = 3
-APPROVAL_COLUMN_NONEMPTY_THRESHOLD = 5
-APPROVAL_BULK_ADD_THRESHOLD = 3
-APPROVAL_REVERT_ROW_THRESHOLD = 5
-APPROVAL_REVERT_COLUMN_THRESHOLD = 3
+_rate_limits = {}  # { (user, action): [timestamp, ...] }
 
 # ---------------------------------------------------------------------------
 # Rotating file logger — backup audit trail independent of Splunk indexing
@@ -216,12 +108,6 @@ _presence = {}
 # ═══════════════════════════════════════════════════════════════════════════
 # Utility helpers
 # ═══════════════════════════════════════════════════════════════════════════
-
-# Regex for sanitizing user-provided text fields (reasons, descriptions, comments).
-# Allows alphanumerics, common punctuation, and whitespace.
-# Strips control characters, backticks, backslashes, and other potentially
-# dangerous characters that could be used for injection.
-_SANITIZE_RE = re.compile(r'[^\w\s.,;:!?\'"()\-/@#&+=\[\]{}%$€£¥°–—…\n\r]', re.UNICODE)
 
 
 def _sanitize_text(text, max_length=500):
@@ -384,6 +270,9 @@ def _get_detection_rules_path():
     return os.path.join(OWN_LOOKUPS, DETECTION_RULES_FILE)
 
 
+_detection_rules_lock = threading.Lock()
+
+
 def _read_detection_rules():
     """Read the list of registered detection rule names."""
     path = _get_detection_rules_path()
@@ -402,6 +291,13 @@ def _write_detection_rules(rules):
     path = _get_detection_rules_path()
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(rules, fh, indent=2)
+
+
+@contextmanager
+def _detection_rules_modify():
+    """Lock for atomic read-modify-write on detection rules registry."""
+    with _detection_rules_lock:
+        yield
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -523,6 +419,13 @@ def _snapshot_version(csv_path, analyst, action_label="save"):
     snapshot_name = "{}_{}.csv".format(base, ts_file)
     snapshot_path = os.path.join(versions_dir, snapshot_name)
 
+    # Prevent filename collision when two snapshots happen in the same second
+    # (e.g., pre-save "original" + post-save "save" during first edit)
+    if os.path.exists(snapshot_path):
+        ts_file_ms = now.strftime("%Y%m%d_%H%M%S_") + str(now.microsecond // 1000)
+        snapshot_name = "{}_{}.csv".format(base, ts_file_ms)
+        snapshot_path = os.path.join(versions_dir, snapshot_name)
+
     shutil.copy2(csv_path, snapshot_path)
 
     # Count rows and visible columns in the snapshot
@@ -569,6 +472,9 @@ def _get_approval_queue_path():
     return os.path.join(versions_dir, APPROVAL_QUEUE_FILE)
 
 
+_approval_queue_thread_lock = threading.RLock()
+
+
 def _read_approval_queue():
     """Read and return the approval queue list, or empty list on error."""
     path = _get_approval_queue_path()
@@ -601,27 +507,29 @@ def _write_approval_queue(queue):
 def _approval_queue_lock():
     """Acquire an exclusive lock around approval queue read-modify-write cycles.
 
-    Prevents two concurrent approval operations from overwriting each other.
-    On Windows (no fcntl), this is a no-op.
+    Combines a threading.RLock (in-process) with a file-based lock
+    (cross-process) to prevent concurrent queue operations from
+    overwriting each other.
     """
-    if not fcntl:
-        yield
-        return
-    lock_path = _get_approval_queue_path() + ".lock"
-    fh = open(lock_path, "w")  # noqa: SIM115
-    try:
+    with _approval_queue_thread_lock:
+        if not fcntl:
+            yield
+            return
+        lock_path = _get_approval_queue_path() + ".lock"
+        fh = open(lock_path, "w")  # noqa: SIM115
         try:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (IOError, OSError):
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-        yield
-    finally:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-        fh.close()
-        try:
-            os.remove(lock_path)
-        except OSError:
-            pass
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (IOError, OSError):
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            fh.close()
+            try:
+                os.remove(lock_path)
+            except OSError:
+                pass
 
 
 def _cancel_conflicting_requests(queue, detection_rule, csv_file,
@@ -883,8 +791,9 @@ def _check_admin_daily_limit(user, action_type, action_count=1):
     admin_cfg = _read_admin_limits()
     max_count = admin_cfg.get(action_type,
                               DEFAULT_ADMIN_LIMITS.get(action_type, 999))
-    if max_count == 0:  # 0 = unlimited
-        return True, 0, 0
+    # 0 = disabled (action not permitted at all)
+    if max_count == 0:
+        return False, 0, 0
 
     admin_action = "admin_" + action_type
     counters = _read_daily_limits()
@@ -968,7 +877,9 @@ def _read_trash_config():
     if os.path.isfile(path):
         try:
             with open(path, "r", encoding="utf-8") as fh:
-                return json.load(fh)
+                data = json.load(fh)
+                if isinstance(data, dict):
+                    return data
         except (json.JSONDecodeError, OSError):
             pass
     return {"retention_days": DEFAULT_TRASH_RETENTION_DAYS}
@@ -1238,21 +1149,24 @@ def _restore_from_trash(trash_id):
                     writer.writerows(mapping)
 
             # Also ensure the rule is in the registry
-            registered = _read_detection_rules()
-            if rule_name not in registered:
-                registered.append(rule_name)
-                _write_detection_rules(registered)
+            with _detection_rules_modify():
+                registered = _read_detection_rules()
+                if rule_name not in registered:
+                    registered.append(rule_name)
+                    _write_detection_rules(registered)
 
     elif item_type == "rule":
         rule_name = name
         associated_csvs = meta.get("associated_csvs", [])
 
-        # EC2: Check if rule already exists
+        # EC2: Check if rule already exists (lock held until write completes)
+        _detection_rules_lock.acquire()
         registered = _read_detection_rules()
         mapping = _read_csv_mapping()
         existing_rule_csvs = [e for e in mapping
                               if e.get("rule_name") == rule_name]
         if rule_name in registered or existing_rule_csvs:
+            _detection_rules_lock.release()
             return False, ("Cannot restore: rule '{}' already exists. "
                            "Remove the existing rule first.").format(
                                rule_name), meta
@@ -1300,6 +1214,7 @@ def _restore_from_trash(trash_id):
         # Re-register the rule
         registered.append(rule_name)
         _write_detection_rules(registered)
+        _detection_rules_lock.release()
 
     # Clean up the trash entry directory
     shutil.rmtree(item_dir, ignore_errors=True)
@@ -1492,6 +1407,40 @@ def _check_daily_limit(user, action_type, action_count=1):
     current = user_counts.get(action_type, 0)
 
     return current + action_count <= max_count, current, max_count
+
+
+# ── Human-readable labels for limit_type keys ──────────────────────
+_LIMIT_LABELS = {
+    "row_removal": "Row removal",
+    "row_addition": "Row addition",
+    "row_edit": "Row editing",
+    "bulk_row_removal": "Bulk row removal",
+    "bulk_row_edit": "Bulk row editing",
+    "column_removal": "Column removal",
+    "revert": "CSV revert",
+    "rule_deletion": "Rule deletion",
+    "csv_deletion": "CSV deletion",
+    "approval_count": "Approval",
+}
+
+
+def _daily_limit_error_msg(limit_type, action_count, current, maximum,
+                           contact="your administrator"):
+    """Build the appropriate error message for daily limits.
+
+    When maximum == 0 the action is *disabled* (not merely exhausted).
+    """
+    label = _LIMIT_LABELS.get(limit_type, limit_type.replace("_", " "))
+    if maximum == 0:
+        return ("{} has been disabled by {}. "
+                "This action is not permitted.".format(label, contact))
+    over = current + action_count - maximum
+    return ("Daily limit exceeded for {}. "
+            "This action affects {} row(s), exceeding "
+            "your daily limit by {} ({}/{} used). "
+            "Contact {}.".format(
+                label.lower(), action_count, over, current, maximum,
+                contact))
 
 
 def _increment_daily_limit(user, action_type, count=1):
@@ -2055,6 +2004,17 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         headers, rows = _read_csv(path)
 
+        # ── Lazy version initialization for pre-existing CSVs ─────────
+        # If a CSV has never been versioned (e.g. demo data, shipped with
+        # the app, or migrated), create an "original" snapshot on first
+        # access so its initial state is always recoverable.
+        try:
+            manifest = _read_version_manifest(path)
+            if not manifest:
+                _snapshot_version(path, "system", action_label="original")
+        except OSError:
+            pass
+
         # ── Auto-remove expired rows ──────────────────────────────────
         auto_removed_count = 0
         try:
@@ -2221,16 +2181,18 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         now = datetime.now(timezone.utc).timestamp()
 
-        # Prune stale CSV files first to bound total memory
-        if len(_presence) > MAX_PRESENCE_FILES:
-            stale_files = []
-            for f, users in _presence.items():
+        # Proactive prune: remove fully-stale files every 50 calls
+        if len(_presence) > 10:
+            stale_files = [
+                f for f, users in _presence.items()
                 if all(now - u_data.get("seen", 0) >= PRESENCE_TIMEOUT
-                       for u_data in users.values()):
-                    stale_files.append(f)
+                       for u_data in users.values())
+            ]
             for f in stale_files:
                 del _presence[f]
-            if len(_presence) > MAX_PRESENCE_FILES:
+
+        # Hard cap prune: evict oldest if still over limit
+        if len(_presence) > MAX_PRESENCE_FILES:
                 by_age = sorted(
                     _presence.items(),
                     key=lambda x: max(
@@ -2828,26 +2790,29 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 "error": "Rule '{}' already exists in CSV mapping".format(
                     detection_rule)
             })
-        registered = _read_detection_rules()
-        if detection_rule in registered:
-            return self._resp(409, {
-                "error": "Rule '{}' is already registered".format(detection_rule)
-            })
-        if len(registered) >= MAX_DETECTION_RULES:
-            return self._resp(400, {
-                "error": "Maximum number of registered rules reached ({})".format(
-                    MAX_DETECTION_RULES)
-            })
+        with _detection_rules_modify():
+            registered = _read_detection_rules()
+            if detection_rule in registered:
+                return self._resp(409, {
+                    "error": "Rule '{}' is already registered".format(
+                        detection_rule)
+                })
+            if len(registered) >= MAX_DETECTION_RULES:
+                return self._resp(400, {
+                    "error": "Maximum number of registered rules reached "
+                             "({})".format(MAX_DETECTION_RULES)
+                })
 
-        # Persist the rule name
-        registered.append(detection_rule)
-        try:
-            _write_detection_rules(registered)
-        except OSError as exc:
-            _logger.error("Failed to write detection rules: %s", exc)
-            return self._resp(500, {
-                "error": "Failed to save detection rule. Please check server logs."
-            })
+            # Persist the rule name
+            registered.append(detection_rule)
+            try:
+                _write_detection_rules(registered)
+            except OSError as exc:
+                _logger.error("Failed to write detection rules: %s", exc)
+                return self._resp(500, {
+                    "error": "Failed to save detection rule. "
+                             "Please check server logs."
+                })
 
         # Audit event
         ts = int(datetime.now(timezone.utc).timestamp())
@@ -2935,12 +2900,17 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     "error": "Column header '{}' too long: {} chars (max 64)".format(
                         h[:20], len(h))
                 })
+            if " " in h or "\t" in h:
+                return self._resp(400, {
+                    "error": "Column name '{}' cannot contain spaces. "
+                             "Use underscores instead (e.g. 'src_ip').".format(
+                                 h[:30])
+                })
             if not _SAFE_COLNAME_RE.match(h):
                 return self._resp(400, {
                     "error": "Column name '{}' contains invalid characters. "
-                             "Only letters, numbers, spaces, and common "
-                             "punctuation (_-.()/:#@&+) are allowed.".format(
-                                 h[:30])
+                             "Only letters, numbers, and _-.()/:#@&+ are "
+                             "allowed.".format(h[:30])
                 })
             if h.lower() in seen:
                 return self._resp(400, {
@@ -3107,6 +3077,13 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 "error": "Failed to create CSV file. Please check server logs."
             })
 
+        # ── Snapshot initial version at creation time ─────────────────
+        try:
+            _snapshot_version(csv_path, user, action_label="created")
+        except OSError as exc:
+            _logger.warning("Failed to snapshot initial version for %s: %s",
+                            csv_filename, exc)
+
         # ── Append mapping to rule_csv_map.csv ────────────────────────
         try:
             mapping.append({
@@ -3134,10 +3111,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # ── Remove rule from registry if it was registered there ─────
         try:
-            registered = _read_detection_rules()
-            if detection_rule in registered:
-                registered.remove(detection_rule)
-                _write_detection_rules(registered)
+            with _detection_rules_modify():
+                registered = _read_detection_rules()
+                if detection_rule in registered:
+                    registered.remove(detection_rule)
+                    _write_detection_rules(registered)
         except OSError:
             pass  # non-critical — rule just stays in both lists
 
@@ -3189,12 +3167,13 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     user, "rule_deletion")
                 if not allowed:
                     return self._resp(429, {
-                        "error": "Admin daily limit exceeded for rule "
-                                 "deletions ({}/{} used). Contact your "
-                                 "super-admin.".format(current, maximum),
+                        "error": _daily_limit_error_msg(
+                            "rule_deletion", 1, current, maximum,
+                            contact="your super-admin"),
                         "limit_type": "admin_rule_deletion",
                         "current": current,
                         "maximum": maximum,
+                        "disabled": maximum == 0,
                     })
 
         mapping = self._read_mapping()
@@ -3224,12 +3203,13 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         if not affected_csvs:
             # Check if it's a registered rule without CSVs
-            registered = _read_detection_rules()
-            if rule_name in registered:
-                registered.remove(rule_name)
-                _write_detection_rules(registered)
+            with _detection_rules_modify():
+                registered = _read_detection_rules()
+                if rule_name in registered:
+                    registered.remove(rule_name)
+                    _write_detection_rules(registered)
                 self._index_audit(request, {
-                    "action": "rule_removed",
+                    "action": "dr_removed",
                     "removal_type": removal_type,
                     "timestamp": int(time.time()),
                     "analyst": user,
@@ -3239,10 +3219,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     "comment": comment,
                 })
                 # Auto-cancel pending requests for this rule
-                queue = _read_approval_queue()
-                _cancel_conflicting_requests(
-                    queue, rule_name, "", "remove_rule", "",
-                    lambda evt: self._index_audit(request, evt))
+                with _approval_queue_lock():
+                    queue = _read_approval_queue()
+                    _cancel_conflicting_requests(
+                        queue, rule_name, "", "remove_rule", "",
+                        lambda evt: self._index_audit(request, evt))
                 return self._resp(200, {
                     "success": True,
                     "message": "Rule '{}' removed (had no CSV files)".format(
@@ -3263,10 +3244,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             writer.writerows(new_mapping)
 
         # Also remove from detection rules registry if present
-        registered = _read_detection_rules()
-        if rule_name in registered:
-            registered.remove(rule_name)
-            _write_detection_rules(registered)
+        with _detection_rules_modify():
+            registered = _read_detection_rules()
+            if rule_name in registered:
+                registered.remove(rule_name)
+                _write_detection_rules(registered)
 
         trashed = False
         trash_id = ""
@@ -3280,7 +3262,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     "rule", rule_name, user, comment,
                     associated_csvs=associated)
                 trashed = True
-            except OSError as exc:
+            except Exception as exc:
                 _logger.error("Failed to move rule to trash: %s", exc)
                 # Fallback: hard delete individual CSVs
                 for entry in affected_entries:
@@ -3294,7 +3276,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                             pass
 
         self._index_audit(request, {
-            "action": "rule_removed",
+            "action": "dr_removed",
             "removal_type": "trashed" if trashed else removal_type,
             "timestamp": int(time.time()),
             "analyst": user,
@@ -3306,10 +3288,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         })
 
         # Auto-cancel pending approval requests for this rule
-        queue = _read_approval_queue()
-        _cancel_conflicting_requests(
-            queue, rule_name, "", "remove_rule", "",
-            lambda evt: self._index_audit(request, evt))
+        with _approval_queue_lock():
+            queue = _read_approval_queue()
+            _cancel_conflicting_requests(
+                queue, rule_name, "", "remove_rule", "",
+                lambda evt: self._index_audit(request, evt))
 
         if trashed:
             verb = "moved to trash"
@@ -3370,12 +3353,13 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     user, "csv_deletion")
                 if not allowed:
                     return self._resp(429, {
-                        "error": "Admin daily limit exceeded for CSV "
-                                 "deletions ({}/{} used). Contact your "
-                                 "super-admin.".format(current, maximum),
+                        "error": _daily_limit_error_msg(
+                            "csv_deletion", 1, current, maximum,
+                            contact="your super-admin"),
                         "limit_type": "admin_csv_deletion",
                         "current": current,
                         "maximum": maximum,
+                        "disabled": maximum == 0,
                     })
 
         mapping = self._read_mapping()
@@ -3421,7 +3405,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     "csv", csv_file, user, comment,
                     app_context=app_context, rule_name=rule_name)
                 trashed = True
-            except OSError as exc:
+            except Exception as exc:
                 _logger.error("Failed to move CSV to trash: %s", exc)
                 # Fall back — don't leave partial state
                 csv_path = _build_csv_path(csv_file, app_context)
@@ -3446,15 +3430,16 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         })
 
         # Auto-cancel pending requests for this CSV (or rule if last CSV)
-        queue = _read_approval_queue()
-        if rule_also_removed:
-            _cancel_conflicting_requests(
-                queue, rule_name, "", "remove_rule", "",
-                lambda evt: self._index_audit(request, evt))
-        else:
-            _cancel_conflicting_requests(
-                queue, rule_name, csv_file, "remove_csv", "",
-                lambda evt: self._index_audit(request, evt))
+        with _approval_queue_lock():
+            queue = _read_approval_queue()
+            if rule_also_removed:
+                _cancel_conflicting_requests(
+                    queue, rule_name, "", "remove_rule", "",
+                    lambda evt: self._index_audit(request, evt))
+            else:
+                _cancel_conflicting_requests(
+                    queue, rule_name, csv_file, "remove_csv", "",
+                    lambda evt: self._index_audit(request, evt))
 
         if trashed:
             verb = "moved to trash"
@@ -3655,31 +3640,33 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             if not _SAFE_COLNAME_RE.match(h):
                 return self._resp(400, {
                     "error": "Column name '{}' contains invalid characters. "
-                             "Only letters, numbers, spaces, and common "
-                             "punctuation (_-.()/:#@&+) are allowed.".format(
+                             "Only letters, numbers, and common "
+                             "punctuation (_-.()/:#@&+) are allowed (no spaces).".format(
                                  h[:30])
                 })
 
         # ── Validate column renames ──────────────────────────────────
         for cr in column_renames:
             old_n = cr.get("old_name", "")
-            new_n = cr.get("new_name", "")
+            new_n = cr.get("new_name", "").strip()
+            cr["new_name"] = new_n
             if not old_n or not new_n or old_n == new_n:
                 return self._resp(400, {"error": "Invalid column rename"})
-            if not new_n.strip():
-                return self._resp(400, {
-                    "error": "Column names cannot be empty or whitespace-only."
-                })
             if len(new_n) > 64:
                 return self._resp(400, {
                     "error": "Column name too long (max 64 chars)."
                 })
+            if " " in new_n or "\t" in new_n:
+                return self._resp(400, {
+                    "error": "Column name '{}' cannot contain spaces. "
+                             "Use underscores instead (e.g. 'src_ip').".format(
+                                 new_n[:30])
+                })
             if not _SAFE_COLNAME_RE.match(new_n):
                 return self._resp(400, {
                     "error": "Column name '{}' contains invalid characters. "
-                             "Only letters, numbers, spaces, and common "
-                             "punctuation (_-.()/:#@&+) are allowed.".format(
-                                 new_n[:30])
+                             "Only letters, numbers, and _-.()/:#@&+ are "
+                             "allowed.".format(new_n[:30])
                 })
 
         # ── Resolve path ──────────────────────────────────────────────
@@ -3873,17 +3860,13 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 allowed, current, maximum = _check_daily_limit(
                     user, limit_action, action_count=count)
                 if not allowed:
-                    over = current + count - maximum
                     return self._resp(429, {
-                        "error": "Daily limit exceeded for {}. "
-                                 "This action affects {} rows, exceeding "
-                                 "your daily limit by {} ({}/{} used). "
-                                 "Contact your administrator.".format(
-                                     limit_action.replace("_", " "),
-                                     count, over, current, maximum),
+                        "error": _daily_limit_error_msg(
+                            limit_action, count, current, maximum),
                         "limit_type": limit_action,
                         "current": current,
                         "maximum": maximum,
+                        "disabled": maximum == 0,
                     })
 
         # ── Server-side approval gate enforcement ─────────────────────
@@ -4311,12 +4294,12 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             allowed, current, maximum = _check_daily_limit(user, "revert")
             if not allowed:
                 return self._resp(429, {
-                    "error": "Daily revert limit reached. "
-                             "You have used {}/{} today. "
-                             "Contact your administrator.".format(current, maximum),
+                    "error": _daily_limit_error_msg(
+                        "revert", 1, current, maximum),
                     "limit_type": "revert",
                     "current": current,
                     "maximum": maximum,
+                    "disabled": maximum == 0,
                 })
 
         # ── Approval gate for large reverts ──────────────────────────
@@ -4652,7 +4635,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # Check for existing pending request by same user for same target + action
         detection_rule = payload.get("detection_rule", "")
-        queue = _expire_pending_approvals()
+        queue = _expire_pending_approvals()  # Lock acquired below for write
         _rule_only = {"create_rule", "remove_rule"}
         for item in queue:
             if item["status"] != "pending" or item["analyst"] != user:
@@ -4699,17 +4682,13 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             allowed, current, maximum = _check_daily_limit(
                 user, limit_key, action_count=approval_count)
             if not allowed:
-                over = current + approval_count - maximum
                 return self._resp(429, {
-                    "error": "Daily limit exceeded for {}. "
-                             "This action affects {} rows, exceeding "
-                             "your daily limit by {} ({}/{} used). "
-                             "Contact your administrator.".format(
-                                 limit_key.replace("_", " "),
-                                 approval_count, over, current, maximum),
+                    "error": _daily_limit_error_msg(
+                        limit_key, approval_count, current, maximum),
                     "limit_type": limit_key,
                     "current": current,
                     "maximum": maximum,
+                    "disabled": maximum == 0,
                 })
 
         # Cap pending requests
@@ -4793,8 +4772,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "rejection_reason": None,
         }
 
-        queue.append(entry)
-        _write_approval_queue(queue)
+        with _approval_queue_lock():
+            # Re-read inside lock to prevent TOCTOU race
+            queue = _expire_pending_approvals()
+            queue.append(entry)
+            _write_approval_queue(queue)
 
         # Audit event
         ts = int(time.time())
@@ -4876,32 +4858,34 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if not cancellation_reason.strip():
             return self._resp(400, {"error": "Cancellation reason is required"})
 
-        queue = _expire_pending_approvals()
-        target = None
-        for item in queue:
-            if item["request_id"] == request_id:
-                target = item
-                break
+        with _approval_queue_lock():
+            queue = _expire_pending_approvals()
+            target = None
+            for item in queue:
+                if item["request_id"] == request_id:
+                    target = item
+                    break
 
-        if not target:
-            return self._resp(404, {"error": "Approval request not found"})
-        if target["status"] != "pending":
-            return self._resp(409, {
-                "error": "This request has already been {}".format(target["status"])
-            })
+            if not target:
+                return self._resp(404, {"error": "Approval request not found"})
+            if target["status"] != "pending":
+                return self._resp(409, {
+                    "error": "This request has already been {}".format(
+                        target["status"])
+                })
 
-        # Only the original requester can cancel
-        if target["analyst"] != user:
-            return self._resp(403, {
-                "error": "Only the original requester can cancel this request"
-            })
+            # Only the original requester can cancel
+            if target["analyst"] != user:
+                return self._resp(403, {
+                    "error": "Only the original requester can cancel this request"
+                })
 
-        now = int(time.time())
-        target["status"] = "cancelled"
-        target["resolved_by"] = user
-        target["resolved_at"] = now
-        target["cancellation_reason"] = cancellation_reason[:500]
-        _write_approval_queue(queue)
+            now = int(time.time())
+            target["status"] = "cancelled"
+            target["resolved_by"] = user
+            target["resolved_at"] = now
+            target["cancellation_reason"] = cancellation_reason[:500]
+            _write_approval_queue(queue)
 
         # Build value field from pending_highlight (same as request_submitted)
         stored_payload = target.get("payload", {})
@@ -5361,12 +5345,13 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     admin_user, "approval_count")
                 if not allowed:
                     return self._resp(429, {
-                        "error": "Admin daily limit exceeded for "
-                                 "approvals ({}/{} used). Contact your "
-                                 "super-admin.".format(current, maximum),
+                        "error": _daily_limit_error_msg(
+                            "approval_count", 1, current, maximum,
+                            contact="your super-admin"),
                         "limit_type": "admin_approval_count",
                         "current": current,
                         "maximum": maximum,
+                        "disabled": maximum == 0,
                     })
 
         queue = _expire_pending_approvals()
@@ -6072,7 +6057,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             target_rule = target.get("detection_rule", "")
             target_csv = csv_file
             mapping = self._read_mapping()
-            rule_exists = any(m["rule_name"] == target_rule for m in mapping)
+            rule_in_mapping = any(
+                m["rule_name"] == target_rule for m in mapping)
+            rule_in_registry = target_rule in _read_detection_rules()
+            rule_exists = rule_in_mapping or rule_in_registry
             csv_exists = any(
                 m["rule_name"] == target_rule and m["csv_file"] == target_csv
                 for m in mapping
@@ -6429,6 +6417,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     "limit_type": limit_type,
                     "action_count": limit_count,
                     "exceeded_by": max(over, 0),
+                    "disabled": maximum == 0,
                 }
 
         return self._resp(200, {
