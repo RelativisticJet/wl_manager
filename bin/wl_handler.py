@@ -119,7 +119,10 @@ from wl_presence import report_presence, get_presence, cleanup_presence, reset_p
 # ---------------------------------------------------------------------------
 # Layer 3: CSV Operations (imported from wl_csv module)
 # ---------------------------------------------------------------------------
-from wl_csv import read_csv, write_csv, compute_diff, get_expire_column, remove_expired_rows
+from wl_csv import (
+    read_csv, write_csv, compute_diff, get_expire_column, remove_expired_rows,
+    get_column_widths, set_column_widths
+)
 
 # Layer 3: Detection Rules Registry (imported from wl_rules module)
 # ---------------------------------------------------------------------------
@@ -278,32 +281,6 @@ def _csv_file_lock(csv_path):
             os.remove(lock_path)
         except OSError:
             pass
-
-
-def _get_col_widths_path(csv_path):
-    """Return path to the column widths JSON for a CSV file."""
-    base = os.path.splitext(os.path.basename(csv_path))[0]
-    versions_dir = _get_versions_dir(csv_path)
-    return os.path.join(versions_dir, base + "_colwidths.json")
-
-
-def get_column_widths(csv_path):
-    """Read column widths dict from disk, or empty dict on error."""
-    widths_path = _get_col_widths_path(csv_path)
-    if not os.path.isfile(widths_path):
-        return {}
-    try:
-        with open(widths_path, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def set_column_widths(csv_path, widths):
-    """Write column widths dict to disk."""
-    widths_path = _get_col_widths_path(csv_path)
-    with open(widths_path, "w", encoding="utf-8") as fh:
-        json.dump(widths, fh, indent=2)
 
 
 def _snapshot_version(csv_path, analyst, action_label="save"):
