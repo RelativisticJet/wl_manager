@@ -81,13 +81,46 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| — | — | (Populated by roadmapper) |
+| BMOD-01 | Phase 4 | Pending |
+| BMOD-02 | Phase 1 | Pending |
+| BMOD-03 | Phase 1 | Pending |
+| BMOD-04 | Phase 1 | Pending |
+| BMOD-05 | Phase 1 | Pending |
+| BMOD-06 | Phase 2 | Pending |
+| BMOD-07 | Phase 2 | Pending |
+| BMOD-08 | Phase 2 | Pending |
+| BMOD-09 | Phase 2 | Pending |
+| BMOD-10 | Phase 2 | Pending |
+| BMOD-11 | Phase 3 | Pending |
+| BMOD-12 | Phase 3 | Pending |
+| BMOD-13 | Phase 2, Phase 3 | Pending |
+| BMOD-14 | Phase 2, Phase 3 | Pending |
+| BMOD-15 | Phase 2, Phase 3 | Pending |
+| FMOD-01 | Phase 5 | Pending |
+| FMOD-02 | Phase 5 | Pending |
+| FMOD-03 | Phase 5 | Pending |
+| FMOD-04 | Phase 5 | Pending |
+| FMOD-05 | Phase 5 | Pending |
+| FMOD-06 | Phase 6 | Pending |
+| FMOD-07 | Phase 6 | Pending |
+| FMOD-08 | Phase 5 | Pending |
+| TEST-01 | Phase 1, Phase 2, Phase 3, Phase 4 | Pending |
+| TEST-02 | Phase 4 | Pending |
+| TEST-03 | Phase 7 | Pending |
+| TEST-04 | Phase 3, Phase 7 | Pending |
+| TEST-05 | Phase 5, Phase 7 | Pending |
+| TEST-06 | Phase 7 | Pending |
+| PUBL-01 | Phase 8 | Pending |
+| PUBL-02 | Phase 8 | Pending |
+| PUBL-03 | Phase 8 | Pending |
+| PUBL-04 | Phase 8 | Pending |
+| PUBL-05 | Phase 8 | Pending |
 
 **Coverage:**
 - v1 requirements: 28 total
-- Mapped to phases: 0
-- Unmapped: 28 ⚠️
+- Mapped to phases: 28 ✓
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-03-31*
-*Last updated: 2026-03-31 after initial definition*
+*Last updated: 2026-03-31 after roadmap creation*
