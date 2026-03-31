@@ -39,7 +39,7 @@ Phase 02 — backend-core-domain
 ## Current Position
 
 Phase: 02 (backend-core-domain) — EXECUTING
-Plan: 2 of 4 (Plan 01 Complete ✓)
+Plan: 3 of 4 (Plan 01-02 Complete ✓, Plan 03 Complete ✓)
 
 ## Roadmap Overview
 
@@ -164,6 +164,30 @@ Plan: 2 of 4 (Plan 01 Complete ✓)
 - Integrated into wl_handler.py: removed ~420 lines of internal function definitions
 - All type hints added to public functions for IDE support
 - Requirements BMOD-09, BMOD-10, TEST-01 fulfilled
+
+**2026-03-31: Plan 02-03 Completion (Layer 3 Version Snapshots & Manifest)**
+
+- Extracted wl_versions.py (347 lines): Version snapshot creation, manifest management, file locking
+  - **get_versions_dir()**: Create/return _versions/ directory
+  - **read_version_manifest()**: Parse manifest JSON with error tuple handling
+  - **write_version_manifest()**: Atomic write with fcntl locking
+  - **snapshot_version()**: Create timestamped snapshot with collision detection and MAX_VERSIONS enforcement
+  - **get_versions_list()**: Retrieve all versions sorted newest-first with version_id extraction via regex
+  - Decision: Manifest as dict with "versions" key (vs flat list) for future extensibility
+  - Decision: Version ID extracted from filename via regex (not stored separately) to support collision suffixes
+  - Decision: Microsecond-precision collision detection: when two snapshots occur in same second, adds _mmm suffix
+- Unit test coverage: 27 tests achieving 73% code coverage
+  - All 27 tests passing with freezegun for deterministic timestamp control
+  - Uncovered paths: exception handling requiring deep mocking (acceptable for functional coverage)
+- Integrated into wl_handler.py: removed 134 lines of old version-control code, updated 8 call sites
+  - Replaced `_read_version_manifest()` → `read_version_manifest()` with tuple unpacking
+  - Replaced `_write_version_manifest()` → `write_version_manifest()` with tuple unpacking
+  - Replaced `_snapshot_version()` → `snapshot_version()` with tuple unpacking
+  - Replaced `_get_versions_dir()` → `get_versions_dir()`
+  - Removed `_csv_file_lock()` (outer lock no longer needed; optimistic locking via expected_mtime sufficient)
+  - Adjusted manifest iteration for new dict structure (versions key)
+- Requirements BMOD-07, TEST-01 fulfilled
+- No deviations from plan; all success criteria met
 
 ---
 
