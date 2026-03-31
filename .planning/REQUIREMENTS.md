@@ -17,8 +17,8 @@ Requirements for the v3.0 modular rewrite. Each maps to roadmap phases.
 - [ ] **BMOD-06**: wl_csv.py handles CSV read/write, diff computation, and cell operations
 - [ ] **BMOD-07**: wl_versions.py manages version snapshots, manifest tracking, and revert operations
 - [ ] **BMOD-08**: wl_audit.py constructs structured audit events and posts to wl_audit index
-- [ ] **BMOD-09**: wl_rules.py manages detection rules registry and rule-to-CSV mapping
-- [ ] **BMOD-10**: wl_trash.py handles soft-delete, restore, and purge with retention
+- [x] **BMOD-09**: wl_rules.py manages detection rules registry and rule-to-CSV mapping
+- [x] **BMOD-10**: wl_trash.py handles soft-delete, restore, and purge with retention
 - [ ] **BMOD-11**: wl_limits.py provides daily usage tracking, reset scheduling, and enforcement
 - [ ] **BMOD-12**: wl_approval.py manages approval queue CRUD, request processing, and conflict resolution
 - [ ] **BMOD-13**: No function exceeds 100 lines or cyclomatic complexity of 15
@@ -38,7 +38,7 @@ Requirements for the v3.0 modular rewrite. Each maps to roadmap phases.
 
 ### Testing
 
-- [ ] **TEST-01**: Unit test suite covering ≥80% of every backend module (pytest)
+- [x] **TEST-01**: Unit test suite covering ≥80% of every backend module (pytest)
 - [ ] **TEST-02**: Integration tests for all REST API action handlers against live container
 - [ ] **TEST-03**: Security tests for XSS validation, CSRF protection, and input injection
 - [ ] **TEST-04**: Concurrency tests for simultaneous saves, approval races, and file locking
@@ -89,8 +89,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BMOD-06 | Phase 2 | Pending |
 | BMOD-07 | Phase 2 | Pending |
 | BMOD-08 | Phase 2 | Pending |
-| BMOD-09 | Phase 2 | Pending |
-| BMOD-10 | Phase 2 | Pending |
+| BMOD-09 | Phase 2 | Complete |
+| BMOD-10 | Phase 2 | Complete |
 | BMOD-11 | Phase 3 | Pending |
 | BMOD-12 | Phase 3 | Pending |
 | BMOD-13 | Phase 2, Phase 3 | Pending |
@@ -104,7 +104,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FMOD-06 | Phase 6 | Pending |
 | FMOD-07 | Phase 6 | Pending |
 | FMOD-08 | Phase 5 | Pending |
-| TEST-01 | Phase 1, Phase 2, Phase 3, Phase 4 | Pending |
+| TEST-01 | Phase 1, Phase 2, Phase 3, Phase 4 | Complete |
 | TEST-02 | Phase 4 | Pending |
 | TEST-03 | Phase 7 | Pending |
 | TEST-04 | Phase 3, Phase 7 | Pending |

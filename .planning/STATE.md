@@ -2,14 +2,13 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: milestone
-current_plan: 04 of 4 — COMPLETED ✓
 status: unknown
-last_updated: "2026-03-31T19:57:21.810Z"
+last_updated: "2026-03-31T21:22:05.476Z"
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 8
-  completed_plans: 4
+  completed_plans: 5
 ---
 
 # State: Whitelist Manager v3.0 Modular Rewrite
@@ -26,7 +25,7 @@ progress:
 SOC analysts can safely edit detection-rule whitelists with full audit trail — and the codebase itself is maintainable, testable, and ready for Splunkbase publication.
 
 **Current Focus:**
-Phase 01 — backend-foundation
+Phase 02 — backend-core-domain
 
 **Key Constraints:**
 
@@ -39,9 +38,8 @@ Phase 01 — backend-foundation
 
 ## Current Position
 
-Phase: 01 (backend-foundation) — IN PROGRESS (4/4 plans completed)
-Current Plan: 04 of 4 — COMPLETED ✓
-Phase Status: COMPLETE ✓
+Phase: 02 (backend-core-domain) — EXECUTING
+Plan: 1 of 4
 
 ## Roadmap Overview
 
@@ -127,6 +125,40 @@ Phase Status: COMPLETE ✓
   - Test isolation via module-level state reset functions
 - Requirements BMOD-04, BMOD-05, TEST-01 fulfilled
 - Phase 01-backend-foundation is COMPLETE ✓
+
+**2026-03-31: Plan 02-01 Completion (Layer 3 CSV Module)**
+
+- Extracted CSV operations into wl_csv.py (Layer 3)
+  - **read_csv()**: Parse CSV file with proper encoding handling
+  - **write_csv()**: Atomic write with temp file → rename
+  - **compute_diff()**: Similarity-based diff engine for detecting edits even when rows are simultaneously removed
+  - **get_expire_column()**: Find Expires column in CSV
+  - **remove_expired_rows()**: Purge rows with past expiration dates
+- Extracted 5 functions, removed ~250 lines from wl_handler.py
+- Unit test coverage: 32 tests, 100% pass rate
+- Integrated into wl_handler.py with all call sites updated
+- Requirement BMOD-06 fulfilled
+
+**2026-03-31: Plan 02-02 Completion (Layer 3 Rules & Trash Modules)**
+
+- Extracted wl_rules.py (4 functions): Detection rules registry and rule-to-CSV mapping operations
+  - **read_rules_registry()**: Read list of detection rule names
+  - **write_rules_registry()**: Atomic write of rules JSON
+  - **read_csv_mapping()**: Parse rule_csv_map.csv to dict
+  - **get_rule_csv_file()**: Lookup single rule's CSV file
+  - Decision: Silent failures for reads (return empty list/dict), exceptions for writes
+- Extracted wl_trash.py (8 functions): Soft-delete, restore, purge, retention operations
+  - **move_to_trash()**: Deterministic IDs (name__type__timestamp) prevent storage bloat from repeated delete→restore→delete
+  - **list_trash()**: List items sorted by timestamp (newest first)
+  - **restore_from_trash()**: Restore item and update config
+  - **purge_trash_item()**: Permanently delete item
+  - **auto_cleanup_trash()**: Purge items older than retention period
+  - **get_trash_dir()**, **read_trash_config()**, **write_trash_config()**
+  - Decision: Extracted helper functions into public API for approval queue reuse
+- Unit test coverage: 39 tests (20 for wl_rules, 19 for wl_trash), 100% pass rate
+- Integrated into wl_handler.py: removed ~420 lines of internal function definitions
+- All type hints added to public functions for IDE support
+- Requirements BMOD-09, BMOD-10, TEST-01 fulfilled
 
 ---
 

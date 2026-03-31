@@ -88,7 +88,7 @@
 5. Integration tests verify end-to-end chain: CSV save → version snapshot → audit event posting → trash soft-delete (all work as before)
 6. DRY compliance: no duplicated logic for version snapshots, diff computation, or audit field construction across modules
 
-**Plans:** 4 plans in 3 waves
+**Plans:** 2/4 plans executed
 
 - [ ] **02-01-PLAN.md** — Extract wl_csv.py (Layer 3, Wave 1)
   - Requirements: BMOD-06
@@ -257,7 +257,7 @@
 | Phase | Plans | Status | Started | Completed |
 |-------|-------|--------|---------|-----------|
 | 1. Backend Foundation | 4 plans | Planning complete | — | — |
-| 2. Backend Core Domain | 4 plans | Planning complete | — | — |
+| 2. Backend Core Domain | 2/4 | In Progress|  | — |
 | 3. Backend Orchestration | 2 plans | Planning complete | — | — |
 | 4. Backend Integration | TBD | Not started | — | — |
 | 5. Frontend Architecture | TBD | Not started | — | — |
