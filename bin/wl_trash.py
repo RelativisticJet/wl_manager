@@ -43,6 +43,10 @@ __all__ = [
     'get_trash_dir',
     'read_trash_config',
     'write_trash_config',
+    # Refactored sub-functions (may be useful for testing)
+    'build_trash_metadata',
+    'move_csv_to_trash',
+    'move_rule_to_trash',
 ]
 
 
@@ -102,6 +106,156 @@ def write_trash_config(config: Dict) -> None:
         json.dump(config, fh, indent=2)
 
 
+def build_trash_metadata(
+    item_type: str,
+    name: str,
+    user: str,
+    comment: str,
+    app_context: str = "",
+    version: str = "",
+    detection_rule: str = "",
+    associated_csvs: Optional[List[Dict]] = None,
+    csv_path: Optional[str] = None,
+    now: int = None,
+) -> Dict:
+    """
+    Construct metadata dict for a trash item.
+
+    Args:
+        item_type: "csv" or "rule"
+        name: CSV filename or rule name
+        user: Username performing the delete action
+        comment: Reason/comment for deletion
+        app_context: Optional app context for CSV path resolution
+        version: Optional version identifier (for CSV reverts)
+        detection_rule: Optional detection rule name (for CSV context)
+        associated_csvs: Optional list of {csv_file, app_context} dicts (for rule items)
+        csv_path: Original CSV path (for CSV items)
+        now: Timestamp (for testing; defaults to current time)
+
+    Returns:
+        Dict with item_type, name, deleted_by, deleted_at, comment, expiry_ts, etc.
+    """
+    if now is None:
+        now = int(time.time())
+
+    config = read_trash_config()
+    retention_days = config.get("retention_days", DEFAULT_TRASH_RETENTION_DAYS)
+    expiry_ts = now + (retention_days * 86400)
+
+    metadata = {
+        "item_type": item_type,
+        "name": name,
+        "deleted_by": user,
+        "deleted_at": now,
+        "deleted_at_human": time.strftime(
+            "%Y-%m-%d %H:%M:%S UTC", time.gmtime(now)
+        ),
+        "comment": sanitize_text(comment) if comment else "",
+        "expiry_ts": expiry_ts,
+        "expiry_human": time.strftime(
+            "%Y-%m-%d %H:%M:%S UTC", time.gmtime(expiry_ts)
+        ),
+        "retention_days": retention_days,
+        "rule_name": detection_rule,
+        "app_context": app_context,
+    }
+
+    if item_type == "csv" and csv_path:
+        metadata["original_path"] = csv_path
+    elif item_type == "rule":
+        metadata["associated_csvs"] = associated_csvs or []
+
+    return metadata
+
+
+def _move_versions_for_csv(csv_name: str, item_dir: str) -> None:
+    """
+    Move version snapshots and manifest for a single CSV into item_dir.
+
+    Args:
+        csv_name: CSV filename (e.g., "DR999.csv")
+        item_dir: Destination trash item directory
+    """
+    versions_src = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
+    base = csv_name.replace(".csv", "")
+    manifest_name = "{}_versions.json".format(base)
+    manifest_path = os.path.join(versions_src, manifest_name)
+
+    if not os.path.isfile(manifest_path):
+        return
+
+    # Move manifest
+    shutil.move(manifest_path, os.path.join(item_dir, manifest_name))
+
+    # Move snapshot CSV files
+    try:
+        with open(os.path.join(item_dir, manifest_name), "r", encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        # Manifest can be a list (array) or dict with "versions" key
+        ver_list = manifest if isinstance(manifest, list) else manifest.get("versions", [])
+        for ver in ver_list:
+            vf = ver.get("filename", "")
+            vf_path = os.path.join(versions_src, vf)
+            if vf and os.path.isfile(vf_path):
+                shutil.move(vf_path, os.path.join(item_dir, vf))
+    except (json.JSONDecodeError, OSError):
+        pass  # manifest unreadable — snapshot files lost
+
+
+def move_csv_to_trash(
+    name: str,
+    app_context: str,
+    item_dir: str,
+) -> Optional[str]:
+    """
+    Move a CSV file and its version snapshots into trash item directory.
+
+    Args:
+        name: CSV filename (e.g., "DR999.csv")
+        app_context: App context for path resolution
+        item_dir: Destination trash item directory
+
+    Returns:
+        The CSV path if found and moved, None otherwise
+
+    Raises:
+        OSError: If file operations fail
+    """
+    csv_path = build_csv_path(name, app_context)
+    if csv_path and os.path.isfile(csv_path):
+        shutil.move(csv_path, os.path.join(item_dir, name))
+
+    # Move version snapshots for this CSV
+    _move_versions_for_csv(name, item_dir)
+
+    return csv_path
+
+
+def move_rule_to_trash(
+    associated_csvs: Optional[List[Dict]],
+    item_dir: str,
+) -> None:
+    """
+    Move CSVs associated with a deleted rule into trash item directory.
+
+    Args:
+        associated_csvs: List of {csv_file, app_context} dicts
+        item_dir: Destination trash item directory
+
+    Raises:
+        OSError: If file operations fail
+    """
+    for csv_info in (associated_csvs or []):
+        csv_name = csv_info.get("csv_file", "")
+        csv_app = csv_info.get("app_context", "")
+        csv_path = build_csv_path(csv_name, csv_app)
+        if csv_path and os.path.isfile(csv_path):
+            shutil.move(csv_path, os.path.join(item_dir, csv_name))
+        # Also move version snapshots for this CSV
+        _move_versions_for_csv(csv_name, item_dir)
+
+
 def move_to_trash(
     item_type: str,
     name: str,
@@ -153,88 +307,18 @@ def move_to_trash(
     item_dir = os.path.join(trash_dir, trash_id)
     os.makedirs(item_dir, exist_ok=True)
 
-    config = read_trash_config()
-    # EC8: Compute expiry from config, not metadata — prevents tamper
-    retention_days = config.get("retention_days", DEFAULT_TRASH_RETENTION_DAYS)
-    expiry_ts = now + (retention_days * 86400)
-
-    metadata = {
-        "item_type": item_type,
-        "name": name,
-        "deleted_by": user,
-        "deleted_at": now,
-        "deleted_at_human": time.strftime(
-            "%Y-%m-%d %H:%M:%S UTC", time.gmtime(now)
-        ),
-        "comment": sanitize_text(comment) if comment else "",
-        "expiry_ts": expiry_ts,
-        "expiry_human": time.strftime(
-            "%Y-%m-%d %H:%M:%S UTC", time.gmtime(expiry_ts)
-        ),
-        "retention_days": retention_days,
-        "rule_name": detection_rule,
-        "app_context": app_context,
-    }
-
+    # Dispatch to type-specific handler
+    csv_path = None
     if item_type == "csv":
-        # Move the CSV file itself
-        csv_path = build_csv_path(name, app_context)
-        if csv_path and os.path.isfile(csv_path):
-            shutil.move(csv_path, os.path.join(item_dir, name))
-
-        # Copy version snapshots for this CSV
-        versions_src = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
-        base = name.replace(".csv", "")
-        manifest_name = "{}_versions.json".format(base)
-        manifest_path = os.path.join(versions_src, manifest_name)
-
-        if os.path.isfile(manifest_path):
-            # Move manifest
-            shutil.move(manifest_path, os.path.join(item_dir, manifest_name))
-            # Move snapshot CSV files
-            try:
-                with open(os.path.join(item_dir, manifest_name), "r", encoding="utf-8") as fh:
-                    manifest = json.load(fh)
-                # Manifest can be a list (array) or dict with "versions" key
-                ver_list = manifest if isinstance(manifest, list) else manifest.get("versions", [])
-                for ver in ver_list:
-                    vf = ver.get("filename", "")
-                    vf_path = os.path.join(versions_src, vf)
-                    if vf and os.path.isfile(vf_path):
-                        shutil.move(vf_path, os.path.join(item_dir, vf))
-            except (json.JSONDecodeError, OSError):
-                pass  # manifest unreadable — snapshot files lost
-
-        metadata["original_path"] = csv_path or ""
-
+        csv_path = move_csv_to_trash(name, app_context, item_dir)
     elif item_type == "rule":
-        metadata["associated_csvs"] = associated_csvs or []
-        # Move each associated CSV into the trash bundle
-        for csv_info in (associated_csvs or []):
-            csv_name = csv_info.get("csv_file", "")
-            csv_app = csv_info.get("app_context", "")
-            csv_path = build_csv_path(csv_name, csv_app)
-            if csv_path and os.path.isfile(csv_path):
-                shutil.move(csv_path, os.path.join(item_dir, csv_name))
-            # Also move version snapshots for each CSV
-            versions_src = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
-            base = csv_name.replace(".csv", "")
-            manifest_name = "{}_versions.json".format(base)
-            manifest_path = os.path.join(versions_src, manifest_name)
-            if os.path.isfile(manifest_path):
-                shutil.move(manifest_path, os.path.join(item_dir, manifest_name))
-                try:
-                    with open(os.path.join(item_dir, manifest_name), "r", encoding="utf-8") as fh:
-                        manifest = json.load(fh)
-                    # Manifest can be a list or dict with "versions" key
-                    ver_list = manifest if isinstance(manifest, list) else manifest.get("versions", [])
-                    for ver in ver_list:
-                        vf = ver.get("filename", "")
-                        vf_path = os.path.join(versions_src, vf)
-                        if vf and os.path.isfile(vf_path):
-                            shutil.move(vf_path, os.path.join(item_dir, vf))
-                except (json.JSONDecodeError, OSError):
-                    pass
+        move_rule_to_trash(associated_csvs, item_dir)
+
+    # Build and write metadata
+    metadata = build_trash_metadata(
+        item_type, name, user, comment, app_context, version, detection_rule,
+        associated_csvs, csv_path, now
+    )
 
     # Write metadata last (after all files are moved)
     with open(os.path.join(item_dir, "metadata.json"), "w", encoding="utf-8") as fh:
