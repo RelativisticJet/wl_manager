@@ -141,6 +141,11 @@ from wl_versions import (
 )
 
 # ---------------------------------------------------------------------------
+# Layer 3: Audit Events (imported from wl_audit module)
+# ---------------------------------------------------------------------------
+from wl_audit import build_audit_event, post_audit_event
+
+# ---------------------------------------------------------------------------
 # Rotating file logger — backup audit trail independent of Splunk indexing
 # ---------------------------------------------------------------------------
 _logger = get_audit_logger()
@@ -1798,15 +1803,15 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 })
 
         # Audit event
-        ts = int(datetime.now(timezone.utc).timestamp())
-        self._index_audit(request, {
-            "timestamp": ts,
-            "action": "dr_created",
-            "status": "created",
-            "analyst": user,
-            "detection_rule": detection_rule,
-            "app_context": APP_NAME,
-        })
+        evt = build_audit_event(
+            action="dr_created",
+            analyst=user,
+            detection_rule=detection_rule,
+            csv_file="",
+            app_context=APP_NAME,
+            status="created",
+        )
+        self._index_audit(request, evt)
 
         return self._resp(200, {
             "success": True,
@@ -2103,19 +2108,18 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             pass  # non-critical — rule just stays in both lists
 
         # ── Audit event ───────────────────────────────────────────────
-        ts = int(datetime.now(timezone.utc).timestamp())
-        self._index_audit(request, {
-            "timestamp": ts,
-            "action": "csv_created",
-            "status": "created",
-            "analyst": user,
-            "detection_rule": detection_rule,
-            "csv_file": csv_filename,
-            "app_context": app_context,
-            "column_count": len(headers),
-            "columns": headers,
-            "imported_row_count": len(initial_rows),
-        })
+        evt = build_audit_event(
+            action="csv_created",
+            analyst=user,
+            detection_rule=detection_rule,
+            csv_file=csv_filename,
+            app_context=app_context,
+            status="created",
+            column_count=len(headers),
+            columns=headers,
+            imported_row_count=len(initial_rows),
+        )
+        self._index_audit(request, evt)
 
         row_note = " with {} imported row(s)".format(len(initial_rows)) if initial_rows else ""
         return self._resp(200, {
@@ -2191,16 +2195,17 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 if rule_name in registered:
                     registered.remove(rule_name)
                     write_rules_registry(registered)
-                self._index_audit(request, {
-                    "action": "dr_removed",
-                    "removal_type": removal_type,
-                    "timestamp": int(time.time()),
-                    "analyst": user,
-                    "detection_rule": rule_name,
-                    "csv_count": 0,
-                    "csv_files": "",
-                    "comment": comment,
-                })
+                evt = build_audit_event(
+                    action="dr_removed",
+                    analyst=user,
+                    detection_rule=rule_name,
+                    csv_file="",
+                    comment=comment,
+                    removal_type=removal_type,
+                    csv_count=0,
+                    csv_files="",
+                )
+                self._index_audit(request, evt)
                 # Auto-cancel pending requests for this rule
                 with _approval_queue_lock():
                     queue = _read_approval_queue()
@@ -2258,17 +2263,18 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                         except OSError:
                             pass
 
-        self._index_audit(request, {
-            "action": "dr_removed",
-            "removal_type": "trashed" if trashed else removal_type,
-            "timestamp": int(time.time()),
-            "analyst": user,
-            "detection_rule": rule_name,
-            "csv_count": len(affected_csvs),
-            "csv_files": ", ".join(affected_csvs),
-            "trash_id": trash_id,
-            "comment": comment,
-        })
+        evt = build_audit_event(
+            action="dr_removed",
+            analyst=user,
+            detection_rule=rule_name,
+            csv_file="",
+            comment=comment,
+            removal_type="trashed" if trashed else removal_type,
+            csv_count=len(affected_csvs),
+            csv_files=", ".join(affected_csvs),
+            trash_id=trash_id,
+        )
+        self._index_audit(request, evt)
 
         # Auto-cancel pending approval requests for this rule
         with _approval_queue_lock():
@@ -2398,19 +2404,19 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     except OSError:
                         pass
 
-        self._index_audit(request, {
-            "action": "csv_removed",
-            "removal_type": "trashed" if trashed else removal_type,
-            "timestamp": int(time.time()),
-            "analyst": user,
-            "detection_rule": rule_name,
-            "csv_file": csv_file,
-            "app_context": app_context,
-            "rule_also_removed": rule_also_removed,
-            "file_deleted": trashed,
-            "trash_id": trash_id,
-            "comment": comment,
-        })
+        evt = build_audit_event(
+            action="csv_removed",
+            analyst=user,
+            detection_rule=rule_name,
+            csv_file=csv_file,
+            app_context=app_context,
+            comment=comment,
+            removal_type="trashed" if trashed else removal_type,
+            rule_also_removed=rule_also_removed,
+            file_deleted=trashed,
+            trash_id=trash_id,
+        )
+        self._index_audit(request, evt)
 
         # Auto-cancel pending requests for this CSV (or rule if last CSV)
         with _approval_queue_lock():
@@ -5873,52 +5879,19 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     def _index_audit(self, request, event):
         """Write an audit event into the wl_audit Splunk index.
 
-        Uses a direct HTTPS POST to Splunk's receivers/simple endpoint.
-        No external SDK required — only Python's built-in urllib.
+        Delegates to wl_audit.post_audit_event() to avoid duplicating HTTP logic.
         """
-        try:
-            import urllib.request
-            import urllib.parse
-            import ssl
+        # Use system auth token (from passSystemAuth in restmap.conf)
+        # so non-admin users can still write audit events
+        session_key = request.get("system_authtoken", "") or \
+            request.get("session", {}).get("authtoken", "")
+        if not session_key:
+            return
 
-            # Use system auth token (from passSystemAuth in restmap.conf)
-            # so non-admin users can still write audit events
-            session_key = request.get("system_authtoken", "") or \
-                request.get("session", {}).get("authtoken", "")
-            if not session_key:
-                return
-
-            # Truncate value arrays to prevent oversized audit events
-            if "value" in event and isinstance(event["value"], list):
-                if len(event["value"]) > MAX_AUDIT_VALUE_LINES:
-                    truncated_count = len(event["value"]) - MAX_AUDIT_VALUE_LINES
-                    event["value"] = event["value"][:MAX_AUDIT_VALUE_LINES]
-                    event["value"].append(
-                        "... truncated {} more entries".format(truncated_count)
-                    )
-
-            qs = urllib.parse.urlencode({
-                "index": AUDIT_INDEX,
-                "sourcetype": AUDIT_SOURCETYPE,
-                "source": AUDIT_SOURCE,
-            })
-            url = "https://127.0.0.1:8089/services/receivers/simple?%s" % qs
-            event_data = json.dumps(event, default=str).encode("utf-8")
-
-            req = urllib.request.Request(url, data=event_data, method="POST")
-            req.add_header("Authorization", "Splunk %s" % session_key)
-            req.add_header("Content-Type", "application/json")
-
-            # SSL verification disabled intentionally: this request targets
-            # localhost (127.0.0.1:8089) where Splunk uses a self-signed cert.
-            # No data leaves the machine, so MITM risk is negligible.
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-
-            urllib.request.urlopen(req, context=ctx, timeout=10)
-        except Exception as exc:
-            _logger.error("_index_audit error: %s", exc)
+        # post_audit_event handles truncation, serialization, HTTP posting, and errors
+        success, error = post_audit_event(session_key, event)
+        if not success:
+            _logger.error("_index_audit error: %s", error)
 
     # ==================================================================
     # Internal helpers
