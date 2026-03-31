@@ -39,7 +39,7 @@ Phase 02 — backend-core-domain
 ## Current Position
 
 Phase: 02 (backend-core-domain) — EXECUTING
-Plan: 1 of 4
+Plan: 2 of 4 (Plan 01 Complete ✓)
 
 ## Roadmap Overview
 
@@ -50,7 +50,7 @@ Plan: 1 of 4
 | Phase | Goal | Requirements | Status |
 |-------|------|--------------|--------|
 | 1 | Backend Foundation | BMOD-02, BMOD-03, BMOD-04, BMOD-05, TEST-01(p) | COMPLETE ✓ |
-| 2 | Backend Core Domain | BMOD-01, BMOD-06, BMOD-07, BMOD-08, BMOD-09, BMOD-10, + | Not started |
+| 2 | Backend Core Domain | BMOD-01, BMOD-06, BMOD-07, BMOD-08, BMOD-09, BMOD-10, + | IN PROGRESS (02-01 COMPLETE ✓) |
 | 3 | Backend Orchestration | BMOD-11, BMOD-12, BMOD-13(p), BMOD-14(p), BMOD-15(p), TEST-01(p), TEST-04(p) | Not started |
 | 4 | Backend Integration | BMOD-01, TEST-01(p), TEST-02 | Not started |
 | 5 | Frontend Architecture | FMOD-01, FMOD-02, FMOD-03, FMOD-04, FMOD-05, FMOD-08, TEST-05(p) | Not started |
@@ -128,16 +128,21 @@ Plan: 1 of 4
 
 **2026-03-31: Plan 02-01 Completion (Layer 3 CSV Module)**
 
-- Extracted CSV operations into wl_csv.py (Layer 3)
-  - **read_csv()**: Parse CSV file with proper encoding handling
-  - **write_csv()**: Atomic write with temp file → rename
-  - **compute_diff()**: Similarity-based diff engine for detecting edits even when rows are simultaneously removed
-  - **get_expire_column()**: Find Expires column in CSV
-  - **remove_expired_rows()**: Purge rows with past expiration dates
-- Extracted 5 functions, removed ~250 lines from wl_handler.py
-- Unit test coverage: 32 tests, 100% pass rate
-- Integrated into wl_handler.py with all call sites updated
-- Requirement BMOD-06 fulfilled
+- Extracted CSV operations into wl_csv.py (Layer 3, 451 lines)
+  - **read_csv()**: Parse CSV file with proper encoding handling (UTF-8-sig BOM stripping)
+  - **write_csv()**: Atomic write with temp file → rename pattern
+  - **compute_diff()**: Similarity-based diff engine with Counter (multiset) for duplicates, reverse iteration for append-only rows, >50% field threshold for edit pairing
+  - **get_expire_column()**: Find Expires column (case-insensitive)
+  - **remove_expired_rows()**: Purge rows with past expiration dates (UTC and legacy local time support)
+  - **get_column_widths()**: Read column width metadata (side-car JSON)
+  - **set_column_widths()**: Write column width metadata
+- Extracted 7 functions, removed ~260 lines from wl_handler.py (net -256 after imports)
+- Unit test coverage: 37 tests, 95% code coverage
+  - 100% coverage on all functions: read, write, diff, expiration, columns
+  - Edge cases: duplicate detection, metadata filtering, timezone offsets, O(n²) guards
+- Integrated into wl_handler.py with 50+ call sites updated, all old _prefixed functions removed
+- Requirements BMOD-06 and TEST-01 fulfilled
+- No deviations from plan; all success criteria met
 
 **2026-03-31: Plan 02-02 Completion (Layer 3 Rules & Trash Modules)**
 
