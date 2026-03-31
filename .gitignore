@@ -45,7 +45,7 @@ lookups/_presence.json
 *.tar.gz
 
 # Development/testing files
-tests/
+# Note: tests/ directory is committed to git; only cache excluded via .pytest_cache
 test_*.py
 *_test.py
 CLAUDE.md
