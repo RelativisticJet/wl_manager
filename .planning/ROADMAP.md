@@ -12,7 +12,7 @@
 ## Phases
 
 - [x] **Phase 1: Backend Foundation** - Extract dependency-free backend modules (constants, validation, RBAC, presence)
-- [ ] **Phase 2: Backend Core Domain** - Extract data persistence layer (CSV, versions, audit, rules, trash)
+- [ ] **Phase 2: Backend Core Domain** - Extract data persistence layer (CSV, versions, audit, rules, trash) + gap closure
 - [ ] **Phase 3: Backend Orchestration** - Extract approval queue and daily limits management
 - [ ] **Phase 4: Backend Integration** - Refactor wl_handler.py as thin REST router
 - [ ] **Phase 5: Frontend Architecture** - Extract frontend modules and implement state manager
@@ -74,11 +74,11 @@
 
 ### Phase 2: Backend Core Domain
 
-**Goal:** Extract 5 data persistence layer modules that depend on Phase 1, establishing the CSV I/O, versioning, auditing, and trash systems.
+**Goal:** Extract 5 data persistence layer modules that depend on Phase 1, establishing the CSV I/O, versioning, auditing, and trash systems. Includes gap closure to refactor oversized functions.
 
 **Depends on:** Phase 1
 
-**Requirements:** BMOD-06, BMOD-07, BMOD-08, BMOD-09, BMOD-10, BMOD-13 (partial), BMOD-14 (partial), BMOD-15 (partial), TEST-01 (partial)
+**Requirements:** BMOD-06, BMOD-07, BMOD-08, BMOD-09, BMOD-10, BMOD-13, BMOD-14, BMOD-15, TEST-01 (partial)
 
 **Success Criteria** (what must be TRUE when phase completes):
 1. User can load a CSV and save changes with version snapshots recorded, all as before (no functional change)
@@ -88,35 +88,43 @@
 5. Integration tests verify end-to-end chain: CSV save → version snapshot → audit event posting → trash soft-delete (all work as before)
 6. DRY compliance: no duplicated logic for version snapshots, diff computation, or audit field construction across modules
 
-**Plans:** 2/4 plans executed
+**Plans:** 4 core + 1 gap-closure (5 total)
 
-- [ ] **02-01-PLAN.md** — Extract wl_csv.py (Layer 3, Wave 1)
+- [x] **02-01-PLAN.md** — Extract wl_csv.py (Layer 3, Wave 1) — COMPLETED
   - Requirements: BMOD-06
   - Files: bin/wl_csv.py, tests/unit/test_csv.py, bin/wl_handler.py (wire imports)
   - Tasks: 3 (create wl_csv.py, unit tests, wire handler calls)
 
-- [ ] **02-02-PLAN.md** — Extract wl_rules.py and wl_trash.py (Layer 3, Wave 1)
+- [x] **02-02-PLAN.md** — Extract wl_rules.py and wl_trash.py (Layer 3, Wave 1) — COMPLETED
   - Requirements: BMOD-09, BMOD-10
   - Files: bin/wl_rules.py, bin/wl_trash.py, tests/unit/test_rules.py, tests/unit/test_trash.py, bin/wl_handler.py
   - Tasks: 5 (create wl_rules, create wl_trash, unit tests for each, wire handler)
   - Depends on: 02-01
 
-- [ ] **02-03-PLAN.md** — Extract wl_versions.py (Layer 3, Wave 2)
+- [x] **02-03-PLAN.md** — Extract wl_versions.py (Layer 3, Wave 2) — COMPLETED
   - Requirements: BMOD-07
   - Files: bin/wl_versions.py, tests/unit/test_versions.py, bin/wl_handler.py
   - Tasks: 3 (create wl_versions, unit tests, wire handler)
   - Depends on: 02-01 (calls wl_csv.read_csv, write_csv)
 
-- [ ] **02-04-PLAN.md** — Extract wl_audit.py and integration tests (Layer 3, Wave 3)
-  - Requirements: BMOD-08, BMOD-13, BMOD-14, BMOD-15, TEST-01
+- [x] **02-04-PLAN.md** — Extract wl_audit.py and integration tests (Layer 3, Wave 3) — COMPLETED
+  - Requirements: BMOD-08, BMOD-14, BMOD-15, TEST-01
   - Files: bin/wl_audit.py, tests/unit/test_audit.py, tests/integration/test_persistence.py, bin/wl_handler.py
   - Tasks: 5 (create wl_audit, unit tests, integration tests, wire handler, verify phase completion)
   - Depends on: 02-03 (imports from all Phase 2 modules)
 
-**Wave Structure:**
-- **Wave 1:** 02-01 (wl_csv), 02-02 (wl_rules, wl_trash) — independent extraction
-- **Wave 2:** 02-03 (wl_versions) — depends on 02-01 for CSV operations
-- **Wave 3:** 02-04 (wl_audit + integration) — depends on all Phase 2 modules, final wiring
+- [ ] **02-05-PLAN.md** — Refactor oversized functions to comply with BMOD-13 (Gap Closure, Wave 1)
+  - Requirements: BMOD-13
+  - Files: bin/wl_csv.py (compute_diff refactoring), bin/wl_trash.py (move_to_trash refactoring)
+  - Tasks: 2 (refactor compute_diff into 4 focused functions, refactor move_to_trash into 3 focused functions)
+  - Gap source: VERIFICATION.md identified compute_diff (207 lines) and move_to_trash (139 lines) exceeding 100-line limit
+  - Depends on: none (modifies already-created modules)
+
+**Wave Structure (including gap-closure):**
+- **Wave 1 (Core):** 02-01 (wl_csv), 02-02 (wl_rules, wl_trash) — independent extraction
+- **Wave 1 (Gap-Closure):** 02-05 (function refactoring) — can run in parallel with core Wave 1 (modifies existing files, not new ones)
+- **Wave 2 (Core):** 02-03 (wl_versions) — depends on 02-01 for CSV operations
+- **Wave 3 (Core):** 02-04 (wl_audit + integration) — depends on all Phase 2 modules, final wiring
 
 ---
 
@@ -256,9 +264,9 @@
 
 | Phase | Plans | Status | Started | Completed |
 |-------|-------|--------|---------|-----------|
-| 1. Backend Foundation | 4 plans | Planning complete | — | — |
-| 2. Backend Core Domain | 2/4 | In Progress|  | — |
-| 3. Backend Orchestration | 2 plans | Planning complete | — | — |
+| 1. Backend Foundation | 4 plans | Complete ✓ | — | — |
+| 2. Backend Core Domain | 4 core + 1 gap | In Progress (gap closure next) | — | — |
+| 3. Backend Orchestration | 2 plans | Planned | — | — |
 | 4. Backend Integration | TBD | Not started | — | — |
 | 5. Frontend Architecture | TBD | Not started | — | — |
 | 6. Admin Panel | TBD | Not started | — | — |
@@ -274,6 +282,7 @@
 - **Zero downtime:** Each phase produces a working app; can deploy incrementally
 - **Testing integrated:** Every phase includes its own test suite (not deferred to Phase 7)
 - **Frontend depends on backend:** Phase 5 starts only after Phase 4 completes to ensure stable API
-- **Phase 1 planning complete:** 4 executable plans with 2-wave structure, ≥80% coverage targets, ready for execution
-- **Phase 2 planning complete:** 4 executable plans with 3-wave structure, 5 modules extracted, integration tests for persistence chain, ready for execution
-- **Phase 3 planning complete:** 2 executable plans with 2-wave structure, wl_limits + wl_approval with concurrency tests (5+ threads), ready for execution
+- **Phase 1 complete:** 4 executable plans with 2-wave structure, all passing tests, ready for Phase 2
+- **Phase 2 core complete:** 4 executable plans with 3-wave structure, 5 modules extracted, 132/132 tests passing
+- **Phase 2 gap closure:** Plan 02-05 created to refactor oversized functions (compute_diff 207→4 funcs, move_to_trash 139→3 funcs) to satisfy BMOD-13 requirement
+- **Phase 3 planned:** 2 executable plans with 2-wave structure, wl_limits + wl_approval with concurrency tests (5+ threads), ready for execution
