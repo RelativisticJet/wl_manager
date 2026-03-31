@@ -38,8 +38,8 @@ Phase 02 — backend-core-domain
 
 ## Current Position
 
-Phase: 02 (backend-core-domain) — EXECUTING
-Plan: 3 of 4 (Plan 01-02 Complete ✓, Plan 03 Complete ✓)
+Phase: 02 (backend-core-domain) — COMPLETE ✓
+Plan: 4 of 4 (All plans complete ✓)
 
 ## Roadmap Overview
 
@@ -164,6 +164,23 @@ Plan: 3 of 4 (Plan 01-02 Complete ✓, Plan 03 Complete ✓)
 - Integrated into wl_handler.py: removed ~420 lines of internal function definitions
 - All type hints added to public functions for IDE support
 - Requirements BMOD-09, BMOD-10, TEST-01 fulfilled
+
+**2026-03-31: Plan 02-04 Completion (Layer 3 Audit Event Module)**
+
+- Extracted wl_audit.py (191 lines): Audit event construction and HTTP posting
+  - **build_audit_event()**: Constructs structured event dicts with action, analyst, detection_rule, csv_file, and flexible kwargs
+  - **post_audit_event()**: Posts events to localhost:8089 via HTTP; handles SSL self-signed certs, value truncation, and network errors
+  - **get_audit_logger()**: Re-exports audit logger from wl_logging
+  - Decision: Use return tuples (bool, str) instead of exceptions for non-blocking error handling
+  - Decision: Delegate _index_audit() to post_audit_event() to eliminate 40 lines of duplicate HTTP/SSL logic
+- Unit test coverage: 16 tests, 84% code coverage (above 80% requirement)
+- Integration test coverage: 13 tests verifying module contracts and happy paths
+- Integrated wl_audit into wl_handler.py: added imports, refactored _index_audit(), replaced 5 inline audit constructions with build_audit_event() calls
+- All 5 Phase 2 modules fully wired: wl_csv, wl_rules, wl_trash, wl_versions, wl_audit (1676 lines total)
+- Handler reduced to 5930 lines (30.7% extraction from 7114 baseline)
+- All 259 tests passing (unit + integration), 1 skipped (Windows symlink test)
+- Requirements BMOD-01, TEST-01 fulfilled
+- Phase 02-backend-core-domain COMPLETE ✓
 
 **2026-03-31: Plan 02-03 Completion (Layer 3 Version Snapshots & Manifest)**
 
