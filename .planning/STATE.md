@@ -38,9 +38,9 @@ Phase 01 — backend-foundation
 
 ## Current Position
 
-Phase: 01 (backend-foundation) — IN PROGRESS (3/4 plans completed)
-Current Plan: 03 of 4 — COMPLETED ✓
-Next: 04
+Phase: 01 (backend-foundation) — IN PROGRESS (4/4 plans completed)
+Current Plan: 04 of 4 — COMPLETED ✓
+Phase Status: COMPLETE ✓
 
 ## Roadmap Overview
 
@@ -50,7 +50,7 @@ Next: 04
 
 | Phase | Goal | Requirements | Status |
 |-------|------|--------------|--------|
-| 1 | Backend Foundation | BMOD-02, BMOD-03, BMOD-04, BMOD-05, TEST-01(p) | In Progress (50%) |
+| 1 | Backend Foundation | BMOD-02, BMOD-03, BMOD-04, BMOD-05, TEST-01(p) | COMPLETE ✓ |
 | 2 | Backend Core Domain | BMOD-01, BMOD-06, BMOD-07, BMOD-08, BMOD-09, BMOD-10, + | Not started |
 | 3 | Backend Orchestration | BMOD-11, BMOD-12, BMOD-13(p), BMOD-14(p), BMOD-15(p), TEST-01(p), TEST-04(p) | Not started |
 | 4 | Backend Integration | BMOD-01, TEST-01(p), TEST-02 | Not started |
@@ -103,6 +103,29 @@ Next: 04
 - Requirement BMOD-03 fulfilled: "Input validation extracted to dedicated module"
 - Total: 33 new tests (32 passed, 1 skipped)
 - Ready for Phase 01-04: Rate limiting, RBAC, presence tracking
+
+**2026-03-31: Plan 01-04 Completion (Layer 2 Utility Modules)**
+
+- Extracted three Layer 2 utility modules from wl_handler.py
+  - **wl_ratelimit.py** (66 lines): Sliding-window rate limiter with per-user, per-action-type tracking
+    - Automatic pruning of timestamps outside RATE_WINDOW
+    - Stale-key cleanup when dict exceeds 10,000 entries
+    - 86% coverage (11 tests)
+  - **wl_rbac.py** (169 lines): Role-based access control predicates and user discovery
+    - 8 functions: is_admin, is_editor, is_superadmin, can_approve, can_approve_own_requests, get_user, get_roles, get_admin_users
+    - Lazy import of splunk.rest for offline testing support
+    - 99% coverage (17 tests)
+  - **wl_presence.py** (157 lines): User presence tracking with per-CSV state dictionaries
+    - Idle-minutes calculation, automatic cleanup of stale users
+    - Per-CSV isolation, per-file and per-user limits
+    - 100% coverage (30+ tests)
+- Updated wl_handler.py: Removed ~150 lines, updated to import and use Layer 2 modules
+- Comprehensive unit test suite: 62 tests, 97% overall coverage
+  - All tests pass offline (no Splunk SDK required)
+  - Proper mocking of time-dependent code and Splunk REST API
+  - Test isolation via module-level state reset functions
+- Requirements BMOD-04, BMOD-05, TEST-01 fulfilled
+- Phase 01-backend-foundation is COMPLETE ✓
 
 ---
 
