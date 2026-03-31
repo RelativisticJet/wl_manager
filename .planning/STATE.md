@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: milestone
-status: unknown
-last_updated: "2026-03-31T21:22:05.476Z"
+status: in-progress
+last_updated: "2026-03-31T22:35:00.000Z"
 progress:
   total_phases: 8
-  completed_phases: 1
-  total_plans: 8
-  completed_plans: 5
+  completed_phases: 2
+  total_plans: 10
+  completed_plans: 6
 ---
 
 # State: Whitelist Manager v3.0 Modular Rewrite
@@ -39,7 +39,7 @@ Phase 02 — backend-core-domain
 ## Current Position
 
 Phase: 02 (backend-core-domain) — COMPLETE ✓
-Plan: 4 of 4 (All plans complete ✓)
+Plan: 5 of 5 (All plans complete ✓)
 
 ## Roadmap Overview
 
@@ -50,7 +50,7 @@ Plan: 4 of 4 (All plans complete ✓)
 | Phase | Goal | Requirements | Status |
 |-------|------|--------------|--------|
 | 1 | Backend Foundation | BMOD-02, BMOD-03, BMOD-04, BMOD-05, TEST-01(p) | COMPLETE ✓ |
-| 2 | Backend Core Domain | BMOD-01, BMOD-06, BMOD-07, BMOD-08, BMOD-09, BMOD-10, + | IN PROGRESS (02-01 COMPLETE ✓) |
+| 2 | Backend Core Domain | BMOD-01, BMOD-06, BMOD-07, BMOD-08, BMOD-09, BMOD-10, BMOD-13 | COMPLETE ✓ |
 | 3 | Backend Orchestration | BMOD-11, BMOD-12, BMOD-13(p), BMOD-14(p), BMOD-15(p), TEST-01(p), TEST-04(p) | Not started |
 | 4 | Backend Integration | BMOD-01, TEST-01(p), TEST-02 | Not started |
 | 5 | Frontend Architecture | FMOD-01, FMOD-02, FMOD-03, FMOD-04, FMOD-05, FMOD-08, TEST-05(p) | Not started |
@@ -205,6 +205,23 @@ Plan: 4 of 4 (All plans complete ✓)
   - Adjusted manifest iteration for new dict structure (versions key)
 - Requirements BMOD-07, TEST-01 fulfilled
 - No deviations from plan; all success criteria met
+
+**2026-03-31: Plan 02-05 Completion (Function Size Compliance — BMOD-13)**
+
+- Gap closure plan identified two oversized functions during Phase 2 verification
+  - **compute_diff** (wl_csv.py): Already refactored before plan execution (207 → 74 lines + 4 sub-functions)
+  - **move_to_trash** (wl_trash.py): Refactored into dispatcher (71 lines) + 4 sub-functions (63, 34, 29, 24 lines)
+- Refactoring approach: Extract focused sub-functions without changing external API signatures
+  - All 246 unit tests pass (37 CSV + 19 trash + 190 other)
+  - Zero logic changes: identical output behavior on all test inputs
+  - All functions now ≤100 lines (max: 98 across both modules)
+- Extracted wl_trash.py sub-functions:
+  - **build_trash_metadata** (63 lines): Metadata dict construction with expiry logic
+  - **_move_versions_for_csv** (34 lines): Helper for version snapshot operations
+  - **move_csv_to_trash** (29 lines): CSV-specific handler
+  - **move_rule_to_trash** (24 lines): Rule-specific handler
+- Requirement BMOD-13 fully satisfied: "No function in Phase 2 exceeds 100 lines"
+- Phase 02-backend-core-domain now fully COMPLETE (all 5 plans executed)
 
 ---
 
