@@ -121,6 +121,14 @@ from wl_presence import report_presence, get_presence, cleanup_presence, reset_p
 # ---------------------------------------------------------------------------
 from wl_csv import read_csv, write_csv, compute_diff, get_expire_column, remove_expired_rows
 
+# Layer 3: Detection Rules Registry (imported from wl_rules module)
+# ---------------------------------------------------------------------------
+from wl_rules import read_rules_registry, write_rules_registry, read_csv_mapping, get_rule_csv_file
+
+# Layer 3: Trash Management (imported from wl_trash module)
+# ---------------------------------------------------------------------------
+from wl_trash import move_to_trash, list_trash, restore_from_trash, purge_trash_item, auto_cleanup_trash
+
 # ---------------------------------------------------------------------------
 # Rotating file logger — backup audit trail independent of Splunk indexing
 # ---------------------------------------------------------------------------
@@ -170,7 +178,7 @@ def _get_detection_rules_path():
 _detection_rules_lock = threading.Lock()
 
 
-def _read_detection_rules():
+def read_rules_registry():
     """Read the list of registered detection rule names."""
     path = _get_detection_rules_path()
     if not os.path.isfile(path):
@@ -183,7 +191,7 @@ def _read_detection_rules():
         return []
 
 
-def _write_detection_rules(rules):
+def write_rules_registry(rules):
     """Write the detection rules list to disk."""
     path = _get_detection_rules_path()
     with open(path, "w", encoding="utf-8") as fh:
@@ -740,426 +748,6 @@ def _write_daily_limits(counters):
 # Trash / soft-delete helpers
 # ══════════════════════════════════════════════════════════════════
 
-def _get_trash_dir():
-    """Return path to the trash directory, creating it if needed."""
-    trash = os.path.join(OWN_LOOKUPS, TRASH_DIR)
-    os.makedirs(trash, exist_ok=True)
-    return trash
-
-
-def _read_trash_config():
-    """Read trash config (retention days). Returns dict."""
-    path = os.path.join(
-        OWN_LOOKUPS, VERSIONS_DIR, TRASH_CONFIG_FILE)
-    if os.path.isfile(path):
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-                if isinstance(data, dict):
-                    return data
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {"retention_days": DEFAULT_TRASH_RETENTION_DAYS}
-
-
-def _write_trash_config(config):
-    """Write trash config to disk."""
-    versions_dir = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
-    os.makedirs(versions_dir, exist_ok=True)
-    path = os.path.join(versions_dir, TRASH_CONFIG_FILE)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(config, fh, indent=2)
-
-
-def _move_to_trash(item_type, name, user, comment, app_context="",
-                   rule_name="", associated_csvs=None):
-    """Move a CSV or rule to the trash directory.
-
-    Edge case mitigations:
-    - EC3: If a trash entry already exists for this name, overwrite it
-           (prevents storage flood from delete→restore→delete cycles)
-    - EC8: Retention date computed from server config, not stored metadata
-
-    Args:
-        item_type: "csv" or "rule"
-        name: CSV filename or rule name
-        user: who deleted it
-        comment: reason for deletion
-        app_context: app context for CSV path resolution
-        rule_name: detection rule (for CSV items)
-        associated_csvs: list of {csv_file, app_context} dicts (for rule items)
-
-    Returns:
-        trash_id: unique identifier for the trashed item
-    """
-    trash_dir = _get_trash_dir()
-    now = int(time.time())
-    now_str = time.strftime("%Y%m%d_%H%M%S", time.gmtime(now))
-
-    # EC3: Use a deterministic trash ID based on name + type
-    # so repeated delete→restore→delete overwrites, not accumulates
-    trash_id = "{}__{}_{}".format(name, item_type, now_str)
-
-    # EC3: Remove any existing trash entry for this exact name+type
-    for existing in os.listdir(trash_dir):
-        if existing.startswith("{}__{}".format(name, item_type)):
-            old_path = os.path.join(trash_dir, existing)
-            if os.path.isdir(old_path):
-                import shutil
-                shutil.rmtree(old_path, ignore_errors=True)
-
-    item_dir = os.path.join(trash_dir, trash_id)
-    os.makedirs(item_dir, exist_ok=True)
-
-    config = _read_trash_config()
-    # EC8: Compute expiry from config, not metadata — prevents tamper
-    retention_days = config.get("retention_days",
-                                DEFAULT_TRASH_RETENTION_DAYS)
-    expiry_ts = now + (retention_days * 86400)
-
-    metadata = {
-        "item_type": item_type,
-        "name": name,
-        "deleted_by": user,
-        "deleted_at": now,
-        "deleted_at_human": time.strftime(
-            "%Y-%m-%d %H:%M:%S UTC", time.gmtime(now)),
-        "comment": comment,
-        "expiry_ts": expiry_ts,
-        "expiry_human": time.strftime(
-            "%Y-%m-%d %H:%M:%S UTC", time.gmtime(expiry_ts)),
-        "retention_days": retention_days,
-        "rule_name": rule_name,
-        "app_context": app_context,
-    }
-
-    if item_type == "csv":
-        # Move the CSV file itself
-        csv_path = build_csv_path(name, app_context)
-        if csv_path and os.path.isfile(csv_path):
-            import shutil
-            shutil.move(csv_path, os.path.join(item_dir, name))
-
-        # Copy version snapshots for this CSV
-        versions_src = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
-        base = name.replace(".csv", "")
-        manifest_name = "{}_versions.json".format(base)
-        manifest_path = os.path.join(versions_src, manifest_name)
-
-        if os.path.isfile(manifest_path):
-            import shutil
-            # Move manifest
-            shutil.move(manifest_path,
-                        os.path.join(item_dir, manifest_name))
-            # Move snapshot CSV files
-            try:
-                with open(os.path.join(item_dir, manifest_name),
-                          "r", encoding="utf-8") as fh:
-                    manifest = json.load(fh)
-                # Manifest can be a list (array) or dict with "versions" key
-                ver_list = manifest if isinstance(manifest, list) \
-                    else manifest.get("versions", [])
-                for ver in ver_list:
-                    vf = ver.get("filename", "")
-                    vf_path = os.path.join(versions_src, vf)
-                    if vf and os.path.isfile(vf_path):
-                        shutil.move(vf_path,
-                                    os.path.join(item_dir, vf))
-            except (json.JSONDecodeError, OSError):
-                pass  # manifest unreadable — snapshot files lost
-
-        metadata["original_path"] = csv_path or ""
-
-    elif item_type == "rule":
-        metadata["associated_csvs"] = associated_csvs or []
-        # Move each associated CSV into the trash bundle
-        for csv_info in (associated_csvs or []):
-            csv_name = csv_info.get("csv_file", "")
-            csv_app = csv_info.get("app_context", "")
-            csv_path = build_csv_path(csv_name, csv_app)
-            if csv_path and os.path.isfile(csv_path):
-                import shutil
-                shutil.move(csv_path, os.path.join(item_dir, csv_name))
-            # Also move version snapshots for each CSV
-            versions_src = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
-            base = csv_name.replace(".csv", "")
-            manifest_name = "{}_versions.json".format(base)
-            manifest_path = os.path.join(versions_src, manifest_name)
-            if os.path.isfile(manifest_path):
-                import shutil
-                shutil.move(manifest_path,
-                            os.path.join(item_dir, manifest_name))
-                try:
-                    with open(os.path.join(item_dir, manifest_name),
-                              "r", encoding="utf-8") as fh:
-                        manifest = json.load(fh)
-                    # Manifest can be a list or dict with "versions" key
-                    ver_list = manifest if isinstance(manifest, list) \
-                        else manifest.get("versions", [])
-                    for ver in ver_list:
-                        vf = ver.get("filename", "")
-                        vf_path = os.path.join(versions_src, vf)
-                        if vf and os.path.isfile(vf_path):
-                            shutil.move(vf_path,
-                                        os.path.join(item_dir, vf))
-                except (json.JSONDecodeError, OSError):
-                    pass
-
-    # Write metadata last (after all files are moved)
-    with open(os.path.join(item_dir, "metadata.json"),
-              "w", encoding="utf-8") as fh:
-        json.dump(metadata, fh, indent=2)
-
-    return trash_id
-
-
-def _list_trash():
-    """List all items in the trash directory.
-
-    Returns list of metadata dicts, sorted by deletion time (newest first).
-    EC8: Recomputes expiry from config — ignores stored expiry.
-    """
-    trash_dir = _get_trash_dir()
-    config = _read_trash_config()
-    retention_days = config.get("retention_days",
-                                DEFAULT_TRASH_RETENTION_DAYS)
-    items = []
-    for entry_name in os.listdir(trash_dir):
-        entry_path = os.path.join(trash_dir, entry_name)
-        if not os.path.isdir(entry_path):
-            continue
-        meta_path = os.path.join(entry_path, "metadata.json")
-        if not os.path.isfile(meta_path):
-            continue
-        try:
-            with open(meta_path, "r", encoding="utf-8") as fh:
-                meta = json.load(fh)
-            # EC8: Recompute expiry from current config
-            deleted_at = meta.get("deleted_at", 0)
-            meta["expiry_ts"] = deleted_at + (retention_days * 86400)
-            meta["expiry_human"] = time.strftime(
-                "%Y-%m-%d %H:%M:%S UTC",
-                time.gmtime(meta["expiry_ts"]))
-            meta["trash_id"] = entry_name
-            meta["days_remaining"] = max(
-                0, (meta["expiry_ts"] - int(time.time())) // 86400)
-            items.append(meta)
-        except (json.JSONDecodeError, OSError):
-            continue
-    items.sort(key=lambda x: x.get("deleted_at", 0), reverse=True)
-    return items
-
-
-def _restore_from_trash(trash_id):
-    """Restore a trashed item back to its original location.
-
-    Edge case mitigations:
-    - EC1: For rules, recreates the rule mapping AND rule registry entry
-    - EC2: If name conflicts (new item with same name exists), returns error
-
-    Returns:
-        (success, message, metadata) tuple
-    """
-    trash_dir = _get_trash_dir()
-    item_dir = os.path.join(trash_dir, trash_id)
-    if not os.path.isdir(item_dir):
-        return False, "Trash item not found", {}
-
-    meta_path = os.path.join(item_dir, "metadata.json")
-    if not os.path.isfile(meta_path):
-        return False, "Trash metadata missing", {}
-
-    with open(meta_path, "r", encoding="utf-8") as fh:
-        meta = json.load(fh)
-
-    item_type = meta.get("item_type", "")
-    name = meta.get("name", "")
-    import shutil
-
-    if item_type == "csv":
-        csv_name = name
-        app_ctx = meta.get("app_context", "")
-        rule_name = meta.get("rule_name", "")
-
-        # EC2: Check for name conflict
-        dest_path = build_csv_path(csv_name, app_ctx)
-        if dest_path and os.path.isfile(dest_path):
-            return False, ("Cannot restore: '{}' already exists. "
-                           "Rename or delete the existing file "
-                           "first.").format(csv_name), meta
-
-        # Restore CSV file
-        src = os.path.join(item_dir, csv_name)
-        if os.path.isfile(src) and dest_path:
-            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-            shutil.move(src, dest_path)
-
-        # Restore version snapshots
-        versions_dst = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
-        os.makedirs(versions_dst, exist_ok=True)
-        for fname in os.listdir(item_dir):
-            if fname == "metadata.json" or fname == csv_name:
-                continue
-            shutil.move(os.path.join(item_dir, fname),
-                        os.path.join(versions_dst, fname))
-
-        # EC1: Restore rule mapping if rule still exists or re-register
-        if rule_name:
-            mapping = _read_csv_mapping()
-            existing = [e for e in mapping
-                        if e.get("csv_file") == csv_name
-                        and e.get("rule_name") == rule_name]
-            if not existing:
-                mapping.append({
-                    "rule_name": rule_name,
-                    "csv_file": csv_name,
-                    "app_context": app_ctx,
-                })
-                with open(MAPPING_FILE, "w", newline="",
-                          encoding="utf-8") as fh:
-                    writer = csv.DictWriter(
-                        fh,
-                        fieldnames=["rule_name", "csv_file",
-                                    "app_context"],
-                        extrasaction="ignore")
-                    writer.writeheader()
-                    writer.writerows(mapping)
-
-            # Also ensure the rule is in the registry
-            with _detection_rules_modify():
-                registered = _read_detection_rules()
-                if rule_name not in registered:
-                    registered.append(rule_name)
-                    _write_detection_rules(registered)
-
-    elif item_type == "rule":
-        rule_name = name
-        associated_csvs = meta.get("associated_csvs", [])
-
-        # EC2: Check if rule already exists (lock held until write completes)
-        _detection_rules_lock.acquire()
-        registered = _read_detection_rules()
-        mapping = _read_csv_mapping()
-        existing_rule_csvs = [e for e in mapping
-                              if e.get("rule_name") == rule_name]
-        if rule_name in registered or existing_rule_csvs:
-            _detection_rules_lock.release()
-            return False, ("Cannot restore: rule '{}' already exists. "
-                           "Remove the existing rule first.").format(
-                               rule_name), meta
-
-        # Restore each associated CSV file
-        versions_dst = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
-        os.makedirs(versions_dst, exist_ok=True)
-        restored_csvs = []
-
-        for csv_info in associated_csvs:
-            csv_name = csv_info.get("csv_file", "")
-            csv_app = csv_info.get("app_context", "")
-            src = os.path.join(item_dir, csv_name)
-            dest = build_csv_path(csv_name, csv_app)
-            if os.path.isfile(src) and dest:
-                os.makedirs(os.path.dirname(dest), exist_ok=True)
-                shutil.move(src, dest)
-                restored_csvs.append(csv_name)
-
-        # Restore version files (manifests + snapshots)
-        for fname in os.listdir(item_dir):
-            if fname == "metadata.json":
-                continue
-            if fname in [c.get("csv_file", "") for c in associated_csvs]:
-                continue  # already moved above
-            shutil.move(os.path.join(item_dir, fname),
-                        os.path.join(versions_dst, fname))
-
-        # EC1: Recreate rule mapping entries
-        for csv_info in associated_csvs:
-            mapping.append({
-                "rule_name": rule_name,
-                "csv_file": csv_info.get("csv_file", ""),
-                "app_context": csv_info.get("app_context", ""),
-            })
-        with open(MAPPING_FILE, "w", newline="",
-                  encoding="utf-8") as fh:
-            writer = csv.DictWriter(
-                fh,
-                fieldnames=["rule_name", "csv_file", "app_context"],
-                extrasaction="ignore")
-            writer.writeheader()
-            writer.writerows(mapping)
-
-        # Re-register the rule
-        registered.append(rule_name)
-        _write_detection_rules(registered)
-        _detection_rules_lock.release()
-
-    # Clean up the trash entry directory
-    shutil.rmtree(item_dir, ignore_errors=True)
-
-    return True, "Restored '{}' successfully".format(name), meta
-
-
-def _purge_trash_item(trash_id):
-    """Permanently delete a trashed item (no recovery).
-
-    Returns (success, message).
-    """
-    trash_dir = _get_trash_dir()
-    item_dir = os.path.join(trash_dir, trash_id)
-    if not os.path.isdir(item_dir):
-        return False, "Trash item not found"
-    import shutil
-    shutil.rmtree(item_dir, ignore_errors=True)
-    return True, "Permanently purged"
-
-
-def _auto_cleanup_trash():
-    """Remove trash items past their retention period.
-
-    EC6: This is called lazily (on trash list/access), not via a
-    background thread, so it cannot race with active browsing.
-    EC8: Expiry computed from config, not stored metadata.
-
-    Returns count of purged items.
-    """
-    config = _read_trash_config()
-    retention_days = config.get("retention_days",
-                                DEFAULT_TRASH_RETENTION_DAYS)
-    now = int(time.time())
-    trash_dir = _get_trash_dir()
-    purged = 0
-
-    for entry_name in os.listdir(trash_dir):
-        entry_path = os.path.join(trash_dir, entry_name)
-        if not os.path.isdir(entry_path):
-            continue
-        meta_path = os.path.join(entry_path, "metadata.json")
-        if not os.path.isfile(meta_path):
-            continue
-        try:
-            with open(meta_path, "r", encoding="utf-8") as fh:
-                meta = json.load(fh)
-            deleted_at = meta.get("deleted_at", 0)
-            # EC8: Use config retention, not stored expiry
-            expiry = deleted_at + (retention_days * 86400)
-            if now >= expiry:
-                import shutil
-                shutil.rmtree(entry_path, ignore_errors=True)
-                purged += 1
-        except (json.JSONDecodeError, OSError):
-            continue
-    return purged
-
-
-def _read_csv_mapping():
-    """Read rule_csv_map.csv and return list of dicts."""
-    if not os.path.isfile(MAPPING_FILE):
-        return []
-    with open(MAPPING_FILE, "r", encoding="utf-8") as fh:
-        reader = csv.DictReader(fh)
-        return list(reader)
-
-
 def _generate_request_id(user, csv_file="", detection_rule=""):
     """Generate a unique approval request ID.
 
@@ -1605,7 +1193,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         mapping = self._read_mapping()
         rule_set = {row["rule_name"] for row in mapping}
         # Merge in registered rules (those without CSV mappings yet)
-        rule_set.update(_read_detection_rules())
+        rule_set.update(read_rules_registry())
         rules = sorted(rule_set)
         return self._resp(200, {"rules": rules})
 
@@ -1715,7 +1303,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _get_mapping(self, request):
         mapping = self._read_mapping()
-        registered = _read_detection_rules()
+        registered = read_rules_registry()
         roles = get_roles(request)
         is_admin = is_admin(roles)
         has_edit = is_editor(roles)
@@ -1982,8 +1570,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 return self._resp(403, {
                     "error": "Requires admin role to view trash"})
             # Lazy auto-cleanup on access (EC6)
-            purged = _auto_cleanup_trash()
-            items = _list_trash()
+            purged = auto_cleanup_trash()
+            items = list_trash()
             return self._resp(200, {
                 "trash": items,
                 "auto_purged": purged,
@@ -2003,7 +1591,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     "error": "Invalid trash_id"})
             restore_comment = sanitize_text(
                 payload.get("comment", ""))[:500]
-            success, msg, meta = _restore_from_trash(trash_id)
+            success, msg, meta = restore_from_trash(trash_id)
             if success:
                 self._index_audit(request, {
                     "action": "trash_restored",
@@ -2059,7 +1647,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                         meta = json.load(fh)
                 except (json.JSONDecodeError, OSError):
                     pass
-            success, msg = _purge_trash_item(trash_id)
+            success, msg = purge_trash_item(trash_id)
             if success:
                 self._index_audit(request, {
                     "action": "trash_purged",
@@ -2336,7 +1924,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     detection_rule)
             })
         with _detection_rules_modify():
-            registered = _read_detection_rules()
+            registered = read_rules_registry()
             if detection_rule in registered:
                 return self._resp(409, {
                     "error": "Rule '{}' is already registered".format(
@@ -2351,7 +1939,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             # Persist the rule name
             registered.append(detection_rule)
             try:
-                _write_detection_rules(registered)
+                write_rules_registry(registered)
             except OSError as exc:
                 _logger.error("Failed to write detection rules: %s", exc)
                 return self._resp(500, {
@@ -2657,10 +2245,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # ── Remove rule from registry if it was registered there ─────
         try:
             with _detection_rules_modify():
-                registered = _read_detection_rules()
+                registered = read_rules_registry()
                 if detection_rule in registered:
                     registered.remove(detection_rule)
-                    _write_detection_rules(registered)
+                    write_rules_registry(registered)
         except OSError:
             pass  # non-critical — rule just stays in both lists
 
@@ -2749,10 +2337,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if not affected_csvs:
             # Check if it's a registered rule without CSVs
             with _detection_rules_modify():
-                registered = _read_detection_rules()
+                registered = read_rules_registry()
                 if rule_name in registered:
                     registered.remove(rule_name)
-                    _write_detection_rules(registered)
+                    write_rules_registry(registered)
                 self._index_audit(request, {
                     "action": "dr_removed",
                     "removal_type": removal_type,
@@ -2790,10 +2378,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # Also remove from detection rules registry if present
         with _detection_rules_modify():
-            registered = _read_detection_rules()
+            registered = read_rules_registry()
             if rule_name in registered:
                 registered.remove(rule_name)
-                _write_detection_rules(registered)
+                write_rules_registry(registered)
 
         trashed = False
         trash_id = ""
@@ -2803,7 +2391,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                            "app_context": e.get("app_context", "")}
                           for e in affected_entries]
             try:
-                trash_id = _move_to_trash(
+                trash_id = move_to_trash(
                     "rule", rule_name, user, comment,
                     associated_csvs=associated)
                 trashed = True
@@ -2946,7 +2534,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             # Soft delete: move to trash instead of permanent deletion.
             # Files are recoverable until the retention period expires.
             try:
-                trash_id = _move_to_trash(
+                trash_id = move_to_trash(
                     "csv", csv_file, user, comment,
                     app_context=app_context, rule_name=rule_name)
                 trashed = True
@@ -4714,7 +4302,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                                 if e.get("rule_name") == rule_name]
                 if not current_csvs:
                     # Rule was already deleted or has no CSVs
-                    registered = _read_detection_rules()
+                    registered = read_rules_registry()
                     if rule_name not in registered:
                         target["status"] = "failed"
                         target["failure_reason"] = "Rule no longer exists"
@@ -4816,7 +4404,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                         trash_meta = json.load(fh)
                 except (json.JSONDecodeError, OSError):
                     pass
-            success, msg = _purge_trash_item(meta.get("trash_id", ""))
+            success, msg = purge_trash_item(meta.get("trash_id", ""))
             if success:
                 self._index_audit(request, {
                     "action": "trash_purged",
@@ -5604,7 +5192,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             mapping = self._read_mapping()
             rule_in_mapping = any(
                 m["rule_name"] == target_rule for m in mapping)
-            rule_in_registry = target_rule in _read_detection_rules()
+            rule_in_registry = target_rule in read_rules_registry()
             rule_exists = rule_in_mapping or rule_in_registry
             csv_exists = any(
                 m["rule_name"] == target_rule and m["csv_file"] == target_csv
