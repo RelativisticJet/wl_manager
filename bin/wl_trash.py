@@ -47,6 +47,8 @@ __all__ = [
     'build_trash_metadata',
     'move_csv_to_trash',
     'move_rule_to_trash',
+    'restore_csv_from_trash',
+    'restore_rule_from_trash',
 ]
 
 
@@ -375,6 +377,202 @@ def list_trash() -> Tuple[List[Dict], str]:
         return [], str(e)
 
 
+def _restore_mapping_for_csv(csv_name: str, app_ctx: str, rule_name: str) -> None:
+    """
+    Restore rule mapping and registry entry for a CSV.
+
+    Helper function to reduce complexity in restore_csv_from_trash.
+
+    Args:
+        csv_name: CSV filename
+        app_ctx: App context
+        rule_name: Associated rule name
+    """
+    if not rule_name:
+        return
+
+    # Read current mapping
+    if os.path.isfile(MAPPING_FILE):
+        with open(MAPPING_FILE, "r", encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)
+            mapping = list(reader) if reader else []
+    else:
+        mapping = []
+
+    existing = [
+        e for e in mapping
+        if e.get("csv_file") == csv_name and e.get("rule_name") == rule_name
+    ]
+    if not existing:
+        mapping.append(
+            {
+                "rule_name": rule_name,
+                "csv_file": csv_name,
+                "app_context": app_ctx,
+            }
+        )
+        with open(MAPPING_FILE, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(
+                fh,
+                fieldnames=["rule_name", "csv_file", "app_context"],
+                extrasaction="ignore",
+            )
+            writer.writeheader()
+            writer.writerows(mapping)
+
+    # Also ensure the rule is in the registry
+    rules_path = os.path.join(OWN_LOOKUPS, DETECTION_RULES_FILE)
+    if os.path.isfile(rules_path):
+        with open(rules_path, "r", encoding="utf-8") as fh:
+            registered = json.load(fh)
+    else:
+        registered = []
+    if not isinstance(registered, list):
+        registered = []
+    if rule_name not in registered:
+        registered.append(rule_name)
+        with open(rules_path, "w", encoding="utf-8") as fh:
+            json.dump(registered, fh, indent=2)
+
+
+def restore_csv_from_trash(trash_id: str, item_dir: str, meta: Dict) -> Tuple[Dict, str]:
+    """
+    Restore a CSV file from trash item directory back to its original location.
+
+    Restores the CSV file and version snapshots, and updates the rule mapping
+    if applicable. Prevents restoration if a name conflict exists.
+
+    Args:
+        trash_id: Trash item identifier (for error context).
+        item_dir: Trash item directory containing files to restore.
+        meta: Metadata dict from the trash item.
+
+    Returns:
+        Tuple[Dict, str]: (metadata_dict, error_string).
+                          error_string is empty on success, or error message on failure.
+    """
+    csv_name = meta.get("name", "")
+    app_ctx = meta.get("app_context", "")
+    rule_name = meta.get("rule_name", "")
+
+    # EC2: Check for name conflict
+    dest_path = build_csv_path(csv_name, app_ctx)
+    if dest_path and os.path.isfile(dest_path):
+        return meta, "Cannot restore: '{}' already exists. Rename or delete the existing file first.".format(
+            csv_name
+        )
+
+    # Restore CSV file
+    src = os.path.join(item_dir, csv_name)
+    if os.path.isfile(src) and dest_path:
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        shutil.move(src, dest_path)
+
+    # Restore version snapshots
+    versions_dst = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
+    os.makedirs(versions_dst, exist_ok=True)
+    for fname in os.listdir(item_dir):
+        if fname == "metadata.json" or fname == csv_name:
+            continue
+        shutil.move(os.path.join(item_dir, fname), os.path.join(versions_dst, fname))
+
+    # EC1: Restore rule mapping if rule still exists or re-register
+    _restore_mapping_for_csv(csv_name, app_ctx, rule_name)
+
+    return meta, ""  # Success
+
+
+def restore_rule_from_trash(trash_id: str, item_dir: str, meta: Dict) -> Tuple[Dict, str]:
+    """
+    Restore a detection rule from trash item directory back to its original location.
+
+    Restores all associated CSVs and version snapshots, and recreates all mapping
+    entries and rule registry entry. Prevents restoration if a name conflict exists.
+
+    Args:
+        trash_id: Trash item identifier (for error context).
+        item_dir: Trash item directory containing files to restore.
+        meta: Metadata dict from the trash item.
+
+    Returns:
+        Tuple[Dict, str]: (metadata_dict, error_string).
+                          error_string is empty on success, or error message on failure.
+    """
+    rule_name = meta.get("name", "")
+    associated_csvs = meta.get("associated_csvs", [])
+
+    # EC2: Check if rule already exists
+    rules_path = os.path.join(OWN_LOOKUPS, DETECTION_RULES_FILE)
+    if os.path.isfile(rules_path):
+        with open(rules_path, "r", encoding="utf-8") as fh:
+            registered = json.load(fh)
+    else:
+        registered = []
+    if not isinstance(registered, list):
+        registered = []
+
+    if os.path.isfile(MAPPING_FILE):
+        with open(MAPPING_FILE, "r", encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)
+            mapping = list(reader) if reader else []
+    else:
+        mapping = []
+
+    existing_rule_csvs = [e for e in mapping if e.get("rule_name") == rule_name]
+    if rule_name in registered or existing_rule_csvs:
+        return meta, "Cannot restore: rule '{}' already exists. Remove the existing rule first.".format(
+            rule_name
+        )
+
+    # Restore each associated CSV file
+    versions_dst = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
+    os.makedirs(versions_dst, exist_ok=True)
+    restored_csvs = []
+
+    for csv_info in associated_csvs:
+        csv_name = csv_info.get("csv_file", "")
+        csv_app = csv_info.get("app_context", "")
+        src = os.path.join(item_dir, csv_name)
+        dest = build_csv_path(csv_name, csv_app)
+        if os.path.isfile(src) and dest:
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.move(src, dest)
+            restored_csvs.append(csv_name)
+
+    # Restore version files (manifests + snapshots)
+    for fname in os.listdir(item_dir):
+        if fname == "metadata.json":
+            continue
+        if fname in [c.get("csv_file", "") for c in associated_csvs]:
+            continue  # already moved above
+        shutil.move(os.path.join(item_dir, fname), os.path.join(versions_dst, fname))
+
+    # EC1: Recreate rule mapping entries
+    for csv_info in associated_csvs:
+        mapping.append(
+            {
+                "rule_name": rule_name,
+                "csv_file": csv_info.get("csv_file", ""),
+                "app_context": csv_info.get("app_context", ""),
+            }
+        )
+    with open(MAPPING_FILE, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(
+            fh,
+            fieldnames=["rule_name", "csv_file", "app_context"],
+            extrasaction="ignore",
+        )
+        writer.writeheader()
+        writer.writerows(mapping)
+
+    # Re-register the rule
+    registered.append(rule_name)
+    with open(rules_path, "w", encoding="utf-8") as fh:
+        json.dump(registered, fh, indent=2)
+
+    return meta, ""  # Success
+
+
 def restore_from_trash(trash_id: str) -> Tuple[Dict, str]:
     """
     Restore a trashed item back to its original location.
@@ -409,151 +607,17 @@ def restore_from_trash(trash_id: str) -> Tuple[Dict, str]:
             meta = json.load(fh)
 
         item_type = meta.get("item_type", "")
-        name = meta.get("name", "")
 
+        # Dispatch to type-specific handler
         if item_type == "csv":
-            csv_name = name
-            app_ctx = meta.get("app_context", "")
-            rule_name = meta.get("rule_name", "")
-
-            # EC2: Check for name conflict
-            dest_path = build_csv_path(csv_name, app_ctx)
-            if dest_path and os.path.isfile(dest_path):
-                return meta, "Cannot restore: '{}' already exists. Rename or delete the existing file first.".format(
-                    csv_name
-                )
-
-            # Restore CSV file
-            src = os.path.join(item_dir, csv_name)
-            if os.path.isfile(src) and dest_path:
-                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-                shutil.move(src, dest_path)
-
-            # Restore version snapshots
-            versions_dst = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
-            os.makedirs(versions_dst, exist_ok=True)
-            for fname in os.listdir(item_dir):
-                if fname == "metadata.json" or fname == csv_name:
-                    continue
-                shutil.move(os.path.join(item_dir, fname), os.path.join(versions_dst, fname))
-
-            # EC1: Restore rule mapping if rule still exists or re-register
-            if rule_name:
-                # Read current mapping
-                if os.path.isfile(MAPPING_FILE):
-                    with open(MAPPING_FILE, "r", encoding="utf-8") as fh:
-                        reader = csv.DictReader(fh)
-                        mapping = list(reader) if reader else []
-                else:
-                    mapping = []
-
-                existing = [
-                    e for e in mapping
-                    if e.get("csv_file") == csv_name and e.get("rule_name") == rule_name
-                ]
-                if not existing:
-                    mapping.append(
-                        {
-                            "rule_name": rule_name,
-                            "csv_file": csv_name,
-                            "app_context": app_ctx,
-                        }
-                    )
-                    with open(MAPPING_FILE, "w", newline="", encoding="utf-8") as fh:
-                        writer = csv.DictWriter(
-                            fh,
-                            fieldnames=["rule_name", "csv_file", "app_context"],
-                            extrasaction="ignore",
-                        )
-                        writer.writeheader()
-                        writer.writerows(mapping)
-
-                # Also ensure the rule is in the registry
-                rules_path = os.path.join(OWN_LOOKUPS, DETECTION_RULES_FILE)
-                if os.path.isfile(rules_path):
-                    with open(rules_path, "r", encoding="utf-8") as fh:
-                        registered = json.load(fh)
-                else:
-                    registered = []
-                if not isinstance(registered, list):
-                    registered = []
-                if rule_name not in registered:
-                    registered.append(rule_name)
-                    with open(rules_path, "w", encoding="utf-8") as fh:
-                        json.dump(registered, fh, indent=2)
-
+            result, error = restore_csv_from_trash(trash_id, item_dir, meta)
         elif item_type == "rule":
-            rule_name = name
-            associated_csvs = meta.get("associated_csvs", [])
+            result, error = restore_rule_from_trash(trash_id, item_dir, meta)
+        else:
+            return {}, "Unknown item type"
 
-            # EC2: Check if rule already exists
-            rules_path = os.path.join(OWN_LOOKUPS, DETECTION_RULES_FILE)
-            if os.path.isfile(rules_path):
-                with open(rules_path, "r", encoding="utf-8") as fh:
-                    registered = json.load(fh)
-            else:
-                registered = []
-            if not isinstance(registered, list):
-                registered = []
-
-            if os.path.isfile(MAPPING_FILE):
-                with open(MAPPING_FILE, "r", encoding="utf-8") as fh:
-                    reader = csv.DictReader(fh)
-                    mapping = list(reader) if reader else []
-            else:
-                mapping = []
-
-            existing_rule_csvs = [e for e in mapping if e.get("rule_name") == rule_name]
-            if rule_name in registered or existing_rule_csvs:
-                return meta, "Cannot restore: rule '{}' already exists. Remove the existing rule first.".format(
-                    rule_name
-                )
-
-            # Restore each associated CSV file
-            versions_dst = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
-            os.makedirs(versions_dst, exist_ok=True)
-            restored_csvs = []
-
-            for csv_info in associated_csvs:
-                csv_name = csv_info.get("csv_file", "")
-                csv_app = csv_info.get("app_context", "")
-                src = os.path.join(item_dir, csv_name)
-                dest = build_csv_path(csv_name, csv_app)
-                if os.path.isfile(src) and dest:
-                    os.makedirs(os.path.dirname(dest), exist_ok=True)
-                    shutil.move(src, dest)
-                    restored_csvs.append(csv_name)
-
-            # Restore version files (manifests + snapshots)
-            for fname in os.listdir(item_dir):
-                if fname == "metadata.json":
-                    continue
-                if fname in [c.get("csv_file", "") for c in associated_csvs]:
-                    continue  # already moved above
-                shutil.move(os.path.join(item_dir, fname), os.path.join(versions_dst, fname))
-
-            # EC1: Recreate rule mapping entries
-            for csv_info in associated_csvs:
-                mapping.append(
-                    {
-                        "rule_name": rule_name,
-                        "csv_file": csv_info.get("csv_file", ""),
-                        "app_context": csv_info.get("app_context", ""),
-                    }
-                )
-            with open(MAPPING_FILE, "w", newline="", encoding="utf-8") as fh:
-                writer = csv.DictWriter(
-                    fh,
-                    fieldnames=["rule_name", "csv_file", "app_context"],
-                    extrasaction="ignore",
-                )
-                writer.writeheader()
-                writer.writerows(mapping)
-
-            # Re-register the rule
-            registered.append(rule_name)
-            with open(rules_path, "w", encoding="utf-8") as fh:
-                json.dump(registered, fh, indent=2)
+        if error:
+            return result, error
 
         # Clean up the trash entry directory
         shutil.rmtree(item_dir, ignore_errors=True)
