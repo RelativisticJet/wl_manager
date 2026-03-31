@@ -28,7 +28,7 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
 from wl_constants import (
-    OWN_LOOKUPS, TRASH_DIR, TRASH_RETENTION_DAYS, TRASH_CONFIG_FILE,
+    OWN_LOOKUPS, TRASH_DIR, TRASH_CONFIG_FILE,
     VERSIONS_DIR, DETECTION_RULES_FILE, MAPPING_FILE, DEFAULT_TRASH_RETENTION_DAYS
 )
 from wl_validation import sanitize_text, build_csv_path
