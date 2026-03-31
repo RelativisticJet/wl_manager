@@ -38,9 +38,9 @@ Phase 01 — backend-foundation
 
 ## Current Position
 
-Phase: 01 (backend-foundation) — IN PROGRESS (2/4 plans completed)
-Current Plan: 02 of 4 — COMPLETED ✓
-Next: 03
+Phase: 01 (backend-foundation) — IN PROGRESS (3/4 plans completed)
+Current Plan: 03 of 4 — COMPLETED ✓
+Next: 04
 
 ## Roadmap Overview
 
@@ -85,6 +85,24 @@ Next: 03
 - Updated wl_handler.py to import from wl_constants (134 lines removed, zero functional changes)
 - Requirement BMOD-02 fulfilled: "Layer 0 constants, regex patterns, role definitions"
 - Ready for Phase 01-03: Validation & RBAC extraction
+
+**2026-03-31: Plan 01-03 Completion (Logging & Validation Layer)**
+
+- Extracted logging configuration into wl_logging.py (Layer 1)
+  - Single-responsibility module providing get_audit_logger() factory function
+  - RotatingFileHandler with 100 MB max, 10 backups
+  - Idempotent: no duplicate handlers on module reload
+  - 100% test coverage (8 tests)
+- Extracted validation helpers into wl_validation.py (Layer 2)
+  - 5 pure functions: sanitize_text, is_safe_filename, safe_realpath, build_csv_path, resolve_csv_path
+  - 93% test coverage (25 tests)
+  - No state or side effects
+  - Path security: prevents traversal, symlink escape, file access validation
+- Updated wl_handler.py: imports from both modules, 150 lines of duplication removed
+- All 64 call sites updated to use imported versions
+- Requirement BMOD-03 fulfilled: "Input validation extracted to dedicated module"
+- Total: 33 new tests (32 passed, 1 skipped)
+- Ready for Phase 01-04: Rate limiting, RBAC, presence tracking
 
 ---
 
