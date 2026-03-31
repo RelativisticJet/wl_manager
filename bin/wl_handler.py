@@ -76,28 +76,29 @@ from wl_constants import (
     get_splunk_home, get_detection_rules_path, get_approval_queue_path,
 )
 
+# ---------------------------------------------------------------------------
+# Layer 1: Logging (imported from wl_logging module)
+# ---------------------------------------------------------------------------
+from wl_logging import get_audit_logger
+
+# ---------------------------------------------------------------------------
+# Layer 2: Validation (imported from wl_validation module)
+# ---------------------------------------------------------------------------
+from wl_validation import (
+    sanitize_text,
+    is_safe_filename,
+    safe_realpath,
+    build_csv_path,
+    resolve_csv_path,
+)
+
 # Rate limiting: per-action sliding window
 _rate_limits = {}  # { (user, action): [timestamp, ...] }
 
 # ---------------------------------------------------------------------------
 # Rotating file logger — backup audit trail independent of Splunk indexing
 # ---------------------------------------------------------------------------
-AUDIT_LOG = os.path.join(SPLUNK_HOME, "var", "log", "splunk", "wl_manager_audit.log")
-_logger = logging.getLogger("wl_manager_audit")
-if not _logger.handlers:
-    _logger.setLevel(logging.INFO)
-    try:
-        _fh = logging.handlers.RotatingFileHandler(
-            AUDIT_LOG, maxBytes=10 * 1024 * 1024, backupCount=5
-        )
-        _fh.setFormatter(logging.Formatter("%(message)s"))
-        _logger.addHandler(_fh)
-    except OSError:
-        # If the log directory is not writable (e.g. Docker bind mount),
-        # fall back to stderr so messages reach splunkd.log
-        _sh = logging.StreamHandler(sys.stderr)
-        _sh.setFormatter(logging.Formatter("wl_manager_audit: %(message)s"))
-        _logger.addHandler(_sh)
+_logger = get_audit_logger()
 
 
 # In-memory presence tracker:
@@ -110,44 +111,12 @@ _presence = {}
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def _sanitize_text(text, max_length=500):
-    """Sanitize a user-provided text field.
-
-    Strips disallowed characters, collapses whitespace, and truncates.
-    """
-    if not text or not isinstance(text, str):
-        return ""
-    cleaned = _SANITIZE_RE.sub("", text)
-    # Collapse multiple whitespace into single spaces
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    if len(cleaned) > max_length:
-        cleaned = cleaned[:max_length]
-    return cleaned
-
-
 def _find_expire_column(headers):
     """Return the first header that matches an expiration column name, or None."""
     for h in headers:
         if h.lower() in EXPIRE_COLUMN_NAMES:
             return h
     return None
-
-
-def _safe_filename(name):
-    """Return True only if *name* is a plain CSV filename (no traversal)."""
-    if not name or not isinstance(name, str):
-        return False
-    if os.path.basename(name) != name:
-        return False
-    if name.startswith("."):
-        return False
-    if not name.lower().endswith(".csv"):
-        return False
-    # Stem (without .csv) must contain at least one alphanumeric character
-    stem = name[:-4]
-    if not stem or not any(c.isalnum() for c in stem):
-        return False
-    return True
 
 
 def _check_rate_limit(user, action_type="write"):
@@ -177,72 +146,6 @@ def _check_rate_limit(user, action_type="write"):
 
     _rate_limits[key].append(now)
     return True
-
-
-def _safe_realpath(path, allowed_base):
-    """
-    Resolve symlinks and verify the real path is under allowed_base.
-    Returns the resolved path or None if it escapes the allowed directory.
-    """
-    real = os.path.realpath(path)
-    real_base = os.path.realpath(allowed_base)
-    if not real.startswith(real_base + os.sep) and real != real_base:
-        return None
-    return real
-
-
-def _build_csv_path(csv_file, app_context=""):
-    """
-    Build the absolute path to a lookup CSV without checking existence.
-
-    Returns the safe path or None if the filename is invalid or a symlink
-    escape is detected.  Used by both _resolve_csv_path (which adds an
-    existence check) and deletion code (which needs the path before
-    checking isfile itself).
-    """
-    if not _safe_filename(csv_file):
-        return None
-
-    if app_context:
-        safe_app = os.path.basename(app_context)  # prevent traversal
-        lookups_dir = os.path.join(APPS_DIR, safe_app, "lookups")
-        path = os.path.join(lookups_dir, csv_file)
-    else:
-        path = os.path.join(OWN_LOOKUPS, csv_file)
-
-    # Symlink protection: ensure path stays under the apps directory
-    # Use normpath (not realpath) so we can build paths for files that
-    # may or may not exist yet.
-    normed = os.path.normpath(path)
-    if not normed.startswith(os.path.normpath(APPS_DIR)):
-        _logger.warning("Path escape blocked: %s", path)
-        return None
-
-    return normed
-
-
-def _resolve_csv_path(csv_file, app_context=""):
-    """
-    Build the absolute path to a lookup CSV.
-
-    If *app_context* is provided (e.g. "SplunkEnterpriseSecuritySuite"),
-    the CSV is looked up under that app's lookups/ folder.  Otherwise
-    we fall back to the wl_manager app's own lookups/ folder.
-    """
-    path = _build_csv_path(csv_file, app_context)
-    if path is None:
-        return None
-
-    if not os.path.isfile(path):
-        return None
-
-    # Symlink protection: ensure resolved path stays under the apps directory
-    safe = _safe_realpath(path, APPS_DIR)
-    if safe is None:
-        _logger.warning("Symlink escape blocked: %s -> %s", path, os.path.realpath(path))
-        return None
-
-    return safe
 
 
 def _read_csv(filepath):
@@ -958,7 +861,7 @@ def _move_to_trash(item_type, name, user, comment, app_context="",
 
     if item_type == "csv":
         # Move the CSV file itself
-        csv_path = _build_csv_path(name, app_context)
+        csv_path = build_csv_path(name, app_context)
         if csv_path and os.path.isfile(csv_path):
             import shutil
             shutil.move(csv_path, os.path.join(item_dir, name))
@@ -999,7 +902,7 @@ def _move_to_trash(item_type, name, user, comment, app_context="",
         for csv_info in (associated_csvs or []):
             csv_name = csv_info.get("csv_file", "")
             csv_app = csv_info.get("app_context", "")
-            csv_path = _build_csv_path(csv_name, csv_app)
+            csv_path = build_csv_path(csv_name, csv_app)
             if csv_path and os.path.isfile(csv_path):
                 import shutil
                 shutil.move(csv_path, os.path.join(item_dir, csv_name))
@@ -1105,7 +1008,7 @@ def _restore_from_trash(trash_id):
         rule_name = meta.get("rule_name", "")
 
         # EC2: Check for name conflict
-        dest_path = _build_csv_path(csv_name, app_ctx)
+        dest_path = build_csv_path(csv_name, app_ctx)
         if dest_path and os.path.isfile(dest_path):
             return False, ("Cannot restore: '{}' already exists. "
                            "Rename or delete the existing file "
@@ -1180,7 +1083,7 @@ def _restore_from_trash(trash_id):
             csv_name = csv_info.get("csv_file", "")
             csv_app = csv_info.get("app_context", "")
             src = os.path.join(item_dir, csv_name)
-            dest = _build_csv_path(csv_name, csv_app)
+            dest = build_csv_path(csv_name, csv_app)
             if os.path.isfile(src) and dest:
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 shutil.move(src, dest)
@@ -1992,13 +1895,13 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         return self._resp(200, {"csv_files": entries})
 
     def _get_csv_content(self, request, csv_file, app_context, tz_offset="0"):
-        path = _resolve_csv_path(csv_file, app_context)
+        path = resolve_csv_path(csv_file, app_context)
         if path is None:
             # Try own lookups as fallback (with symlink check)
-            if _safe_filename(csv_file):
+            if is_safe_filename(csv_file):
                 fallback = os.path.join(OWN_LOOKUPS, csv_file)
-                if os.path.isfile(fallback) and _safe_realpath(fallback, APPS_DIR):
-                    path = _safe_realpath(fallback, APPS_DIR)
+                if os.path.isfile(fallback) and safe_realpath(fallback, APPS_DIR):
+                    path = safe_realpath(fallback, APPS_DIR)
         if path is None:
             return self._resp(404, {"error": "CSV file not found"})
 
@@ -2133,14 +2036,14 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _get_versions(self, csv_file, app_context):
         """Return the list of available version snapshots for a CSV file."""
-        if not _safe_filename(csv_file):
+        if not is_safe_filename(csv_file):
             return self._resp(400, {"error": "Invalid CSV file name"})
 
-        path = _resolve_csv_path(csv_file, app_context)
+        path = resolve_csv_path(csv_file, app_context)
         if path is None:
             fallback = os.path.join(OWN_LOOKUPS, csv_file)
-            if os.path.isfile(fallback) and _safe_realpath(fallback, APPS_DIR):
-                path = _safe_realpath(fallback, APPS_DIR)
+            if os.path.isfile(fallback) and safe_realpath(fallback, APPS_DIR):
+                path = safe_realpath(fallback, APPS_DIR)
         if path is None:
             return self._resp(200, {"csv_file": csv_file, "versions": []})
 
@@ -2253,10 +2156,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _check_csv_status(self, csv_file, app_context):
         """Lightweight check — returns file mtime and pending approval count."""
-        if not _safe_filename(csv_file):
+        if not is_safe_filename(csv_file):
             return self._resp(400, {"error": "Invalid CSV file name"})
 
-        path = _resolve_csv_path(csv_file, app_context)
+        path = resolve_csv_path(csv_file, app_context)
         if path is None:
             return self._resp(404, {"error": "CSV file not found"})
 
@@ -2269,9 +2172,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _get_col_widths(self, csv_file, app_context):
         """Return stored column widths for a CSV file."""
-        if not _safe_filename(csv_file):
+        if not is_safe_filename(csv_file):
             return self._resp(400, {"error": "Invalid CSV file name"})
-        path = _resolve_csv_path(csv_file, app_context)
+        path = resolve_csv_path(csv_file, app_context)
         if path is None:
             return self._resp(200, {"col_widths": {}})
         return self._resp(200, {"col_widths": _read_col_widths(path)})
@@ -2282,7 +2185,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         app_context = payload.get("app_context", "")
         col_widths = payload.get("col_widths", {})
 
-        if not _safe_filename(csv_file):
+        if not is_safe_filename(csv_file):
             return self._resp(400, {"error": "Invalid CSV file name"})
         if not isinstance(col_widths, dict):
             return self._resp(400, {"error": "col_widths must be a dict"})
@@ -2295,7 +2198,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             if isinstance(v, (int, float)) and 50 <= v <= 300:
                 clean[str(k)] = int(v)
 
-        path = _resolve_csv_path(csv_file, app_context)
+        path = resolve_csv_path(csv_file, app_context)
         if path is None:
             return self._resp(404, {"error": "CSV file not found"})
 
@@ -2456,7 +2359,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             if not all(c.isalnum() or c in "_-." for c in trash_id):
                 return self._resp(400, {
                     "error": "Invalid trash_id"})
-            restore_comment = _sanitize_text(
+            restore_comment = sanitize_text(
                 payload.get("comment", ""))[:500]
             success, msg, meta = _restore_from_trash(trash_id)
             if success:
@@ -2490,7 +2393,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             if not all(c.isalnum() or c in "_-." for c in trash_id):
                 return self._resp(400, {
                     "error": "Invalid trash_id"})
-            purge_comment = _sanitize_text(
+            purge_comment = sanitize_text(
                 payload.get("comment", ""))[:500]
             if not purge_comment:
                 return self._resp(400, {
@@ -2557,7 +2460,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 "analyst": user,
                 "old_retention_days": old_days,
                 "new_retention_days": days,
-                "comment": _sanitize_text(
+                "comment": sanitize_text(
                     payload.get("comment", ""))[:500],
             })
             return self._resp(200, {
@@ -2592,7 +2495,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             if not isinstance(new_limits, dict):
                 return self._resp(400, {
                     "error": "limits must be a dict"})
-            comment = _sanitize_text(
+            comment = sanitize_text(
                 payload.get("comment", ""))[:500]
             admin_cfg = _read_admin_limits()
             old_values = {}
@@ -2997,7 +2900,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             )
             csv_filename = safe_name + ".csv"
 
-        if not _safe_filename(csv_filename):
+        if not is_safe_filename(csv_filename):
             return self._resp(400, {"error": "Invalid CSV file name"})
         if len(csv_filename) > 100:
             return self._resp(400, {
@@ -3024,7 +2927,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 })
 
         # ── Check that the CSV file does not already exist ────────────
-        csv_path = _build_csv_path(csv_filename, app_context)
+        csv_path = build_csv_path(csv_filename, app_context)
         if csv_path is None:
             return self._resp(400, {
                 "error": "Invalid CSV file name or path"
@@ -3268,7 +3171,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 for entry in affected_entries:
                     csv_name = entry["csv_file"]
                     app_ctx = entry.get("app_context", "")
-                    csv_path = _build_csv_path(csv_name, app_ctx)
+                    csv_path = build_csv_path(csv_name, app_ctx)
                     if csv_path and os.path.isfile(csv_path):
                         try:
                             os.remove(csv_path)
@@ -3336,7 +3239,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         if not csv_file:
             return self._resp(400, {"error": "csv_file is required"})
-        if not _safe_filename(csv_file):
+        if not is_safe_filename(csv_file):
             return self._resp(400, {"error": "Invalid CSV filename"})
         if removal_type not in ("unlink", "permanent"):
             return self._resp(400, {
@@ -3408,7 +3311,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             except Exception as exc:
                 _logger.error("Failed to move CSV to trash: %s", exc)
                 # Fall back — don't leave partial state
-                csv_path = _build_csv_path(csv_file, app_context)
+                csv_path = build_csv_path(csv_file, app_context)
                 if csv_path and os.path.isfile(csv_path):
                     try:
                         os.remove(csv_path)
@@ -3477,7 +3380,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         detection_rule = payload.get("detection_rule", "")
         new_headers = payload.get("headers", [])
         new_rows = payload.get("rows", [])
-        analyst_comment = _sanitize_text(payload.get("comment", ""))
+        analyst_comment = sanitize_text(payload.get("comment", ""))
         removal_reasons = payload.get("removal_reasons", [])
         if not isinstance(removal_reasons, list):
             removal_reasons = []
@@ -3525,7 +3428,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         expected_mtime = payload.get("expected_mtime", None)
 
         # ── Validate filename ─────────────────────────────────────────
-        if not _safe_filename(csv_file):
+        if not is_safe_filename(csv_file):
             return self._resp(400, {"error": "Invalid CSV file name"})
 
         if not detection_rule:
@@ -3670,11 +3573,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 })
 
         # ── Resolve path ──────────────────────────────────────────────
-        path = _resolve_csv_path(csv_file, app_context)
+        path = resolve_csv_path(csv_file, app_context)
         if path is None:
             fallback = os.path.join(OWN_LOOKUPS, csv_file)
-            if os.path.isfile(fallback) and _safe_realpath(fallback, APPS_DIR):
-                path = _safe_realpath(fallback, APPS_DIR)
+            if os.path.isfile(fallback) and safe_realpath(fallback, APPS_DIR):
+                path = safe_realpath(fallback, APPS_DIR)
         if path is None:
             return self._resp(404, {"error": "CSV file not found"})
 
@@ -4225,18 +4128,18 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if len(revert_reason) > 500:
             revert_reason = revert_reason[:500]
 
-        if not _safe_filename(csv_file):
+        if not is_safe_filename(csv_file):
             return self._resp(400, {"error": "Invalid CSV file name"})
 
         if not detection_rule:
             return self._resp(400, {"error": "detection_rule is required"})
 
         # ── Resolve current CSV path ─────────────────────────────────
-        path = _resolve_csv_path(csv_file, app_context)
+        path = resolve_csv_path(csv_file, app_context)
         if path is None:
             fallback = os.path.join(OWN_LOOKUPS, csv_file)
-            if os.path.isfile(fallback) and _safe_realpath(fallback, APPS_DIR):
-                path = _safe_realpath(fallback, APPS_DIR)
+            if os.path.isfile(fallback) and safe_realpath(fallback, APPS_DIR):
+                path = safe_realpath(fallback, APPS_DIR)
         if path is None:
             return self._resp(404, {"error": "CSV file not found"})
 
@@ -4572,7 +4475,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     def _submit_create_delete_approval(self, request, payload, user,
                                         action_type, description):
         """Route a create/delete action through the approval queue."""
-        reason = _sanitize_text(
+        reason = sanitize_text(
             payload.get("approval_reason") or payload.get("comment") or "")
         if not reason:
             return self._resp(400, {
@@ -4630,7 +4533,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if action_type in _rule_only_actions:
             if not csv_file:
                 csv_file = "__rule_operation__"
-        elif not _safe_filename(csv_file):
+        elif not is_safe_filename(csv_file):
             return self._resp(400, {"error": "Invalid CSV file name"})
 
         # Check for existing pending request by same user for same target + action
@@ -4703,7 +4606,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             })
 
         request_id = _generate_request_id(user, csv_file, detection_rule)
-        description = _sanitize_text(payload.get("description", ""))
+        description = sanitize_text(payload.get("description", ""))
 
         # ── Validate original_payload size ────────────────────────────
         original_payload = payload.get("original_payload", {})
@@ -4724,20 +4627,20 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # fields displayed in the UI must be sanitized to prevent
         # injection of misleading text or unsanitized characters.
         if "comment" in original_payload:
-            original_payload["comment"] = _sanitize_text(
+            original_payload["comment"] = sanitize_text(
                 original_payload.get("comment", ""))
         if "revert_reason" in original_payload:
-            original_payload["revert_reason"] = _sanitize_text(
+            original_payload["revert_reason"] = sanitize_text(
                 original_payload.get("revert_reason", ""))
         if "row_add_reason" in original_payload:
-            original_payload["row_add_reason"] = _sanitize_text(
+            original_payload["row_add_reason"] = sanitize_text(
                 original_payload.get("row_add_reason", ""))
         for cr in original_payload.get("column_removal_reasons", []):
             if isinstance(cr, dict) and "reason" in cr:
-                cr["reason"] = _sanitize_text(cr.get("reason", ""))
+                cr["reason"] = sanitize_text(cr.get("reason", ""))
         for br in original_payload.get("bulk_removal", []):
             if isinstance(br, dict) and "reason" in br:
-                br["reason"] = _sanitize_text(br.get("reason", ""))
+                br["reason"] = sanitize_text(br.get("reason", ""))
 
         # ── Validate pending_highlight.row_keys size ─────────────────
         pending_highlight = payload.get("pending_highlight", {})
@@ -4751,7 +4654,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         else:
             pending_highlight = {}
 
-        comment = _sanitize_text(payload.get("comment", ""))
+        comment = sanitize_text(payload.get("comment", ""))
 
         entry = {
             "request_id": request_id,
@@ -4852,7 +4755,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     def _cancel_request(self, request, payload, user):
         """Cancel a pending approval request — only the original requester."""
         request_id = payload.get("request_id", "")
-        cancellation_reason = _sanitize_text(
+        cancellation_reason = sanitize_text(
             payload.get("cancellation_reason", ""))
 
         if not cancellation_reason.strip():
@@ -4966,7 +4869,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         - admin_purge_trash: permanently purge a trashed item
         """
         action_type = payload.get("action_type", "")
-        comment = _sanitize_text(payload.get("comment", ""))[:500]
+        comment = sanitize_text(payload.get("comment", ""))[:500]
 
         valid_types = {
             "admin_delete_rule", "admin_delete_csv", "admin_purge_trash",
@@ -5091,7 +4994,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         """
         request_id = payload.get("request_id", "")
         decision = payload.get("decision", "")
-        admin_comment = _sanitize_text(
+        admin_comment = sanitize_text(
             payload.get("admin_comment", ""))[:500]
 
         if decision not in ("approve", "reject"):
@@ -5322,11 +5225,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     def _process_approval_inner(self, request, payload, admin_user):
         request_id = payload.get("request_id", "")
         decision = payload.get("decision", "")
-        rejection_reason = _sanitize_text(
+        rejection_reason = sanitize_text(
             payload.get("rejection_reason", ""))
-        cancellation_reason = _sanitize_text(
+        cancellation_reason = sanitize_text(
             payload.get("cancellation_reason", ""))
-        admin_comment = _sanitize_text(
+        admin_comment = sanitize_text(
             payload.get("admin_comment", ""))
 
         if decision not in ("approve", "reject", "cancel"):
@@ -5477,11 +5380,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         cur_rows = []
 
         if action_type not in _no_csv_actions:
-            path = _resolve_csv_path(csv_file, app_context)
+            path = resolve_csv_path(csv_file, app_context)
             if path is None:
                 fallback = os.path.join(OWN_LOOKUPS, csv_file)
-                if os.path.isfile(fallback) and _safe_realpath(fallback, APPS_DIR):
-                    path = _safe_realpath(fallback, APPS_DIR)
+                if os.path.isfile(fallback) and safe_realpath(fallback, APPS_DIR):
+                    path = safe_realpath(fallback, APPS_DIR)
             if path is None:
                 target["status"] = "failed"
                 target["resolved_by"] = admin_user
@@ -6320,11 +6223,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         elif action_type == "column_removal":
             col_name = payload.get("column_name", "")
-            path = _resolve_csv_path(csv_file, app_context)
+            path = resolve_csv_path(csv_file, app_context)
             if path is None:
                 fallback = os.path.join(OWN_LOOKUPS, csv_file)
-                if os.path.isfile(fallback) and _safe_realpath(fallback, APPS_DIR):
-                    path = _safe_realpath(fallback, APPS_DIR)
+                if os.path.isfile(fallback) and safe_realpath(fallback, APPS_DIR):
+                    path = safe_realpath(fallback, APPS_DIR)
             if path is None:
                 return self._resp(404, {"error": "CSV file not found"})
             headers, rows = _read_csv(path)
@@ -6851,17 +6754,17 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "timestamp":      ts,
             "analyst":        user,
             "action":         event_action,
-            "detection_rule": _sanitize_text(
+            "detection_rule": sanitize_text(
                 payload.get("detection_rule", "")),
-            "csv_file":       _sanitize_text(
+            "csv_file":       sanitize_text(
                 payload.get("csv_file", "")),
-            "app_context":    _sanitize_text(
+            "app_context":    sanitize_text(
                 payload.get("app_context", "")),
-            "status":         _sanitize_text(
+            "status":         sanitize_text(
                 payload.get("status", "success")),
-            "export_file":    _sanitize_text(
+            "export_file":    sanitize_text(
                 payload.get("export_file", "")),
-            "comment":        _sanitize_text(
+            "comment":        sanitize_text(
                 payload.get("comment", "")),
         }
 
