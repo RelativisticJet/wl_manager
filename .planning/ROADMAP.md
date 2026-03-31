@@ -41,21 +41,22 @@
 
 **Plans:** 4 plans in 2 waves
 
-- [ ] **01-01-PLAN.md** — Test infrastructure (pytest setup, conftest fixtures, Splunk SDK stub)
+- [x] **01-01-PLAN.md** — Test infrastructure (pytest setup, conftest fixtures, Splunk SDK stub) — COMPLETED
   - Requirements: TEST-01
   - Files: tests/conftest.py, tests/pytest.ini, tests/stubs/splunk/rest.py, requirements-dev.txt
   - Tasks: 5 (requirements-dev.txt, pytest.ini, stubs, global fixtures, unit fixtures)
 
-- [ ] **01-02-PLAN.md** — Extract wl_constants.py (Layer 0)
+- [x] **01-02-PLAN.md** — Extract wl_constants.py (Layer 0) — COMPLETED
   - Requirements: BMOD-02
   - Files: bin/wl_constants.py, bin/wl_handler.py, tests/unit/test_constants.py
   - Tasks: 3 (create wl_constants.py, update wl_handler imports, create unit tests)
   - Depends on: 01-01
 
-- [ ] **01-03-PLAN.md** — Extract wl_logging.py and wl_validation.py (Layer 1-2)
+- [x] **01-03-PLAN.md** — Extract wl_logging.py and wl_validation.py (Layer 1-2) — COMPLETED
   - Requirements: BMOD-03
   - Files: bin/wl_logging.py, bin/wl_validation.py, bin/wl_handler.py, tests/unit/test_logging.py, tests/unit/test_validation.py
   - Tasks: 5 (create wl_logging, create wl_validation, update handler, test logging, test validation)
+  - Status: 5/5 tasks completed, 33 tests (32 passed, 1 skipped), 93%+ coverage
   - Depends on: 01-02
 
 - [ ] **01-04-PLAN.md** — Extract wl_ratelimit.py, wl_rbac.py, wl_presence.py (Layer 2)

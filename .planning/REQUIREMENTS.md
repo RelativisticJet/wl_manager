@@ -10,8 +10,8 @@ Requirements for the v3.0 modular rewrite. Each maps to roadmap phases.
 ### Backend Modularization
 
 - [ ] **BMOD-01**: wl_handler.py split into thin REST router (~200 lines) that delegates to domain modules
-- [ ] **BMOD-02**: wl_constants.py extracts all magic numbers, regex patterns, role lists, and config defaults
-- [ ] **BMOD-03**: wl_validation.py provides input sanitization, filename checks, and cell limit enforcement
+- [x] **BMOD-02**: wl_constants.py extracts all magic numbers, regex patterns, role lists, and config defaults
+- [x] **BMOD-03**: wl_validation.py provides input sanitization, filename checks, and cell limit enforcement
 - [ ] **BMOD-04**: wl_rbac.py handles all role checking and permission enforcement
 - [ ] **BMOD-05**: wl_presence.py manages user presence tracking and heartbeat logic
 - [ ] **BMOD-06**: wl_csv.py handles CSV read/write, diff computation, and cell operations
@@ -82,8 +82,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | BMOD-01 | Phase 4 | Pending |
-| BMOD-02 | Phase 1 | Pending |
-| BMOD-03 | Phase 1 | Pending |
+| BMOD-02 | Phase 1 | Complete |
+| BMOD-03 | Phase 1 | Complete |
 | BMOD-04 | Phase 1 | Pending |
 | BMOD-05 | Phase 1 | Pending |
 | BMOD-06 | Phase 2 | Pending |
