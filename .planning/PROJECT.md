@@ -36,16 +36,16 @@ SOC analysts can safely edit detection-rule whitelists with confidence that ever
 - [x] Modular backend architecture — Phase 1 complete: 6 modules extracted (constants, logging, validation, ratelimit, rbac, presence)
 - [x] Named constants for all magic numbers and configuration values — wl_constants.py with 80+ constants
 - [x] Comprehensive unit test suite foundation — 127 tests, 97.7% coverage across 6 modules
+- [x] Backend core domain modules — Phase 2 complete: 5 modules extracted (csv, versions, audit, rules, trash), 246 tests passing
+- [x] Reduced cyclomatic complexity (no function >100 lines, CC <15) — Validated in Phase 2: all functions compliant after gap closure
+- [x] DRY compliance (no duplicated logic across modules) — Validated in Phase 2: no duplicate definitions across 11 backend modules
+- [x] Consistent error handling patterns across all modules — Validated in Phase 2: fail-closed with state rollback
 - [ ] Modular frontend architecture (split JS into AMD modules via RequireJS)
 - [ ] Shared REST helper module (eliminate 6x duplication across JS files)
-- [ ] Comprehensive integration test suite (all API actions)
 - [ ] Comprehensive integration test suite (all API actions)
 - [ ] Browser E2E tests for key workflows
 - [ ] Concurrency test coverage (concurrent writes, approval races)
 - [ ] Security test coverage (XSS validation, CSRF, input injection)
-- [ ] Reduced cyclomatic complexity (no function >100 lines, CC <15)
-- [ ] DRY compliance (no duplicated logic across modules)
-- [ ] Consistent error handling patterns across all modules
 - [ ] AppInspect compliance for Splunkbase publication
 - [ ] Splunk ecosystem compatibility (jQuery + AMD, no external build tools)
 
