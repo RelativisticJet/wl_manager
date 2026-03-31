@@ -92,18 +92,34 @@ from wl_validation import (
     resolve_csv_path,
 )
 
-# Rate limiting: per-action sliding window
-_rate_limits = {}  # { (user, action): [timestamp, ...] }
+# ---------------------------------------------------------------------------
+# Layer 2: Rate Limiting (imported from wl_ratelimit module)
+# ---------------------------------------------------------------------------
+from wl_ratelimit import check_rate_limit, reset_rate_limits
+
+# ---------------------------------------------------------------------------
+# Layer 2: RBAC (imported from wl_rbac module)
+# ---------------------------------------------------------------------------
+from wl_rbac import (
+    is_admin,
+    is_editor,
+    is_superadmin,
+    can_approve,
+    can_approve_own_requests,
+    get_user,
+    get_roles,
+    get_admin_users,
+)
+
+# ---------------------------------------------------------------------------
+# Layer 2: Presence Tracking (imported from wl_presence module)
+# ---------------------------------------------------------------------------
+from wl_presence import report_presence, get_presence, cleanup_presence, reset_presence
 
 # ---------------------------------------------------------------------------
 # Rotating file logger — backup audit trail independent of Splunk indexing
 # ---------------------------------------------------------------------------
 _logger = get_audit_logger()
-
-
-# In-memory presence tracker:
-# { "csv_file": { "user": {"seen": heartbeat_ts, "activity": last_action_ts} } }
-_presence = {}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -119,33 +135,6 @@ def _find_expire_column(headers):
     return None
 
 
-def _check_rate_limit(user, action_type="write"):
-    """
-    Sliding-window rate limiter. Returns True if request is allowed.
-    action_type: "read" or "write"
-    """
-    global _rate_limits
-    now = time.time()
-    key = (user, action_type)
-    max_req = RATE_MAX_WRITES if action_type == "write" else RATE_MAX_READS
-
-    if key not in _rate_limits:
-        _rate_limits[key] = []
-
-    # Prune old entries and cap memory
-    _rate_limits[key] = [t for t in _rate_limits[key] if now - t < RATE_WINDOW]
-
-    # Prune stale keys across all users (prevent memory growth)
-    if len(_rate_limits) > 10000:
-        stale = [k for k, v in _rate_limits.items() if not v or now - v[-1] > RATE_WINDOW * 2]
-        for k in stale:
-            del _rate_limits[k]
-
-    if len(_rate_limits[key]) >= max_req:
-        return False
-
-    _rate_limits[key].append(now)
-    return True
 
 
 def _read_csv(filepath):
@@ -579,26 +568,6 @@ def _add_notification(for_user, notif_type, message,
     _write_notifications(data)
 
 
-def _get_admin_users(session_key=""):
-    """Discover all Splunk users that have an ADMIN_ROLES role."""
-    admin_users = {"admin"}  # fallback: always include default admin
-    try:
-        import splunk.rest as rest
-        if not session_key:
-            return admin_users
-        response, content = rest.simpleRequest(
-            "/services/authentication/users",
-            sessionKey=session_key,
-            getargs={"output_mode": "json", "count": "0"},
-        )
-        data = json.loads(content)
-        for entry in data.get("entry", []):
-            user_roles = set(entry.get("content", {}).get("roles", []))
-            if user_roles.intersection(ADMIN_ROLES):
-                admin_users.add(entry["name"])
-    except Exception as exc:
-        _logger.warning("Failed to discover admin users: %s", exc)
-    return admin_users
 
 
 def _notify_admins(notif_type, message, related_request_id=None,
@@ -1711,7 +1680,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         try:
             request = json.loads(in_string)
             method = request.get("method", "GET")
-            user = self._get_user(request)
+            user = get_user(request)
 
             # ── Rate limiting ────────────────────────────────────────
             action_type = "read" if method == "GET" else "write"
@@ -1765,11 +1734,27 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             return self._check_csv_status(query.get("csv_file", ""), query.get("app", ""))
 
         if action == "report_presence":
-            return self._report_presence(
-                request, query.get("csv_file", ""),
-                self._get_user(request),
-                query.get("last_activity", "")
-            )
+            csv_file = query.get("csv_file", "")
+            user = get_user(request)
+            last_activity_str = query.get("last_activity", "")
+
+            # Validate inputs
+            if not csv_file:
+                return self._resp(400, {"error": "csv_file required"})
+            if len(user) > 100:
+                return self._resp(400, {"error": "Invalid user"})
+
+            # Parse last_activity timestamp
+            try:
+                last_activity = float(last_activity_str) if last_activity_str else None
+            except (ValueError, TypeError):
+                last_activity = None
+
+            # Call module function and wrap response
+            data, error = report_presence(csv_file, user, last_activity)
+            if error:
+                return self._resp(400, {"error": error})
+            return self._resp(200, {"csv_file": csv_file, **data})
 
         if action == "get_col_widths":
             return self._get_col_widths(query.get("csv_file", ""), query.get("app", ""))
@@ -1778,14 +1763,14 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             return self._get_apps()
 
         if action == "check_daily_limit_status":
-            user = self._get_user(request)
+            user = get_user(request)
             return self._check_daily_limit_status(user)
 
         if action == "get_pending_approvals":
             csv_file = query.get("csv_file", "")
             pending = _get_pending_for_csv(csv_file)
-            roles = self._get_roles(request)
-            has_edit = bool(roles.intersection(EDIT_ROLES))
+            roles = get_roles(request)
+            has_edit = is_editor(roles)
             pending_info = [{
                 "request_id": p["request_id"],
                 "action_type": p["action_type"],
@@ -1800,8 +1785,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         if action == "get_request_csv":
             # Allow admins to download CSV data from a pending/resolved request
-            roles = self._get_roles(request)
-            if not roles.intersection(ADMIN_ROLES):
+            roles = get_roles(request)
+            if not is_admin(roles):
                 return self._resp(403, {
                     "error": "Requires admin role to access request CSV data"})
             request_id = query.get("request_id", "")
@@ -1830,7 +1815,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             })
 
         if action == "get_notifications":
-            user = self._get_user(request)
+            user = get_user(request)
             data = _read_notifications()
             user_notifs = data.get(user, [])
             unread_count = sum(
@@ -1987,9 +1972,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     def _get_mapping(self, request):
         mapping = self._read_mapping()
         registered = _read_detection_rules()
-        roles = self._get_roles(request)
-        is_admin = bool(roles.intersection(ADMIN_ROLES))
-        has_edit = bool(roles.intersection(EDIT_ROLES))
+        roles = get_roles(request)
+        is_admin = is_admin(roles)
+        has_edit = is_editor(roles)
         reason_gates = {}
         if is_admin:
             can_create_rules = True
@@ -2066,93 +2051,6 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         return self._resp(200, {"csv_file": csv_file, "versions": manifest})
 
-    def _report_presence(self, request, csv_file, user, last_activity=""):
-        """Track which users are viewing a CSV and return the active user list."""
-        global _presence
-        if not csv_file:
-            return self._resp(400, {"error": "csv_file required"})
-
-        # Validate username length to prevent memory abuse
-        if len(user) > 100:
-            return self._resp(400, {"error": "Invalid user"})
-
-        # Parse last_activity from client (epoch seconds)
-        try:
-            client_activity = float(last_activity) if last_activity else 0
-        except (ValueError, TypeError):
-            client_activity = 0
-
-        now = datetime.now(timezone.utc).timestamp()
-
-        # Proactive prune: remove fully-stale files every 50 calls
-        if len(_presence) > 10:
-            stale_files = [
-                f for f, users in _presence.items()
-                if all(now - u_data.get("seen", 0) >= PRESENCE_TIMEOUT
-                       for u_data in users.values())
-            ]
-            for f in stale_files:
-                del _presence[f]
-
-        # Hard cap prune: evict oldest if still over limit
-        if len(_presence) > MAX_PRESENCE_FILES:
-                by_age = sorted(
-                    _presence.items(),
-                    key=lambda x: max(
-                        (d.get("seen", 0) for d in x[1].values()), default=0
-                    ))
-                for f, _ in by_age[:len(_presence) - MAX_PRESENCE_FILES]:
-                    del _presence[f]
-
-        if csv_file not in _presence:
-            _presence[csv_file] = {}
-
-        file_users = _presence[csv_file]
-
-        # Prune users whose tab is gone (no heartbeat in PRESENCE_TIMEOUT)
-        gone = [u for u, d in file_users.items()
-                if now - d.get("seen", 0) >= PRESENCE_TIMEOUT]
-        for u in gone:
-            del file_users[u]
-
-        # Prune users who are idle (heartbeat alive but no activity
-        # in IDLE_TIMEOUT) — free up slots for active analysts
-        idle = [u for u, d in file_users.items()
-                if now - d.get("activity", 0) >= IDLE_TIMEOUT]
-        for u in idle:
-            del file_users[u]
-
-        # If the current user was just pruned for idleness, tell them
-        if user in idle:
-            return self._resp(200, {
-                "csv_file": csv_file,
-                "idle_kicked": True,
-                "error": "Your session was released due to 30 minutes "
-                         "of inactivity.",
-            })
-
-        # Cap users per file — reject new user if full
-        if user not in file_users and len(file_users) >= MAX_PRESENCE_USERS:
-            return self._resp(409, {
-                "error": "Maximum number of simultaneous users ("
-                         + str(MAX_PRESENCE_USERS)
-                         + ") reached for this CSV file. "
-                         "Please try again later.",
-                "csv_file": csv_file,
-                "presence_full": True,
-            })
-
-        # Update this user's entry
-        activity_ts = client_activity if client_activity else now
-        file_users[user] = {"seen": now, "activity": activity_ts}
-
-        # Build active user list
-        active = sorted(file_users.keys())
-
-        return self._resp(200, {
-            "csv_file": csv_file,
-            "active_users": active,
-        })
 
     def _check_csv_status(self, csv_file, app_context):
         """Lightweight check — returns file mtime and pending approval count."""
@@ -2209,8 +2107,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     # POST
     # ==================================================================
     def _handle_post(self, request):
-        user = self._get_user(request)
-        roles = self._get_roles(request)
+        user = get_user(request)
+        roles = get_roles(request)
 
         # Reject unidentified users — "unknown" means the session is
         # missing or expired.  All POST actions require a real identity
@@ -2249,12 +2147,12 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # ── Approval workflow actions ─────────────────────────────────
         # submit_approval and check_approval_gate require EDIT_ROLES
         if action == "submit_approval":
-            if not roles.intersection(EDIT_ROLES):
+            if not is_editor(roles):
                 return self._resp(403, {"error": "Permission denied"})
             return self._submit_approval(request, payload, user)
 
         if action == "check_approval_gate":
-            if not roles.intersection(EDIT_ROLES):
+            if not is_editor(roles):
                 return self._resp(403, {"error": "Permission denied"})
             return self._check_approval_gate(request, payload, user)
 
@@ -2266,14 +2164,14 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # Admin-only approval management actions
         if action == "process_approval":
-            if not roles.intersection(ADMIN_ROLES):
+            if not is_admin(roles):
                 return self._resp(403, {
                     "error": "Requires admin role to process approvals"
                 })
             return self._process_approval(request, payload, user)
 
         if action == "get_approval_queue":
-            if not roles.intersection(ADMIN_ROLES):
+            if not is_admin(roles):
                 return self._resp(403, {
                     "error": "Requires admin role to view the approval queue"
                 })
@@ -2281,54 +2179,54 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             # Inject role tier info for frontend UI gating
             body = json.loads(resp.get("payload", "{}"))
             body["is_superadmin"] = bool(
-                roles.intersection(SUPERADMIN_ROLES))
+                is_superadmin(roles))
             resp["payload"] = json.dumps(body, default=str)
             return resp
 
         if action == "get_daily_limits":
-            if not roles.intersection(ADMIN_ROLES):
+            if not is_admin(roles):
                 return self._resp(403, {
                     "error": "Requires admin role to view daily limits"
                 })
             return self._get_daily_limits_action()
 
         if action == "set_daily_limits":
-            if not roles.intersection(ADMIN_ROLES):
+            if not is_admin(roles):
                 return self._resp(403, {
                     "error": "Requires admin role to set daily limits"
                 })
             return self._set_daily_limits_action(request, payload, user)
 
         if action == "get_analyst_usage":
-            if not roles.intersection(ADMIN_ROLES):
+            if not is_admin(roles):
                 return self._resp(403, {
                     "error": "Requires admin role to view analyst usage"
                 })
             return self._get_analyst_usage_action(payload)
 
         if action == "reset_daily_usage":
-            if not roles.intersection(ADMIN_ROLES):
+            if not is_admin(roles):
                 return self._resp(403, {
                     "error": "Requires admin role to reset daily usage"
                 })
             return self._reset_daily_usage_action(payload, user)
 
         if action == "reset_daily_limits":
-            if not roles.intersection(ADMIN_ROLES):
+            if not is_admin(roles):
                 return self._resp(403, {
                     "error": "Requires admin role to reset limits"
                 })
             return self._reset_daily_limits_action(request, user)
 
         if action == "save_as_default":
-            if not roles.intersection(ADMIN_ROLES):
+            if not is_admin(roles):
                 return self._resp(403, {
                     "error": "Requires admin role to save custom defaults"
                 })
             return self._save_as_default_action(request, user)
 
         if action == "reset_factory_defaults":
-            if not roles.intersection(ADMIN_ROLES):
+            if not is_admin(roles):
                 return self._resp(403, {
                     "error": "Requires admin role to reset to factory defaults"
                 })
@@ -2336,7 +2234,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # ── Trash management endpoints ─────────────────────────────────
         if action == "list_trash":
-            if not roles.intersection(ADMIN_ROLES):
+            if not is_admin(roles):
                 return self._resp(403, {
                     "error": "Requires admin role to view trash"})
             # Lazy auto-cleanup on access (EC6)
@@ -2348,7 +2246,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             })
 
         if action == "restore_from_trash":
-            if not roles.intersection(ADMIN_ROLES):
+            if not is_admin(roles):
                 return self._resp(403, {
                     "error": "Requires admin role to restore from trash"})
             trash_id = payload.get("trash_id", "")
@@ -2382,7 +2280,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if action == "purge_trash":
             # Permanent purge — requires dual-admin approval.
             # Direct purge only allowed from dual-approval replay.
-            if not roles.intersection(SUPERADMIN_ROLES):
+            if not is_superadmin(roles):
                 return self._resp(403, {
                     "error": "Requires super-admin role to permanently "
                              "purge trash items"})
@@ -2435,7 +2333,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             return self._resp(404, {"error": msg})
 
         if action == "set_trash_retention":
-            if not roles.intersection(SUPERADMIN_ROLES):
+            if not is_superadmin(roles):
                 return self._resp(403, {
                     "error": "Requires super-admin role to set trash "
                              "retention period"})
@@ -2469,7 +2367,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             })
 
         if action == "get_trash_config":
-            if not roles.intersection(ADMIN_ROLES):
+            if not is_admin(roles):
                 return self._resp(403, {
                     "error": "Requires admin role to view trash config"})
             config = _read_trash_config()
@@ -2477,7 +2375,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # ── Admin limits (superadmin-only) ─────────────────────────────
         if action == "get_admin_limits":
-            if not roles.intersection(ADMIN_ROLES):
+            if not is_admin(roles):
                 return self._resp(403, {
                     "error": "Requires admin role to view admin limits"})
             admin_lim = _read_admin_limits()
@@ -2487,7 +2385,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             })
 
         if action == "set_admin_limits":
-            if not roles.intersection(SUPERADMIN_ROLES):
+            if not is_superadmin(roles):
                 return self._resp(403, {
                     "error": "Requires super-admin role to set admin "
                              "daily limits"})
@@ -2530,21 +2428,21 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # ── Dual-admin approval for destructive admin actions ──────────
         if action == "submit_dual_approval":
-            if not roles.intersection(ADMIN_ROLES):
+            if not is_admin(roles):
                 return self._resp(403, {
                     "error": "Requires admin role to submit dual-approval"
                              " requests"})
             return self._submit_dual_approval(request, payload, user)
 
         if action == "process_dual_approval":
-            if not roles.intersection(ADMIN_ROLES):
+            if not is_admin(roles):
                 return self._resp(403, {
                     "error": "Requires admin role to process dual-approval"
                              " requests"})
             return self._process_dual_approval(request, payload, user)
 
         if action == "create_rule":
-            is_admin = bool(roles.intersection(ADMIN_ROLES))
+            is_admin = is_admin(roles)
             if not is_admin:
                 cfg = _read_limit_config()
                 if not cfg.get("allow_analyst_create_rules", False):
@@ -2553,7 +2451,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                                  "restricted to admins. An administrator has "
                                  "disabled this permission for analysts."
                     })
-                if not roles.intersection(EDIT_ROLES):
+                if not is_editor(roles):
                     return self._resp(403, {
                         "error": "Permission denied. Your account requires "
                                  "one of these roles: "
@@ -2567,7 +2465,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             return self._create_rule(request, payload, user)
 
         if action == "create_csv":
-            is_admin = bool(roles.intersection(ADMIN_ROLES))
+            is_admin = is_admin(roles)
             if not is_admin:
                 cfg = _read_limit_config()
                 if not cfg.get("allow_analyst_create_csv", False):
@@ -2576,7 +2474,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                                  "restricted to admins. An administrator has "
                                  "disabled this permission for analysts."
                     })
-                if not roles.intersection(EDIT_ROLES):
+                if not is_editor(roles):
                     return self._resp(403, {
                         "error": "Permission denied. Your account requires "
                                  "one of these roles: "
@@ -2591,7 +2489,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             return self._create_csv(request, payload, user)
 
         if action == "remove_rule":
-            is_admin = bool(roles.intersection(ADMIN_ROLES))
+            is_admin = is_admin(roles)
             if not is_admin:
                 cfg = _read_limit_config()
                 if not cfg.get("allow_analyst_delete_rules", False):
@@ -2600,7 +2498,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                                  "restricted to admins. An administrator has "
                                  "disabled this permission for analysts."
                     })
-                if not roles.intersection(EDIT_ROLES):
+                if not is_editor(roles):
                     return self._resp(403, {
                         "error": "Permission denied. Your account requires "
                                  "one of these roles: "
@@ -2614,7 +2512,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             return self._remove_rule(request, payload, user)
 
         if action == "remove_csv":
-            is_admin = bool(roles.intersection(ADMIN_ROLES))
+            is_admin = is_admin(roles)
             if not is_admin:
                 cfg = _read_limit_config()
                 if not cfg.get("allow_analyst_delete_csv", False):
@@ -2623,7 +2521,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                                  "restricted to admins. An administrator has "
                                  "disabled this permission for analysts."
                     })
-                if not roles.intersection(EDIT_ROLES):
+                if not is_editor(roles):
                     return self._resp(403, {
                         "error": "Permission denied. Your account requires "
                                  "one of these roles: "
@@ -2638,7 +2536,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             return self._remove_csv(request, payload, user)
 
         # ── RBAC check for data-modifying actions ─────────────────────
-        if not roles.intersection(EDIT_ROLES):
+        if not is_editor(roles):
             return self._resp(403, {
                 "error": (
                     "Permission denied. "
@@ -3063,9 +2961,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # Admin daily limit for rule deletion
         if removal_type == "permanent":
-            roles = self._get_roles(request)
-            if roles.intersection(ADMIN_ROLES) and \
-               not roles.intersection(SUPERADMIN_ROLES):
+            roles = get_roles(request)
+            if is_admin(roles) and \
+               not is_superadmin(roles):
                 allowed, current, maximum = _check_admin_daily_limit(
                     user, "rule_deletion")
                 if not allowed:
@@ -3088,8 +2986,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # Skip if this is a replay from the dual-approval queue
         _from_dual = payload.get("_from_dual_approval", False)
         if removal_type == "permanent" and not _from_dual:
-            roles = self._get_roles(request) if not hasattr(self, '_remove_rule_roles') else roles
-            is_superadmin = bool(self._get_roles(request).intersection(
+            roles = get_roles(request) if not hasattr(self, '_remove_rule_roles') else roles
+            is_superadmin = bool(get_roles(request).intersection(
                 SUPERADMIN_ROLES))
             csv_count = len(affected_csvs)
 
@@ -3215,7 +3113,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # Increment admin daily limit counter for rule deletion
         if trashed:
-            roles_check = self._get_roles(request)
+            roles_check = get_roles(request)
             if roles_check.intersection(ADMIN_ROLES) and \
                not roles_check.intersection(SUPERADMIN_ROLES):
                 _increment_admin_daily_limit(user, "rule_deletion")
@@ -3249,9 +3147,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # Admin daily limit for CSV deletion (soft delete)
         if removal_type == "permanent":
-            roles = self._get_roles(request)
-            if roles.intersection(ADMIN_ROLES) and \
-               not roles.intersection(SUPERADMIN_ROLES):
+            roles = get_roles(request)
+            if is_admin(roles) and \
+               not is_superadmin(roles):
                 allowed, current, maximum = _check_admin_daily_limit(
                     user, "csv_deletion")
                 if not allowed:
@@ -3361,9 +3259,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # Increment admin daily limit counter for CSV deletion
         if trashed:
-            roles = self._get_roles(request)
-            if roles.intersection(ADMIN_ROLES) and \
-               not roles.intersection(SUPERADMIN_ROLES):
+            roles = get_roles(request)
+            if is_admin(roles) and \
+               not is_superadmin(roles):
                 _increment_admin_daily_limit(user, "csv_deletion")
 
         return self._resp(200, {
@@ -3752,8 +3650,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 action_counts[limit_action] = 1
 
         # ── Determine if user is admin (for gate + limit exemptions) ──
-        user_roles = self._get_roles(request) if request else set()
-        is_admin_user = bool(user_roles.intersection(ADMIN_ROLES))
+        user_roles = get_roles(request) if request else set()
+        is_admin_user = bool(user_is_admin(roles))
 
         # ── Daily limit enforcement (block only direct analyst actions,
         #    not admin-approved replays or admin direct actions) ────────
@@ -4908,8 +4806,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 return self._resp(400, {
                     "error": "trash_id is required"})
             # Require super-admin for purge submissions
-            roles = self._get_roles(request)
-            if not roles.intersection(SUPERADMIN_ROLES):
+            roles = get_roles(request)
+            if not is_superadmin(roles):
                 return self._resp(403, {
                     "error": "Requires super-admin role to submit "
                              "trash purge requests"})
@@ -5215,9 +5113,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         decision = payload.get("decision", "")
         resp_body = json.loads(result.get("payload", "{}"))
         if decision == "approve" and resp_body.get("success"):
-            admin_roles = self._get_roles(request)
-            if admin_roles.intersection(ADMIN_ROLES) and \
-               not admin_roles.intersection(SUPERADMIN_ROLES):
+            admin_roles = get_roles(request)
+            if admin_is_admin(roles) and \
+               not admin_is_superadmin(roles):
                 _increment_admin_daily_limit(admin_user, "approval_count")
 
         return result
@@ -5241,9 +5139,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # Admin daily limit for approvals (not applied to super-admins)
         if decision == "approve":
-            admin_roles = self._get_roles(request)
-            if admin_roles.intersection(ADMIN_ROLES) and \
-               not admin_roles.intersection(SUPERADMIN_ROLES):
+            admin_roles = get_roles(request)
+            if admin_is_admin(roles) and \
+               not admin_is_superadmin(roles):
                 allowed, current, maximum = _check_admin_daily_limit(
                     admin_user, "approval_count")
                 if not allowed:
@@ -5283,9 +5181,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # ── CANCEL: mark as cancelled ────────────
         if decision == "cancel":
             # Allow cancel by original analyst OR any admin
-            admin_roles = self._get_roles(request)
+            admin_roles = get_roles(request)
             if target["analyst"] != admin_user and \
-                    not admin_roles.intersection(ADMIN_ROLES):
+                    not admin_is_admin(roles):
                 return self._resp(403, {
                     "error": "Only the original requester or an admin can cancel this request"
                 })
@@ -6747,7 +6645,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if event_action not in allowed_actions:
             return self._resp(400, {"error": "Invalid event action"})
 
-        user = self._get_user(request)
+        user = get_user(request)
         ts = int(time.time())
 
         evt = {
@@ -6862,36 +6760,6 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             return dict(raw)
         return {}
 
-    @staticmethod
-    def _get_user(request):
-        return request.get("session", {}).get("user", "unknown")
-
-    @staticmethod
-    def _get_roles(request):
-        """
-        Look up the current user's roles via Splunk's REST API.
-
-        The PersistentServerConnectionApplication session object only
-        contains 'user' and 'authtoken' — roles must be fetched
-        separately from /services/authentication/current-context.
-        """
-        try:
-            import splunk.rest as rest
-            session_key = request.get("session", {}).get("authtoken", "")
-            if not session_key:
-                return set()
-
-            response, content = rest.simpleRequest(
-                "/services/authentication/current-context",
-                sessionKey=session_key,
-                getargs={"output_mode": "json"},
-            )
-            data = json.loads(content)
-            roles = data.get("entry", [{}])[0].get("content", {}).get("roles", [])
-            return set(roles)
-        except Exception as exc:
-            _logger.error("Failed to fetch user roles: %s", exc)
-            return set()
 
     @staticmethod
     def _resp(status, body):
