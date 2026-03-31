@@ -39,7 +39,7 @@ Phase 02 — backend-core-domain
 ## Current Position
 
 Phase: 02 (backend-core-domain) — COMPLETE ✓
-Plan: 5 of 5 (All plans complete ✓)
+Plan: 6 of 6 (All plans complete including gap closure ✓)
 
 ## Roadmap Overview
 
@@ -222,6 +222,20 @@ Plan: 5 of 5 (All plans complete ✓)
   - **move_rule_to_trash** (24 lines): Rule-specific handler
 - Requirement BMOD-13 fully satisfied: "No function in Phase 2 exceeds 100 lines"
 - Phase 02-backend-core-domain now fully COMPLETE (all 5 plans executed)
+
+**2026-03-31: Plan 02-06 Completion (Gap Closure: restore_from_trash Refactoring)**
+
+- Final gap closure plan: refactored oversized restore_from_trash function (187 → 53 lines)
+- Extraction pattern: dispatcher + type-specific handlers (CSV, rule) + helper functions
+  - **restore_from_trash** (dispatcher, 53 lines, CC=7): Item-type dispatch and error handling
+  - **restore_csv_from_trash** (45 lines, CC=8): CSV file restoration + mapping updates
+  - **restore_rule_from_trash** (89 lines, CC=13): Rule + associated CSV restoration
+  - **_restore_mapping_for_csv** (56 lines, CC=8): Private helper extracted to reduce complexity
+- All functions now fully comply with BMOD-13: ≤100 lines, CC<15
+- All 246 unit tests pass (19 trash + 227 other), zero logic changes
+- External API signature of restore_from_trash unchanged: fully backward-compatible
+- Phase 2 BMOD-13 requirement: 100% satisfied across all 5 core modules
+- Phase 02-backend-core-domain COMPLETE: 6 plans executed (5 core + 1 gap closure)
 
 ---
 
