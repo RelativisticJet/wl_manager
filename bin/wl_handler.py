@@ -133,6 +133,14 @@ from wl_rules import read_rules_registry, write_rules_registry, read_csv_mapping
 from wl_trash import move_to_trash, list_trash, restore_from_trash, purge_trash_item, auto_cleanup_trash
 
 # ---------------------------------------------------------------------------
+# Layer 3: Version Snapshots & Manifest (imported from wl_versions module)
+# ---------------------------------------------------------------------------
+from wl_versions import (
+    get_versions_dir, read_version_manifest, write_version_manifest,
+    snapshot_version, get_versions_list
+)
+
+# ---------------------------------------------------------------------------
 # Rotating file logger — backup audit trail independent of Splunk indexing
 # ---------------------------------------------------------------------------
 _logger = get_audit_logger()
@@ -206,141 +214,6 @@ def _detection_rules_modify():
     """Lock for atomic read-modify-write on detection rules registry."""
     with _detection_rules_lock:
         yield
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Version-control helpers
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _get_versions_dir(csv_path):
-    """Return the _versions/ directory for a given CSV path, creating it if needed."""
-    parent = os.path.dirname(csv_path)
-    versions_dir = os.path.join(parent, VERSIONS_DIR)
-    os.makedirs(versions_dir, exist_ok=True)
-    return versions_dir
-
-
-def _get_version_manifest_path(csv_path):
-    """Return path to the versions manifest JSON for a CSV file."""
-    base = os.path.splitext(os.path.basename(csv_path))[0]
-    versions_dir = _get_versions_dir(csv_path)
-    return os.path.join(versions_dir, base + "_versions.json")
-
-
-def _read_version_manifest(csv_path):
-    """Read and return the version manifest as a list, or empty list on error."""
-    manifest_path = _get_version_manifest_path(csv_path)
-    if not os.path.isfile(manifest_path):
-        return []
-    try:
-        with open(manifest_path, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except (json.JSONDecodeError, OSError):
-        return []
-
-
-def _write_version_manifest(csv_path, manifest):
-    """Write the manifest list to disk with file locking to prevent corruption."""
-    manifest_path = _get_version_manifest_path(csv_path)
-    with open(manifest_path, "w", encoding="utf-8") as fh:
-        if fcntl:
-            try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except (IOError, OSError):
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-        try:
-            json.dump(manifest, fh, indent=2)
-        finally:
-            if fcntl:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-
-
-@contextmanager
-def _csv_file_lock(csv_path):
-    """Acquire an exclusive lock on a CSV file for the read-modify-write cycle.
-
-    Uses a separate .lock file next to the CSV to avoid interfering with
-    readers.  On Windows (no fcntl), this is a no-op — optimistic locking
-    via expected_mtime still provides protection.
-    """
-    if not fcntl:
-        yield
-        return
-    lock_path = csv_path + ".lock"
-    fh = open(lock_path, "w")  # noqa: SIM115
-    try:
-        try:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (IOError, OSError):
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-        yield
-    finally:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-        fh.close()
-        try:
-            os.remove(lock_path)
-        except OSError:
-            pass
-
-
-def _snapshot_version(csv_path, analyst, action_label="save"):
-    """
-    Create a timestamped snapshot of the CSV and update the manifest.
-
-    Copies the current CSV to _versions/ with a timestamped name, appends
-    an entry to the manifest, and prunes the oldest entry if more than
-    MAX_VERSIONS exist.
-    """
-    now = datetime.now(timezone.utc)
-    ts_file = now.strftime("%Y%m%d_%H%M%S")
-    ts_display = now.strftime("%d-%m-%Y %H:%M:%S")
-    ts_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    base = os.path.splitext(os.path.basename(csv_path))[0]
-    versions_dir = _get_versions_dir(csv_path)
-    snapshot_name = "{}_{}.csv".format(base, ts_file)
-    snapshot_path = os.path.join(versions_dir, snapshot_name)
-
-    # Prevent filename collision when two snapshots happen in the same second
-    # (e.g., pre-save "original" + post-save "save" during first edit)
-    if os.path.exists(snapshot_path):
-        ts_file_ms = now.strftime("%Y%m%d_%H%M%S_") + str(now.microsecond // 1000)
-        snapshot_name = "{}_{}.csv".format(base, ts_file_ms)
-        snapshot_path = os.path.join(versions_dir, snapshot_name)
-
-    shutil.copy2(csv_path, snapshot_path)
-
-    # Count rows and visible columns in the snapshot
-    try:
-        hdrs, rows = read_csv(snapshot_path)
-        row_count = len(rows)
-        col_count = len([h for h in hdrs if not h.startswith("_")])
-    except Exception:
-        row_count = -1
-        col_count = -1
-
-    manifest = _read_version_manifest(csv_path)
-    manifest.append({
-        "timestamp": ts_iso,
-        "display": ts_display,
-        "filename": snapshot_name,
-        "analyst": analyst,
-        "action": action_label,
-        "row_count": row_count,
-        "col_count": col_count,
-    })
-
-    # Keep only the last MAX_VERSIONS entries
-    while len(manifest) > MAX_VERSIONS:
-        oldest = manifest.pop(0)
-        old_path = os.path.join(versions_dir, oldest["filename"])
-        try:
-            os.remove(old_path)
-        except OSError:
-            pass
-
-    _write_version_manifest(csv_path, manifest)
-    return snapshot_name, ts_display
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1206,9 +1079,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # the app, or migrated), create an "original" snapshot on first
         # access so its initial state is always recoverable.
         try:
-            manifest = _read_version_manifest(path)
+            manifest, _ = read_version_manifest(path)
             if not manifest:
-                _snapshot_version(path, "system", action_label="original")
+                _, _ = snapshot_version(path, "system", action_label="original")
         except OSError:
             pass
 
@@ -1341,12 +1214,12 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if path is None:
             return self._resp(200, {"csv_file": csv_file, "versions": []})
 
-        manifest = _read_version_manifest(path)
+        manifest, _ = read_version_manifest(path)
 
         # Backfill col_count for entries created before this field existed
-        versions_dir = _get_versions_dir(path)
+        versions_dir = get_versions_dir(path)
         updated = False
-        for entry in manifest:
+        for entry in manifest.get("versions", []):
             if "col_count" not in entry:
                 snap = os.path.join(versions_dir, entry.get("filename", ""))
                 try:
@@ -1356,7 +1229,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 except Exception:
                     entry["col_count"] = -1
         if updated:
-            _write_version_manifest(path, manifest)
+            _, _ = write_version_manifest(path, manifest)
 
         return self._resp(200, {"csv_file": csv_file, "versions": manifest})
 
@@ -2189,7 +2062,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # ── Snapshot initial version at creation time ─────────────────
         try:
-            _snapshot_version(csv_path, user, action_label="created")
+            _, _ = snapshot_version(csv_path, user, action_label="created")
         except OSError as exc:
             _logger.warning("Failed to snapshot initial version for %s: %s",
                             csv_filename, exc)
@@ -2808,8 +2681,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         payload=None, _from_approval=False,
     ):
         """Inner save logic wrapped in a file lock."""
-        with _csv_file_lock(path):
-            return self._save_csv_inner(
+        # Note: File locking is now handled internally by snapshot_version()
+        # in wl_versions module. For the outer save operation, we use optimistic
+        # locking via expected_mtime instead of exclusive file locks.
+        return self._save_csv_inner(
                 path, csv_file, app_context, detection_rule,
                 expected_mtime, new_headers, new_rows,
                 analyst_comment, removal_reasons, bulk_removal,
@@ -3046,7 +2921,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # ── Snapshot version ─────────────────────────────────────────
         try:
-            _snapshot_version(path, user, action_label="save")
+            _, _ = snapshot_version(path, user, action_label="save")
         except OSError as exc:
             _logger.warning("Failed to snapshot version for %s: %s", csv_file, exc)
 
@@ -3383,7 +3258,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if not version_filename or os.path.basename(version_filename) != version_filename:
             return self._resp(400, {"error": "Invalid version filename"})
 
-        versions_dir = _get_versions_dir(path)
+        versions_dir = get_versions_dir(path)
         version_path = os.path.join(versions_dir, version_filename)
         if not os.path.isfile(version_path):
             return self._resp(404, {"error": "Version file not found"})
@@ -3452,9 +3327,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # ── Get the current (latest) version label before modifying ────
         current_version_display = ""
         try:
-            manifest = _read_version_manifest(path)
+            manifest, _ = read_version_manifest(path)
             if manifest:
-                current_version_display = manifest[-1].get("display", "")
+                versions_list = manifest.get("versions", [])
+                if versions_list:
+                    current_version_display = versions_list[-1].get("display", "")
         except OSError:
             pass
 
@@ -3462,9 +3339,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         #    the revert snapshot, so removing it avoids duplicates and
         #    keeps the count correct before pruning) ───────────────────
         try:
-            manifest = _read_version_manifest(path)
-            updated = []
-            for entry in manifest:
+            manifest, _ = read_version_manifest(path)
+            updated_versions = []
+            for entry in manifest.get("versions", []):
                 if entry.get("filename") == version_filename:
                     old_path = os.path.join(versions_dir, entry["filename"])
                     try:
@@ -3472,8 +3349,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     except OSError:
                         pass
                 else:
-                    updated.append(entry)
-            _write_version_manifest(path, updated)
+                    updated_versions.append(entry)
+            manifest["versions"] = updated_versions
+            _, _ = write_version_manifest(path, manifest)
         except OSError as exc:
             _logger.warning("Failed to clean source version for %s: %s",
                             csv_file, exc)
@@ -3481,7 +3359,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # ── Snapshot the revert (becomes a new version entry) ────────
         new_record_display = ""
         try:
-            _, new_record_display = _snapshot_version(
+            _, new_record_display = snapshot_version(
                 path, user, action_label="revert"
             )
         except OSError as exc:
