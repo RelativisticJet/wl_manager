@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: milestone
-status: unknown
-last_updated: "2026-03-31T19:35:49.733Z"
+status: in-progress
+last_updated: "2026-03-31T19:40:28.108Z"
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 8
-  completed_plans: 0
+  completed_plans: 1
 ---
 
 # State: Whitelist Manager v3.0 Modular Rewrite
@@ -38,9 +38,9 @@ Phase 01 — backend-foundation
 
 ## Current Position
 
-Phase: 01 (backend-foundation) — IN PROGRESS
-Plan: 1 of 4 — COMPLETED
-Next: 02
+Phase: 01 (backend-foundation) — IN PROGRESS (2/4 plans completed)
+Current Plan: 02 of 4 — COMPLETED ✓
+Next: 03
 
 ## Roadmap Overview
 
@@ -50,7 +50,7 @@ Next: 02
 
 | Phase | Goal | Requirements | Status |
 |-------|------|--------------|--------|
-| 1 | Backend Foundation | BMOD-02, BMOD-03, BMOD-04, BMOD-05, TEST-01(p) | Not started |
+| 1 | Backend Foundation | BMOD-02, BMOD-03, BMOD-04, BMOD-05, TEST-01(p) | In Progress (50%) |
 | 2 | Backend Core Domain | BMOD-01, BMOD-06, BMOD-07, BMOD-08, BMOD-09, BMOD-10, + | Not started |
 | 3 | Backend Orchestration | BMOD-11, BMOD-12, BMOD-13(p), BMOD-14(p), BMOD-15(p), TEST-01(p), TEST-04(p) | Not started |
 | 4 | Backend Integration | BMOD-01, TEST-01(p), TEST-02 | Not started |
@@ -76,6 +76,15 @@ Next: 02
 - 28 v1 requirements mapped 1:1 to phases (no duplicates, no orphans)
 - Test requirements (TEST-01 through TEST-06) distributed across execution phases, with Phase 7 as validation sweep
 - Publishing requirements (PUBL-01 through PUBL-05) consolidated in Phase 8 (final readiness)
+
+**2026-03-31: Plan 01-02 Completion (Constants Layer)**
+
+- Extracted 80+ constants from wl_handler.py into wl_constants.py (Layer 0)
+- Used sys.path.insert() pattern for same-directory imports (Splunk bin/ limitation)
+- Created 33 unit tests covering constants, regex patterns, role definitions (100% pass)
+- Updated wl_handler.py to import from wl_constants (134 lines removed, zero functional changes)
+- Requirement BMOD-02 fulfilled: "Layer 0 constants, regex patterns, role definitions"
+- Ready for Phase 01-03: Validation & RBAC extraction
 
 ---
 
