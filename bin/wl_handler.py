@@ -117,6 +117,11 @@ from wl_rbac import (
 from wl_presence import report_presence, get_presence, cleanup_presence, reset_presence
 
 # ---------------------------------------------------------------------------
+# Layer 3: CSV Operations (imported from wl_csv module)
+# ---------------------------------------------------------------------------
+from wl_csv import read_csv, write_csv, compute_diff, get_expire_column, remove_expired_rows
+
+# ---------------------------------------------------------------------------
 # Rotating file logger — backup audit trail independent of Splunk indexing
 # ---------------------------------------------------------------------------
 _logger = get_audit_logger()
@@ -127,7 +132,7 @@ _logger = get_audit_logger()
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def _find_expire_column(headers):
+def get_expire_column(headers):
     """Return the first header that matches an expiration column name, or None."""
     for h in headers:
         if h.lower() in EXPIRE_COLUMN_NAMES:
@@ -137,7 +142,7 @@ def _find_expire_column(headers):
 
 
 
-def _read_csv(filepath):
+def read_csv(filepath):
     """Read a CSV and return (headers: list[str], rows: list[dict])."""
     with open(filepath, "r", newline="", encoding="utf-8-sig") as fh:
         reader = csv.DictReader(fh)
@@ -146,7 +151,7 @@ def _read_csv(filepath):
     return headers, rows
 
 
-def _write_csv(filepath, headers, rows):
+def write_csv(filepath, headers, rows):
     """Overwrite a CSV with the given headers and rows."""
     with open(filepath, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=headers, extrasaction="ignore")
@@ -274,7 +279,7 @@ def _get_col_widths_path(csv_path):
     return os.path.join(versions_dir, base + "_colwidths.json")
 
 
-def _read_col_widths(csv_path):
+def get_column_widths(csv_path):
     """Read column widths dict from disk, or empty dict on error."""
     widths_path = _get_col_widths_path(csv_path)
     if not os.path.isfile(widths_path):
@@ -286,7 +291,7 @@ def _read_col_widths(csv_path):
         return {}
 
 
-def _write_col_widths(csv_path, widths):
+def set_column_widths(csv_path, widths):
     """Write column widths dict to disk."""
     widths_path = _get_col_widths_path(csv_path)
     with open(widths_path, "w", encoding="utf-8") as fh:
@@ -322,7 +327,7 @@ def _snapshot_version(csv_path, analyst, action_label="save"):
 
     # Count rows and visible columns in the snapshot
     try:
-        hdrs, rows = _read_csv(snapshot_path)
+        hdrs, rows = read_csv(snapshot_path)
         row_count = len(rows)
         col_count = len([h for h in hdrs if not h.startswith("_")])
     except Exception:
@@ -1406,267 +1411,6 @@ def _count_nonempty_cells(rows, col_name):
     return sum(1 for r in rows if (r.get(col_name, "") or "").strip())
 
 
-def _remove_expired_rows(headers, rows, tz_offset_minutes=0):
-    """
-    Filter out rows where an expiration column contains a past date/time.
-
-    Returns (kept_rows, expired_rows) where:
-        kept_rows    — rows that are still valid (empty = permanent)
-        expired_rows — rows that were removed due to expiration
-
-    Supports two date formats:
-        UTC (new):    ``YYYY-MM-DD HH:MM UTC``  — " UTC" suffix, compared against UTC now
-        Legacy local: ``YYYY-MM-DD HH:MM``      — no suffix, compared against user's
-                      local time derived from *tz_offset_minutes*
-
-    Also tolerates date-only variants (``YYYY-MM-DD UTC`` / ``YYYY-MM-DD``).
-    """
-    expire_col = _find_expire_column(headers)
-    if not expire_col:
-        return rows, []
-
-    now_utc = datetime.now(timezone.utc)
-
-    # Legacy fallback: convert UTC "now" to user's local time
-    user_offset = timedelta(minutes=-tz_offset_minutes)
-    user_tz = timezone(user_offset)
-    now_local = now_utc.astimezone(user_tz).replace(tzinfo=None)
-
-    kept = []
-    expired = []
-
-    for row in rows:
-        exp_val = (row.get(expire_col) or "").strip()
-        if not exp_val:
-            kept.append(row)
-            continue
-
-        # Detect UTC format (" UTC" suffix)
-        is_utc = exp_val.endswith(" UTC")
-        parse_val = exp_val[:-4] if is_utc else exp_val
-
-        parsed = False
-        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
-            try:
-                exp_date = datetime.strptime(parse_val, fmt)
-                parsed = True
-                break
-            except ValueError:
-                continue
-
-        if not parsed:
-            kept.append(row)
-            continue
-
-        if is_utc:
-            # UTC value — compare directly against UTC now
-            exp_date = exp_date.replace(tzinfo=timezone.utc)
-            if exp_date < now_utc:
-                expired.append(row)
-            else:
-                kept.append(row)
-        else:
-            # Legacy naive local — compare against user's local time
-            if exp_date < now_local:
-                expired.append(row)
-            else:
-                kept.append(row)
-
-    return kept, expired
-
-
-def _compute_diff(old_headers, old_rows, new_headers, new_rows):
-    """
-    Compare old vs new CSV content and return a structured diff.
-
-    Returns dict with keys:
-        added           — list of row dicts that are new
-        removed         — list of row dicts that were deleted
-        edited          — list of dicts with keys: old_row, new_row, row_num,
-                          changed_fields (list of {field, before, after})
-        added_count     — int
-        removed_count   — int
-        edited_count    — int
-        added_columns   — list of column names added
-        removed_columns — list of column names removed
-        text_diff       — list of unified-diff lines (Git-style)
-    """
-    all_headers = list(dict.fromkeys(old_headers + new_headers))
-
-    # Only compare visible (non-metadata) columns for diff detection.
-    # Internal _ columns (_added_by, _added_at, _review_status) are
-    # bookkeeping and should not trigger change events.
-    visible_headers = [h for h in all_headers if not h.startswith("_")]
-
-    # ── Detect column-level changes ─────────────────────────────
-    old_vis = [h for h in old_headers if not h.startswith("_")]
-    new_vis = [h for h in new_headers if not h.startswith("_")]
-    old_vis_set = set(old_vis)
-    new_vis_set = set(new_vis)
-    removed_columns = [h for h in old_vis if h not in new_vis_set]
-    added_columns = [h for h in new_vis if h not in old_vis_set]
-
-    # Use only headers common to both old and new for row identity
-    # matching and edit detection.  This prevents false "edited" events
-    # when columns are added or removed (missing column defaults to ""
-    # via .get(), causing every row key to mismatch).
-    common_headers = [h for h in visible_headers
-                      if h in old_vis_set and h in new_vis_set]
-
-    def _row_key(row):
-        return tuple(row.get(h, "") for h in common_headers)
-
-    # Count-based (multiset) comparison so duplicate rows are handled
-    # correctly.  A simple set loses count information: if old has 2
-    # copies of key X and new has 4, the set approach sees X in both
-    # and reports zero adds.  Counter-based logic detects the 2 extras.
-    old_key_counts = Counter(_row_key(r) for r in old_rows)
-    new_key_counts = Counter(_row_key(r) for r in new_rows)
-
-    # Build added_raw: rows in new whose key count exceeds old's count.
-    # Iterate in REVERSE because the frontend appends new rows at the end.
-    # Forward iteration would pick pre-existing duplicates from the front
-    # instead of the actually-new rows from the back.
-    _add_remaining = Counter()
-    for k in new_key_counts:
-        excess = new_key_counts[k] - old_key_counts.get(k, 0)
-        if excess > 0:
-            _add_remaining[k] = excess
-    added_raw = []
-    for r in reversed(new_rows):
-        k = _row_key(r)
-        if _add_remaining.get(k, 0) > 0:
-            added_raw.append(r)
-            _add_remaining[k] -= 1
-    added_raw.reverse()  # restore original (append) order
-
-    # Build removed_raw: rows in old whose key count exceeds new's count
-    _rem_remaining = Counter()
-    for k in old_key_counts:
-        excess = old_key_counts[k] - new_key_counts.get(k, 0)
-        if excess > 0:
-            _rem_remaining[k] = excess
-    removed_raw = []
-    for r in old_rows:
-        k = _row_key(r)
-        if _rem_remaining.get(k, 0) > 0:
-            removed_raw.append(r)
-            _rem_remaining[k] -= 1
-
-    # ── Detect edits: similarity-based matching ─────────────────
-    # A row is "edited" when most of its fields stay the same and
-    # only a few change.  We pair removed_raw entries with added_raw
-    # entries that share the most unchanged visible fields, requiring
-    # at least half the fields to match (to avoid pairing completely
-    # different rows that merely ended up at the same position).
-    edited = []
-
-    paired_old_ids = set()   # id() of paired old row objects
-    paired_new_ids = set()   # id() of paired new row objects
-
-    def _field_overlap(old_row, new_row):
-        """Return (matching_count, total_fields, changed_fields_list)."""
-        matching = 0
-        changed = []
-        for h in common_headers:
-            ov = old_row.get(h, "")
-            nv = new_row.get(h, "")
-            if ov == nv:
-                matching += 1
-            else:
-                changed.append({"field": h, "before": ov, "after": nv})
-        return matching, len(common_headers), changed
-
-    # For each added row, find the best-matching removed row
-    # Guard against O(n²×m) explosion: skip edit detection if
-    # both sides exceed MAX_DIFF_ROWS (treat all as pure adds/removes)
-    used_removed_indices = set()
-    skip_edit_detection = (len(added_raw) > MAX_DIFF_ROWS
-                           or len(removed_raw) > MAX_DIFF_ROWS)
-
-    if not skip_edit_detection:
-      for new_row in added_raw:
-        new_k = _row_key(new_row)
-        best_score = -1
-        best_idx = -1
-        best_changed = []
-
-        for ri, old_row in enumerate(removed_raw):
-            if ri in used_removed_indices:
-                continue
-            matching, total, changed = _field_overlap(old_row, new_row)
-            if matching > best_score:
-                best_score = matching
-                best_idx = ri
-                best_changed = changed
-
-        # Require at least half the fields to be unchanged
-        if best_idx >= 0 and best_score >= len(common_headers) / 2:
-            old_row = removed_raw[best_idx]
-            old_k = _row_key(old_row)
-            used_removed_indices.add(best_idx)
-
-            # Find 1-based positions in old_rows and new_rows
-            old_pos = 0
-            for idx_o, r in enumerate(old_rows):
-                if _row_key(r) == old_k:
-                    old_pos = idx_o + 1
-                    break
-            new_pos = 0
-            for idx_n, r in enumerate(new_rows):
-                if _row_key(r) == new_k:
-                    new_pos = idx_n + 1
-                    break
-
-            edited.append({
-                "old_row": old_row,
-                "new_row": new_row,
-                "old_row_num": old_pos,
-                "row_num": new_pos,
-                "changed_fields": best_changed,
-            })
-            paired_old_ids.add(id(old_row))
-            paired_new_ids.add(id(new_row))
-
-    # Remove paired rows from added/removed lists (by identity, not key,
-    # so duplicate rows aren't all removed when only one was paired)
-    added = [r for r in added_raw if id(r) not in paired_new_ids]
-    removed = [r for r in removed_raw if id(r) not in paired_old_ids]
-
-    # Text-based unified diff (like `git diff`)
-    def _rows_to_lines(headers, rows):
-        lines = [",".join(headers)]
-        for r in rows:
-            lines.append(",".join(r.get(h, "") for h in headers))
-        return lines
-
-    # Use only visible headers for the text diff so metadata columns
-    # don't pollute the human-readable output.
-    old_lines = _rows_to_lines(old_vis, old_rows)
-    new_lines = _rows_to_lines(new_vis, new_rows)
-    text_diff = list(
-        difflib.unified_diff(
-            old_lines, new_lines, fromfile="before", tofile="after", lineterm=""
-        )
-    )
-
-    return {
-        "added": added,
-        "removed": removed,
-        "edited": edited,
-        "added_count": len(added),
-        "removed_count": len(removed),
-        "edited_count": len(edited),
-        "added_columns": added_columns,
-        "removed_columns": removed_columns,
-        "text_diff": text_diff,
-    }
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# REST Handler
-# ═══════════════════════════════════════════════════════════════════════════
-
 class WhitelistHandler(PersistentServerConnectionApplication):
     """Splunk PersistentServerConnectionApplication handler."""
 
@@ -1890,7 +1634,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if path is None:
             return self._resp(404, {"error": "CSV file not found"})
 
-        headers, rows = _read_csv(path)
+        headers, rows = read_csv(path)
 
         # ── Lazy version initialization for pre-existing CSVs ─────────
         # If a CSV has never been versioned (e.g. demo data, shipped with
@@ -1909,11 +1653,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             tz_offset_min = int(tz_offset)
         except (ValueError, TypeError):
             tz_offset_min = 0
-        if _find_expire_column(headers):
-            kept, expired = _remove_expired_rows(headers, rows, tz_offset_min)
+        if get_expire_column(headers):
+            kept, expired = remove_expired_rows(headers, rows, tz_offset_min)
             if expired:
                 try:
-                    _write_csv(path, headers, kept)
+                    write_csv(path, headers, kept)
                 except OSError as exc:
                     _logger.warning("Cannot write cleaned CSV %s: %s", csv_file, exc)
                 else:
@@ -1964,7 +1708,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "rows": rows,
             "row_count": len(rows),
             "auto_removed_count": auto_removed_count,
-            "expire_column": _find_expire_column(headers) or "",
+            "expire_column": get_expire_column(headers) or "",
             "file_mtime": int(os.path.getmtime(path)),
             "pending_approvals": pending_info,
         })
@@ -2041,7 +1785,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             if "col_count" not in entry:
                 snap = os.path.join(versions_dir, entry.get("filename", ""))
                 try:
-                    hdrs, _ = _read_csv(snap)
+                    hdrs, _ = read_csv(snap)
                     entry["col_count"] = len([h for h in hdrs if not h.startswith("_")])
                     updated = True
                 except Exception:
@@ -2075,7 +1819,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         path = resolve_csv_path(csv_file, app_context)
         if path is None:
             return self._resp(200, {"col_widths": {}})
-        return self._resp(200, {"col_widths": _read_col_widths(path)})
+        return self._resp(200, {"col_widths": get_column_widths(path)})
 
     def _save_col_widths(self, payload):
         """Save column widths for a CSV file."""
@@ -2100,7 +1844,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if path is None:
             return self._resp(404, {"error": "CSV file not found"})
 
-        _write_col_widths(path, clean)
+        set_column_widths(path, clean)
         return self._resp(200, {"success": True})
 
     # ==================================================================
@@ -2757,7 +2501,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     row[h] = cleaned
 
             # Validate expiration dates if Expires column present
-            expire_col = _find_expire_column(headers)
+            expire_col = get_expire_column(headers)
             if expire_col:
                 _VALID_EXPIRE_FMTS = ("%Y-%m-%d %H:%M", "%Y-%m-%d")
                 invalid_expire_rows = []
@@ -2871,7 +2615,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # ── Create the CSV file with headers only (no rows) ──────────
         try:
-            _write_csv(csv_path, headers, initial_rows)
+            write_csv(csv_path, headers, initial_rows)
         except OSError as exc:
             _logger.error("Failed to create CSV %s: %s", csv_filename, exc)
             return self._resp(500, {
@@ -3394,7 +3138,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                         row[h] = cleaned
 
         # ── Validate expiration date formats ─────────────────────────
-        expire_col = _find_expire_column(new_headers)
+        expire_col = get_expire_column(new_headers)
         if expire_col and new_rows:
             _VALID_EXPIRE_FMTS = ("%Y-%m-%d %H:%M", "%Y-%m-%d")
             invalid_expire_rows = []
@@ -3539,7 +3283,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 pass  # File not yet on disk (new CSV) — skip check
 
         # ── Read BEFORE state ─────────────────────────────────────────
-        old_headers, old_rows = _read_csv(path)
+        old_headers, old_rows = read_csv(path)
         if not new_headers:
             new_headers = old_headers
 
@@ -3580,7 +3324,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             new_rows = clean_rows
 
         # ── Compute diff ──────────────────────────────────────────────
-        diff = _compute_diff(old_headers, old_rows, new_headers, new_rows)
+        diff = compute_diff(old_headers, old_rows, new_headers, new_rows)
 
         # Filter out rename-paired columns from add/remove diff results
         if column_renames:
@@ -3733,7 +3477,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 write_headers.append(meta)
 
         # ── Write AFTER state ─────────────────────────────────────────
-        _write_csv(path, write_headers, new_rows)
+        write_csv(path, write_headers, new_rows)
 
         # ── Snapshot version ─────────────────────────────────────────
         try:
@@ -4080,13 +3824,13 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             return self._resp(404, {"error": "Version file not found"})
 
         # ── Read BEFORE state (current CSV) ──────────────────────────
-        old_headers, old_rows = _read_csv(path)
+        old_headers, old_rows = read_csv(path)
 
         # ── Read the version to revert to ────────────────────────────
-        new_headers, new_rows = _read_csv(version_path)
+        new_headers, new_rows = read_csv(version_path)
 
         # ── Compute diff between current state and reverted version ──
-        diff = _compute_diff(old_headers, old_rows, new_headers, new_rows)
+        diff = compute_diff(old_headers, old_rows, new_headers, new_rows)
 
         # ── Daily limit enforcement for reverts ──────────────────────
         # Skip when replaying from approval — already checked at
@@ -4138,7 +3882,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 })
 
         # ── Overwrite CSV with the version content ───────────────────
-        _write_csv(path, new_headers, new_rows)
+        write_csv(path, new_headers, new_rows)
 
         # ── Get the current (latest) version label before modifying ────
         current_version_display = ""
@@ -5308,7 +5052,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 return self._resp(404, {"error": "CSV file not found"})
 
             # Read current CSV state and build a fresh payload
-            cur_headers, cur_rows = _read_csv(path)
+            cur_headers, cur_rows = read_csv(path)
         stored_payload = target.get("payload", {})
         original_analyst = target["analyst"]
         replay_payload = None
@@ -6128,7 +5872,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     path = safe_realpath(fallback, APPS_DIR)
             if path is None:
                 return self._resp(404, {"error": "CSV file not found"})
-            headers, rows = _read_csv(path)
+            headers, rows = read_csv(path)
             total_rows = len(rows)
             nonempty = _count_nonempty_cells(rows, col_name)
             if nonempty >= _get_threshold("column_nonempty_threshold"):
