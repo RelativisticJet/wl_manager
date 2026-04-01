@@ -178,62 +178,11 @@ _logger = get_audit_logger()
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def get_expire_column(headers):
-    """Return the first header that matches an expiration column name, or None."""
-    for h in headers:
-        if h.lower() in EXPIRE_COLUMN_NAMES:
-            return h
-    return None
-
-
-
-
-def read_csv(filepath):
-    """Read a CSV and return (headers: list[str], rows: list[dict])."""
-    with open(filepath, "r", newline="", encoding="utf-8-sig") as fh:
-        reader = csv.DictReader(fh)
-        headers = list(reader.fieldnames or [])
-        rows = [dict(row) for row in reader]
-    return headers, rows
-
-
-def write_csv(filepath, headers, rows):
-    """Overwrite a CSV with the given headers and rows."""
-    with open(filepath, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=headers, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Detection rule registry helpers
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _get_detection_rules_path():
-    return os.path.join(OWN_LOOKUPS, DETECTION_RULES_FILE)
+# NOTE: get_expire_column, read_csv, write_csv imported from wl_csv
+# NOTE: read_rules_registry, write_rules_registry imported from wl_rules
 
 
 _detection_rules_lock = threading.Lock()
-
-
-def read_rules_registry():
-    """Read the list of registered detection rule names."""
-    path = _get_detection_rules_path()
-    if not os.path.isfile(path):
-        return []
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return data if isinstance(data, list) else []
-    except (json.JSONDecodeError, OSError):
-        return []
-
-
-def write_rules_registry(rules):
-    """Write the detection rules list to disk."""
-    path = _get_detection_rules_path()
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(rules, fh, indent=2)
 
 
 @contextmanager
