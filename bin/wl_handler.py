@@ -1030,7 +1030,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
             # ── Rate limiting ────────────────────────────────────────
             action_type = "read" if method == "GET" else "write"
-            if not _check_rate_limit(user, action_type):
+            if not check_rate_limit(user, action_type):
                 return self._resp(429, {
                     "error": "Rate limit exceeded. Please wait before retrying."
                 })
@@ -1205,10 +1205,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         mapping = self._read_mapping()
         registered = read_rules_registry()
         roles = get_roles(request)
-        is_admin = is_admin(roles)
+        user_is_admin = is_admin(roles)
         has_edit = is_editor(roles)
         reason_gates = {}
-        if is_admin:
+        if user_is_admin:
             can_create_rules = True
             can_create_csv = True
             can_delete_rules = True
@@ -4180,8 +4180,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         resp_body = json.loads(result.get("payload", "{}"))
         if decision == "approve" and resp_body.get("success"):
             admin_roles = get_roles(request)
-            if admin_is_admin(roles) and \
-               not admin_is_superadmin(roles):
+            if is_admin(admin_roles) and \
+               not is_superadmin(admin_roles):
                 _increment_admin_daily_limit(admin_user, "approval_count")
 
         return result
@@ -4206,8 +4206,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # Admin daily limit for approvals (not applied to super-admins)
         if decision == "approve":
             admin_roles = get_roles(request)
-            if admin_is_admin(roles) and \
-               not admin_is_superadmin(roles):
+            if is_admin(admin_roles) and \
+               not is_superadmin(admin_roles):
                 allowed, current, maximum = _check_admin_daily_limit(
                     admin_user, "approval_count")
                 if not allowed:
@@ -4249,7 +4249,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             # Allow cancel by original analyst OR any admin
             admin_roles = get_roles(request)
             if target["analyst"] != admin_user and \
-                    not admin_is_admin(roles):
+                    not is_admin(admin_roles):
                 return self._resp(403, {
                     "error": "Only the original requester or an admin can cancel this request"
                 })
