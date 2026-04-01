@@ -146,10 +146,10 @@
 
 **Plans:** 2 plans in 2 waves
 
-- [ ] **03-01-PLAN.md** — Extract wl_filelock.py and wl_limits.py (Layer 4, Wave 1) — PLANNED
+- [x] **03-01-PLAN.md** — Extract wl_filelock.py and wl_limits.py (Layer 4, Wave 1) — COMPLETED
   - Requirements: BMOD-11, BMOD-13, BMOD-14, BMOD-15, TEST-01
   - Files: bin/wl_filelock.py, bin/wl_limits.py, bin/wl_constants.py (RESET_ALL_USERS), tests/unit/test_filelock.py, tests/unit/test_limits.py, bin/wl_handler.py
-  - Tasks: 7 (create wl_filelock context manager with fcntl/RLock, add RESET_ALL_USERS constant, create wl_limits with 7 functions, 15+ filelock tests, 40+ limits tests, wire handler imports, run full test suite)
+  - Tasks: 7/7 completed (create wl_filelock context manager with fcntl/RLock, add RESET_ALL_USERS constant, create wl_limits with 7 functions, 17 filelock tests, 31 limits tests, wire handler imports, run full test suite: 48/48 passing)
 
 - [ ] **03-02-PLAN.md** — Extract wl_approval.py, wl_notify.py, and concurrency tests (Layer 4, Wave 2) — PLANNED
   - Requirements: BMOD-12, BMOD-13, BMOD-14, BMOD-15, TEST-01, TEST-04
@@ -265,8 +265,8 @@
 | Phase | Plans | Status | Started | Completed |
 |-------|-------|--------|---------|-----------|
 | 1. Backend Foundation | 4 plans | Complete ✓ | — | — |
-| 2. Backend Core Domain | 4 core + 1 gap | In Progress (gap closure next) | — | — |
-| 3. Backend Orchestration | 2 plans | Planned ✓ | — | — |
+| 2. Backend Core Domain | 4 core + 2 gap | Complete ✓ | — | — |
+| 3. Backend Orchestration | 2 plans | In Progress (03-01 Complete, 03-02 Planned) | — | — |
 | 4. Backend Integration | TBD | Not started | — | — |
 | 5. Frontend Architecture | TBD | Not started | — | — |
 | 6. Admin Panel | TBD | Not started | — | — |
@@ -284,5 +284,6 @@
 - **Frontend depends on backend:** Phase 5 starts only after Phase 4 completes to ensure stable API
 - **Phase 1 complete:** 4 executable plans with 2-wave structure, all passing tests, ready for Phase 2
 - **Phase 2 core complete:** 4 executable plans with 3-wave structure, 5 modules extracted, 132/132 tests passing
-- **Phase 2 gap closure:** Plan 02-05 created to refactor oversized functions (compute_diff 207→4 funcs, move_to_trash 139→3 funcs) to satisfy BMOD-13 requirement
-- **Phase 3 planned:** 2 executable plans with 2-wave structure, 4 modules (wl_filelock, wl_limits, wl_approval, wl_notify) with 155+ tests (55+ unit, 70+ integration/concurrency) covering file locking, daily limits, approval queue, conflict resolution, and 5+ thread concurrency stress tests, ready for execution via `/gsd:execute-phase 3`
+- **Phase 2 gap closure:** Plans 02-05 and 02-06 executed to refactor oversized functions (compute_diff 207→4 funcs, move_to_trash 139→3 funcs, restore_from_trash 187→dispatcher+helpers) to satisfy BMOD-13 requirement
+- **Phase 3 plan 03-01 complete:** Extracted wl_filelock.py (100 lines) and wl_limits.py (360+ lines) with 48 unit tests (17 filelock, 31 limits), 100% pass rate, covering file locking with RLock + fcntl.flock (Unix) and Windows no-op, daily limits with zero semantics (0=disabled, -1=unlimited, N=limit), admin exemption via RBAC, atomic writes, and fail-closed error handling. RESET_ALL_USERS sentinel added to wl_constants.py. Imports wired into wl_handler.py (no functional changes, full integration deferred to Phase 4).
+- **Phase 3 plan 03-02 planned:** Extraction of wl_approval.py and wl_notify.py with 70+ integration/concurrency tests covering approval queue conflict resolution and 5+ thread concurrency stress tests, ready for execution
