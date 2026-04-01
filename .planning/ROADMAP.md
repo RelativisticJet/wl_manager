@@ -144,7 +144,7 @@
 5. Concurrency tests pass for simultaneous CSV saves, approval races, file locking under contention (5+ concurrent threads); no data corruption or deadlocks
 6. Every module has ≥80% unit test coverage; no function >100 lines; CC <15 for all
 
-**Plans:** 2 plans in 2 waves
+**Plans:** 3 plans in 2 waves
 
 - [x] **03-01-PLAN.md** — Extract wl_filelock.py and wl_limits.py (Layer 4, Wave 1) — COMPLETED
   - Requirements: BMOD-11, BMOD-13, BMOD-14, BMOD-15, TEST-01
@@ -157,9 +157,15 @@
   - Tasks: 8/8 completed (create wl_approval with 8 exported functions covering queue CRUD, conflict resolution, submission; create wl_notify with admin/analyst notifications; 52 approval unit tests, 16 notify unit tests, 8 integration approval-chain tests, 5 concurrency tests with 10 threads across 5 CSVs; wire handler with adapters for backward compatibility; verify phase completion with 382/382 tests passing)
   - Depends on: 03-01 (approval gating checks daily limits, uses wl_filelock for queue locking)
 
+- [x] **03-03-PLAN.md** — Gap Closure: Notifications Wiring and Function Size Compliance (Wave 2 closure) — COMPLETED
+  - Requirements: BMOD-12, BMOD-13
+  - Files: bin/wl_approval.py (refactored), tests/unit/test_approval.py, tests/integration/test_approval_chain.py
+  - Tasks: 6/6 completed (extract _validate_submission_inputs helper, extract _create_queue_entry helper, refactor submit_approval 111→97 lines, wire notify_admins in submit_approval, wire notify_analyst in cancel_conflicts, verify BMOD-13 compliance: all functions ≤100 lines, CC<15; all 51 tests passing)
+  - Depends on: 03-02 (refactors existing wl_approval module to close integration gap)
+
 **Wave Structure:**
 - **Wave 1:** 03-01 (wl_filelock + wl_limits) — foundation for file locking and approval gating
-- **Wave 2:** 03-02 (wl_approval + wl_notify + tests) — depends on wl_limits for gating, uses wl_filelock for queue lock
+- **Wave 2:** 03-02 (wl_approval + wl_notify + tests), 03-03 (gap closure: notification wiring) — depends on wl_limits for gating, uses wl_filelock for queue lock
 
 ---
 
