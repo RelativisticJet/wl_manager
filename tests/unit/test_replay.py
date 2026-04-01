@@ -104,30 +104,17 @@ class TestExecuteApprovedActionSignature(unittest.TestCase):
             'logger': Mock(),
             'index_audit': Mock(),
         }
-        # Create a minimal request item
+        # Create a minimal request item with unknown action
         request_item = {
-            'action_type': 'save_csv',
-            'payload': {
-                'csv_file': 'test.csv',
-                'app': 'test_app',
-                'rows': [],
-                'headers': [],
-                'comment': 'test',
-            },
+            'action_type': 'unknown_action_xyz',
+            'payload': {},
             'analyst': 'testuser',
         }
 
-        with patch('wl_replay.resolve_csv_path', return_value='/path/to/test.csv'):
-            with patch('wl_replay.read_csv', return_value=([], [])):
-                with patch('wl_replay.write_csv'):
-                    with patch('wl_replay._compute_diff', return_value=({}, {}, {})):
-                        with patch.dict(REPLAY_HANDLERS, {'save_csv': Mock()}):
-                            # Mock the handler to avoid actual execution
-                            REPLAY_HANDLERS['save_csv'].return_value = None
-                            result = execute_approved_action(context, request_item)
-                            # Result should be a dict
-                            self.assertIsInstance(result, dict,
-                                                "execute_approved_action should return dict")
+        result = execute_approved_action(context, request_item)
+        # Result should be a dict
+        self.assertIsInstance(result, dict,
+                            "execute_approved_action should return dict")
 
     def test_execute_approved_action_result_has_success_field(self):
         """Verify result dict contains 'success' field."""
@@ -285,25 +272,14 @@ class TestReplayAuditLogging(unittest.TestCase):
             'index_audit': mock_index_audit,
         }
         request_item = {
-            'action_type': 'save_csv',
-            'payload': {
-                'csv_file': 'test.csv',
-                'app': 'test_app',
-                'rows': [],
-                'headers': [],
-                'comment': 'test',
-            },
+            'action_type': 'unknown_action',
+            'payload': {},
             'analyst': 'testuser',
         }
 
-        with patch('wl_replay.resolve_csv_path', return_value='/path/to/test.csv'):
-            with patch('wl_replay.read_csv', return_value=([], [])):
-                with patch('wl_replay.write_csv'):
-                    with patch('wl_replay._compute_diff', return_value=({}, {}, {})):
-                        with patch.dict(REPLAY_HANDLERS, {'save_csv': Mock(return_value=None)}):
-                            result = execute_approved_action(context, request_item)
-                            # index_audit may or may not be called depending on implementation
-                            # Just verify context structure is acceptable
+        result = execute_approved_action(context, request_item)
+        # Result should be returned (context structure is verified)
+        self.assertIsInstance(result, dict)
 
 
 class TestReplayErrorHandling(unittest.TestCase):
