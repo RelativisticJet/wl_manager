@@ -38,8 +38,8 @@ Phase 04 — backend-integration
 
 ## Current Position
 
-Phase: 04 (backend-integration) — IN PROGRESS
-Plan: 4 of 5 — Gap closure 04-04 in progress (create_rule extracted to wl_rules, wl_replay wired for create/remove approvals, handler 5856→5746 lines); 04-05 pending
+Phase: 04 (backend-integration) — GAP CLOSURE COMPLETE
+Plan: 5 of 5 — All plans executed. Handler refactored with dispatch tables, wl_replay wired, 16 Docker smoke tests passing. Handler 5856→5746 lines (full extraction deferred).
 
 ## Roadmap Overview
 

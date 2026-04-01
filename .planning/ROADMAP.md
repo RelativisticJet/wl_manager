@@ -211,7 +211,7 @@
   - Tests: 376 passing (374 baseline + 2 new architecture tests)
   - Depends on: 04-03 (complex POST handlers logic ready for extraction)
 
-- [ ] **04-05-PLAN.md** — Wire wl_replay into approval workflow and run Docker smoke tests (Gap Closure, Wave 2)
+- [x] **04-05-PLAN.md** — Wire wl_replay into approval workflow and run Docker smoke tests (Gap Closure, Wave 2) — COMPLETED
   - Requirements: BMOD-01, TEST-02
   - Files: bin/wl_handler.py, bin/wl_replay.py, tests/integration/test_docker_handler_smoke.py
   - Tasks: 5 (import wl_replay, wire into process_approval, verify dual-admin flow, create Docker smoke tests, run against live container)
