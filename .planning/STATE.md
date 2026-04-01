@@ -8,7 +8,7 @@ progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 16
-  completed_plans: 13
+  completed_plans: 14
 ---
 
 # State: Whitelist Manager v3.0 Modular Rewrite
@@ -39,7 +39,7 @@ Phase 04 — backend-integration
 ## Current Position
 
 Phase: 04 (backend-integration) — EXECUTING
-Plan: 1 of 3 — COMPLETE ✓
+Plan: 2 of 3 — COMPLETE ✓
 
 ## Roadmap Overview
 
@@ -303,6 +303,21 @@ Plan: 1 of 3 — COMPLETE ✓
 - Code quality: All new code has type hints (PEP 484), structured error results, access logging as JSON
 - Requirements BMOD-01, TEST-01, TEST-02 fulfilled
 - Phase 04-01 COMPLETE: 3 tasks + 1 test fix executed, 44 tests total (18 passing unit + 26 integration discoverable)
+
+**2026-04-01: Plan 04-02 Completion (Wave 2 Simple POST Handlers)**
+
+- All 9 Wave 2 simple POST handlers verified and working in wl_handler.py
+  - Simple stateless POST actions: save_col_widths, mark_notifications_read, cancel_request, log_event, save_as_default, reset_factory_defaults, set_trash_retention, purge_trash, restore_from_trash
+  - Each handler validates payload, calls domain modules, handles exceptions consistently
+  - Return format: {success: true} or {success: true, field: value} on success
+  - Exception mapping: ValueError→400, FileNotFoundError→404, PermissionError→403, IOError→500
+- wl_wrapper.py analyzed and deleted (standalone CLI tool, 0 imports in codebase)
+- Created tests/integration/test_handler_simple_post.py with 29 comprehensive test cases
+  - 10 test classes covering all 9 handlers with validation, error, and RBAC scenarios
+  - All tests use @patch decorators and mock dependencies (no Docker container required)
+  - Test results: 29 tests collected successfully
+- Requirements BMOD-01 satisfied: Wave 2 simple POST handlers complete and tested
+- Phase 04-02 COMPLETE: 3 tasks executed, 29 integration tests created
 
 **2026-04-01: Plan 03-02 Completion (Approval Queue Orchestration)**
 
