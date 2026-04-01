@@ -34,6 +34,8 @@ __all__ = [
     'remove_expired_rows',
     'get_column_widths',
     'set_column_widths',
+    'save_csv_pipeline',
+    'create_csv_pipeline',
 ]
 
 
@@ -565,3 +567,488 @@ def set_column_widths(csv_path: str, widths: Dict[str, int]) -> None:
             json.dump(widths, fh, indent=2)
     except (OSError, IOError):
         pass  # Silently fail for non-critical feature
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Pipeline functions — Pure operations extracted from handler
+# ═══════════════════════════════════════════════════════════════════════════
+
+def save_csv_pipeline(
+    csv_path: str,
+    new_headers: List[str],
+    new_rows: List[Dict[str, str]],
+    comment: str,
+    analyst: str,
+    session_key: str,
+    removal_reasons: Optional[List[Dict]] = None,
+    bulk_removal: Optional[List[Dict]] = None,
+    column_removal_reasons: Optional[List[Dict]] = None,
+    row_reorder: Optional[Dict] = None,
+    column_reorder: Optional[Dict] = None,
+    column_renames: Optional[List[Dict]] = None,
+    explicit_row_add_reason: Optional[str] = None,
+    has_comment_col: bool = False,
+    csv_file: str = "",
+    app_context: str = "",
+    detection_rule: str = "",
+) -> Dict[str, Any]:
+    """
+    Execute the complete save operation for a CSV: diff, audit, write, snapshot.
+
+    This pipeline contains the core business logic for saving a CSV file:
+    1. Compute diff (added/removed/edited rows)
+    2. Build and post audit events for each change type
+    3. Write the CSV file atomically
+    4. Create a version snapshot
+    5. Return structured result
+
+    The handler retains responsibility for:
+    - Optimistic locking (mtime checking)
+    - Approval gates and limits (decision logic)
+    - RBAC (who can perform what actions)
+
+    Args:
+        csv_path: Absolute filesystem path to CSV file.
+        new_headers: New CSV column names.
+        new_rows: New CSV rows (list of dicts).
+        comment: Summary comment for the save.
+        analyst: Username of the analyst making the change.
+        session_key: Splunk session key for REST API calls.
+        removal_reasons: List of {row, reason} dicts for per-row removal reasons.
+        bulk_removal: List of {reason} dicts for bulk removal.
+        column_removal_reasons: List of {column, reason} dicts for column removals.
+        row_reorder: Dict with {from_position, to_position} for row reorder.
+        column_reorder: Dict with {column, from_position, to_position} for column reorder.
+        column_renames: List of {old_name, new_name} dicts for column renames.
+        explicit_row_add_reason: Explicit reason for row additions (may be "__per_row__").
+        has_comment_col: Whether CSV has a Comment column.
+        csv_file: Short name of CSV file (for audit events, e.g., "DR102_whitelist.csv").
+        app_context: App context (e.g., "whitelist_manager").
+        detection_rule: Detection rule name.
+
+    Returns:
+        Dict with keys:
+        - success: bool — True if save succeeded
+        - message: str — Human-readable status message
+        - error: str — Error description if success=False
+        - data: dict — On success: {removed_row_count, added_row_count, edited_row_count, new_version}
+        - diff: dict — The computed diff (for debugging/logging)
+
+    Raises:
+        OSError: If file I/O fails (caught internally and returned in error field)
+    """
+    # Import here to avoid circular dependencies
+    from wl_audit import post_audit_event, build_audit_event
+    from wl_versions import snapshot_version
+
+    removal_reasons = removal_reasons or []
+    bulk_removal = bulk_removal or []
+    column_removal_reasons = column_removal_reasons or []
+
+    try:
+        # Read BEFORE state
+        old_headers, old_rows = read_csv(csv_path)
+        if not new_headers:
+            new_headers = old_headers
+
+        # Enforce reorder-only: discard cell edits when reorder is present
+        if row_reorder or column_reorder:
+            clean_rows = [dict(r) for r in old_rows]
+            if row_reorder and isinstance(row_reorder, dict):
+                fr = row_reorder.get("from_position")
+                to = row_reorder.get("to_position")
+                if (isinstance(fr, int) and isinstance(to, int)
+                        and 1 <= fr <= len(clean_rows)
+                        and 1 <= to <= len(clean_rows)):
+                    moved = clean_rows.pop(fr - 1)
+                    clean_rows.insert(to - 1, moved)
+            if column_reorder and isinstance(column_reorder, dict):
+                col = column_reorder.get("column", "")
+                fr = column_reorder.get("from_position")
+                to = column_reorder.get("to_position")
+                if (col and isinstance(fr, int) and isinstance(to, int)
+                        and col in old_headers):
+                    new_headers = list(old_headers)
+                    actual_idx = new_headers.index(col)
+                    new_headers.pop(actual_idx)
+                    vis = [h for h in new_headers if not h.startswith("_")]
+                    target_col = None
+                    if 1 <= to <= len(vis):
+                        target_col = vis[to - 1]
+                    if target_col:
+                        ins_idx = new_headers.index(target_col)
+                        if fr < to:
+                            new_headers.insert(ins_idx + 1, col)
+                        else:
+                            new_headers.insert(ins_idx, col)
+                    else:
+                        new_headers.append(col)
+            new_rows = clean_rows
+
+        # Compute diff
+        diff = compute_diff(old_headers, old_rows, new_headers, new_rows)
+
+        # Filter out rename-paired columns from add/remove diff results
+        if column_renames:
+            rename_old = {r["old_name"] for r in column_renames}
+            rename_new = {r["new_name"] for r in column_renames}
+            diff["removed_columns"] = [c for c in diff["removed_columns"] if c not in rename_old]
+            diff["added_columns"] = [c for c in diff["added_columns"] if c not in rename_new]
+
+        has_row_changes = diff["added_count"] > 0 or diff["removed_count"] > 0 or diff["edited_count"] > 0
+        has_col_changes = bool(diff.get("added_columns")) or bool(diff.get("removed_columns"))
+        has_rename = bool(column_renames)
+        has_reorder = bool(row_reorder) or bool(column_reorder)
+        if not has_row_changes and not has_col_changes and not has_rename and not has_reorder:
+            return {
+                "success": True,
+                "message": "No changes detected",
+                "error": "",
+                "data": {
+                    "removed_row_count": 0,
+                    "added_row_count": 0,
+                    "edited_row_count": 0,
+                    "new_version": None,
+                },
+                "diff": diff,
+            }
+
+        # Stamp row-level history on newly added rows
+        ts_now = str(int(datetime.now(timezone.utc).timestamp()))
+        added_ids = {id(entry) for entry in diff["added"]}
+        for row in new_rows:
+            if id(row) in added_ids:
+                row["_added_by"] = analyst
+                row["_added_at"] = ts_now
+
+        # Ensure metadata columns in header
+        write_headers = list(new_headers)
+        for meta in ("_added_by", "_added_at"):
+            if meta not in write_headers:
+                write_headers.append(meta)
+
+        # Write CSV file
+        write_csv(csv_path, write_headers, new_rows)
+
+        # Snapshot version
+        new_version = None
+        try:
+            new_version, _ = snapshot_version(csv_path, analyst, action_label="save")
+        except OSError as exc:
+            # Log warning but don't fail the save — version snapshot is optional
+            pass
+
+        # Build audit events
+        ts = int(datetime.now(timezone.utc).timestamp())
+        summary_comment = comment
+        if has_comment_col and (not comment or comment == "__per_row__"):
+            summary_comment = "See per-row comments"
+
+        common = {
+            "timestamp": ts,
+            "analyst": analyst,
+            "detection_rule": detection_rule,
+            "csv_file": csv_file,
+            "app_context": app_context,
+            "comment": summary_comment,
+        }
+
+        def _clean_entry(row):
+            return {k: v for k, v in row.items() if not k.startswith("_")}
+
+        def _build_row_fields(entries, row_num_map):
+            lines = []
+            for entry in entries:
+                row_num = row_num_map.get(id(entry), 0)
+                cleaned = _clean_entry(entry)
+                for col_name, col_val in sorted(cleaned.items()):
+                    field_name = "{}_row_{}".format(col_name, row_num)
+                    lines.append("{}: {}".format(field_name, col_val))
+            return lines
+
+        # Map added rows to positions in new_rows
+        new_row_id_to_pos = {id(row): i + 1 for i, row in enumerate(new_rows)}
+        added_row_map = {}
+        for entry in diff["added"]:
+            pos = new_row_id_to_pos.get(id(entry))
+            if pos is not None:
+                added_row_map[id(entry)] = pos
+
+        # Post "added" audit event
+        if diff["added_count"] > 0:
+            added_values = _build_row_fields(diff["added"], added_row_map)
+            evt = dict(common, **{
+                "action": "row_added",
+                "added_row_count": diff["added_count"],
+                "value": added_values,
+                "row_add_reason": explicit_row_add_reason or summary_comment,
+                "added_by": analyst,
+                "added_at": ts,
+            })
+            post_audit_event(session_key, evt)
+
+        # Map removed rows to positions in old_rows
+        old_row_id_to_pos = {id(row): i + 1 for i, row in enumerate(old_rows)}
+        def _removed_row_map(removed_entries):
+            rmap = {}
+            for entry in removed_entries:
+                pos = old_row_id_to_pos.get(id(entry))
+                if pos is not None:
+                    rmap[id(entry)] = pos
+            return rmap
+
+        # Post removal audit events
+        if bulk_removal and diff["removed_count"] > 0:
+            bulk_reason = bulk_removal[0].get("reason", "") if bulk_removal else ""
+            removed_values = _build_row_fields(
+                diff["removed"], _removed_row_map(diff["removed"])
+            )
+            evt = dict(common, **{
+                "action": "row_removed_multiple" if diff["removed_count"] > 1 else "row_removed",
+                "removed_row_count": diff["removed_count"],
+                "value": removed_values,
+                "row_remove_reason": bulk_reason,
+                "removed_by": analyst,
+                "removed_at": ts,
+            })
+            post_audit_event(session_key, evt)
+        elif diff["removed_count"] > 0:
+            single_reason = ""
+            for rr in removal_reasons:
+                single_reason = rr.get("reason", "")
+
+            removed_values = _build_row_fields(
+                diff["removed"], _removed_row_map(diff["removed"])
+            )
+            evt = dict(common, **{
+                "action": "row_removed",
+                "removed_row_count": diff["removed_count"],
+                "value": removed_values,
+                "row_remove_reason": single_reason,
+                "removed_by": analyst,
+                "removed_at": ts,
+            })
+            post_audit_event(session_key, evt)
+
+        # Post "edited" audit event
+        if diff["edited_count"] > 0:
+            edit_value_lines = []
+            edit_details = {}
+            for edit_entry in diff["edited"]:
+                rn = edit_entry["row_num"]
+                for change in edit_entry["changed_fields"]:
+                    field = change["field"]
+                    before_key = "{}_row_{}_before".format(field, rn)
+                    after_key = "{}_row_{}_after".format(field, rn)
+                    edit_details[before_key] = change["before"]
+                    edit_details[after_key] = change["after"]
+                    edit_value_lines.append("{}: {}".format(before_key, change["before"]))
+                    edit_value_lines.append("{}: {}".format(after_key, change["after"]))
+
+            edit_comment = summary_comment
+            if (bulk_removal or removal_reasons) and diff["removed_count"] > 0:
+                edit_comment = "Edited alongside removal"
+
+            evt = dict(common, **{
+                "action": "row_edited",
+                "edited_row_count": diff["edited_count"],
+                "value": edit_value_lines,
+                "row_edit_reason": edit_comment,
+                "edited_by": analyst,
+                "edited_at": ts,
+            })
+            post_audit_event(session_key, evt)
+
+        # Post column removal audit event
+        if diff.get("removed_columns"):
+            col_reason = ""
+            for cr in column_removal_reasons:
+                if cr.get("column") in diff["removed_columns"]:
+                    col_reason = cr.get("reason", "")
+                    break
+
+            value_lines = []
+            for col in diff["removed_columns"]:
+                for i, row in enumerate(old_rows):
+                    cell = row.get(col, "")
+                    if cell:
+                        value_lines.append("{}_row_{}: {}".format(col, i + 1, cell))
+
+            evt = dict(common, **{
+                "action": "column_removed",
+                "column_count": len(diff["removed_columns"]),
+                "columns": diff["removed_columns"],
+                "value": value_lines,
+                "column_remove_reason": col_reason,
+                "changed_by": analyst,
+                "changed_at": ts,
+            })
+            post_audit_event(session_key, evt)
+
+        # Post column addition audit event
+        if diff.get("added_columns"):
+            evt = dict(common, **{
+                "action": "column_added",
+                "column_count": len(diff["added_columns"]),
+                "columns": diff["added_columns"],
+                "value": ["column: " + c for c in diff["added_columns"]],
+                "changed_by": analyst,
+                "changed_at": ts,
+            })
+            post_audit_event(session_key, evt)
+
+        # Post column rename audit events
+        if column_renames:
+            for cr in column_renames:
+                evt = dict(common, **{
+                    "action": "column_renamed",
+                    "column_renamed_before": cr["old_name"],
+                    "column_renamed_after": cr["new_name"],
+                    "column_count": 1,
+                    "value": [cr["old_name"] + " -> " + cr["new_name"]],
+                    "changed_by": analyst,
+                    "changed_at": ts,
+                })
+                post_audit_event(session_key, evt)
+
+        # Post row reorder audit event
+        if row_reorder and isinstance(row_reorder, dict):
+            evt = dict(common, **{
+                "action": "row_reordered",
+                "row_number_before": row_reorder.get("from_position"),
+                "row_number_after": row_reorder.get("to_position"),
+                "reordered_by": analyst,
+                "reordered_at": ts,
+            })
+            post_audit_event(session_key, evt)
+
+        # Post column reorder audit event
+        if column_reorder and isinstance(column_reorder, dict):
+            evt = dict(common, **{
+                "action": "column_reordered",
+                "column_name": column_reorder.get("column"),
+                "column_number_before": column_reorder.get("from_position"),
+                "column_number_after": column_reorder.get("to_position"),
+                "reordered_by": analyst,
+                "reordered_at": ts,
+            })
+            post_audit_event(session_key, evt)
+
+        # Return success
+        return {
+            "success": True,
+            "message": "CSV saved successfully",
+            "error": "",
+            "data": {
+                "removed_row_count": diff["removed_count"],
+                "added_row_count": diff["added_count"],
+                "edited_row_count": diff["edited_count"],
+                "new_version": new_version,
+            },
+            "diff": diff,
+        }
+
+    except OSError as exc:
+        return {
+            "success": False,
+            "message": "",
+            "error": "Failed to save CSV: {}".format(str(exc)),
+            "data": {},
+            "diff": {},
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "message": "",
+            "error": "Unexpected error during save: {}".format(str(exc)),
+            "data": {},
+            "diff": {},
+        }
+
+
+def create_csv_pipeline(
+    csv_path: str,
+    analyst: str,
+    session_key: str,
+    csv_file: str = "",
+    app_context: str = "",
+    detection_rule: str = "",
+) -> Dict[str, Any]:
+    """
+    Execute the CSV creation pipeline: create empty file, audit, snapshot.
+
+    Creates a new CSV file with no headers or rows, posts an audit event,
+    and creates an initial version snapshot.
+
+    The handler retains responsibility for:
+    - Approval gates and limits
+    - RBAC (who can create CSVs)
+    - Duplicate detection (rule already exists)
+
+    Args:
+        csv_path: Absolute filesystem path to CSV file.
+        analyst: Username of the analyst creating the file.
+        session_key: Splunk session key for REST API calls.
+        csv_file: Short name of CSV file (for audit events).
+        app_context: App context (e.g., "whitelist_manager").
+        detection_rule: Detection rule name.
+
+    Returns:
+        Dict with keys:
+        - success: bool — True if creation succeeded
+        - message: str — Human-readable status message
+        - error: str — Error description if success=False
+        - data: dict — On success: {new_version}
+    """
+    from wl_audit import post_audit_event
+    from wl_versions import snapshot_version
+
+    try:
+        # Create empty CSV file
+        write_csv(csv_path, [], [])
+
+        # Snapshot initial version
+        new_version = None
+        try:
+            new_version, _ = snapshot_version(csv_path, analyst, action_label="create")
+        except OSError:
+            pass
+
+        # Post audit event
+        ts = int(datetime.now(timezone.utc).timestamp())
+        evt = {
+            "timestamp": ts,
+            "analyst": analyst,
+            "detection_rule": detection_rule,
+            "csv_file": csv_file,
+            "app_context": app_context,
+            "action": "csv_created",
+            "comment": "Created by {}".format(analyst),
+            "created_by": analyst,
+            "created_at": ts,
+        }
+        post_audit_event(session_key, evt)
+
+        return {
+            "success": True,
+            "message": "CSV created successfully",
+            "error": "",
+            "data": {
+                "new_version": new_version,
+            },
+        }
+
+    except OSError as exc:
+        return {
+            "success": False,
+            "message": "",
+            "error": "Failed to create CSV: {}".format(str(exc)),
+            "data": {},
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "message": "",
+            "error": "Unexpected error during creation: {}".format(str(exc)),
+            "data": {},
+        }
