@@ -39,7 +39,7 @@ Phase 04 — backend-integration
 ## Current Position
 
 Phase: 04 (backend-integration) — IN PROGRESS
-Plan: 4 of 5 — Gap closure 04-04 partial (pipelines created, handler not refactored); 04-05 pending
+Plan: 4 of 5 — Gap closure 04-04 in progress (create_rule extracted to wl_rules, wl_replay wired for create/remove approvals, handler 5856→5746 lines); 04-05 pending
 
 ## Roadmap Overview
 
