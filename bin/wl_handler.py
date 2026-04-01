@@ -1929,23 +1929,25 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     MAX_TOTAL_CSV_MAPPINGS)
             })
 
-        # ── Create the CSV file with headers only (no rows) ──────────
-        try:
-            write_csv(csv_path, headers, initial_rows)
-        except OSError as exc:
-            _logger.error("Failed to create CSV %s: %s", csv_filename, exc)
+        # ── Call pipeline to execute CSV creation ───────────────────────
+        result = create_csv_pipeline(
+            csv_path=csv_path,
+            headers=headers,
+            initial_rows=initial_rows,
+            analyst=user,
+            session_key=self.session_key,
+            csv_file=csv_filename,
+            app_context=app_context,
+            detection_rule=detection_rule,
+        )
+
+        if not result.get("success"):
+            _logger.error("create_csv_pipeline failed: %s", result.get("error"))
             return self._resp(500, {
-                "error": "Failed to create CSV file. Please check server logs."
+                "error": result.get("error", "Failed to create CSV file")
             })
 
-        # ── Snapshot initial version at creation time ─────────────────
-        try:
-            _, _ = snapshot_version(csv_path, user, action_label="created")
-        except OSError as exc:
-            _logger.warning("Failed to snapshot initial version for %s: %s",
-                            csv_filename, exc)
-
-        # ── Append mapping to rule_csv_map.csv ────────────────────────
+        # ── Update mapping file ─────────────────────────────────────────
         try:
             mapping.append({
                 "rule_name": detection_rule,
@@ -1980,20 +1982,6 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         except OSError:
             pass  # non-critical — rule just stays in both lists
 
-        # ── Audit event ───────────────────────────────────────────────
-        evt = build_audit_event(
-            action="csv_created",
-            analyst=user,
-            detection_rule=detection_rule,
-            csv_file=csv_filename,
-            app_context=app_context,
-            status="created",
-            column_count=len(headers),
-            columns=headers,
-            imported_row_count=len(initial_rows),
-        )
-        self._index_audit(request, evt)
-
         row_note = " with {} imported row(s)".format(len(initial_rows)) if initial_rows else ""
         return self._resp(200, {
             "success": True,
@@ -2005,6 +1993,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     # ------------------------------------------------------------------
     # Remove detection rule (unlink or permanent delete)
     # ------------------------------------------------------------------
+
     def _remove_rule(self, request, payload, user):
         rule_name = (payload.get("rule_name") or "").strip()
         removal_type = payload.get("removal_type", "")

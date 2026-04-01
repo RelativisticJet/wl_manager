@@ -968,6 +968,8 @@ def save_csv_pipeline(
 
 def create_csv_pipeline(
     csv_path: str,
+    headers: List[str],
+    initial_rows: List[Dict[str, str]],
     analyst: str,
     session_key: str,
     csv_file: str = "",
@@ -975,18 +977,23 @@ def create_csv_pipeline(
     detection_rule: str = "",
 ) -> Dict[str, Any]:
     """
-    Execute the CSV creation pipeline: create empty file, audit, snapshot.
+    Execute the CSV creation pipeline: create file with headers/rows, snapshot, audit.
 
-    Creates a new CSV file with no headers or rows, posts an audit event,
-    and creates an initial version snapshot.
+    Creates a new CSV file with provided headers and initial rows, creates an
+    initial version snapshot, and posts an audit event with full metadata.
 
     The handler retains responsibility for:
+    - Validation of headers, rows, rule name, CSV filename
     - Approval gates and limits
     - RBAC (who can create CSVs)
-    - Duplicate detection (rule already exists)
+    - Duplicate detection (rule already exists, CSV already exists)
+    - Mapping file updates
+    - Rules registry cleanup
 
     Args:
         csv_path: Absolute filesystem path to CSV file.
+        headers: List of column names for the CSV.
+        initial_rows: List of dicts (initial row data to populate CSV).
         analyst: Username of the analyst creating the file.
         session_key: Splunk session key for REST API calls.
         csv_file: Short name of CSV file (for audit events).
@@ -998,43 +1005,44 @@ def create_csv_pipeline(
         - success: bool — True if creation succeeded
         - message: str — Human-readable status message
         - error: str — Error description if success=False
-        - data: dict — On success: {new_version}
+        - data: dict — On success: {new_version, column_count, imported_row_count}
     """
-    from wl_audit import post_audit_event
+    from wl_audit import build_audit_event, post_audit_event
     from wl_versions import snapshot_version
 
     try:
-        # Create empty CSV file
-        write_csv(csv_path, [], [])
+        # Create CSV file with headers and initial rows
+        write_csv(csv_path, headers, initial_rows)
 
         # Snapshot initial version
         new_version = None
         try:
-            new_version, _ = snapshot_version(csv_path, analyst, action_label="create")
+            new_version, _ = snapshot_version(csv_path, analyst, action_label="created")
         except OSError:
             pass
 
-        # Post audit event
-        ts = int(datetime.now(timezone.utc).timestamp())
-        evt = {
-            "timestamp": ts,
-            "analyst": analyst,
-            "detection_rule": detection_rule,
-            "csv_file": csv_file,
-            "app_context": app_context,
-            "action": "csv_created",
-            "comment": "Created by {}".format(analyst),
-            "created_by": analyst,
-            "created_at": ts,
-        }
+        # Build and post audit event with full metadata
+        evt = build_audit_event(
+            action="csv_created",
+            analyst=analyst,
+            detection_rule=detection_rule,
+            csv_file=csv_file,
+            app_context=app_context,
+            status="created",
+            column_count=len(headers),
+            columns=headers,
+            imported_row_count=len(initial_rows),
+        )
         post_audit_event(session_key, evt)
 
         return {
             "success": True,
-            "message": "CSV created successfully",
+            "message": "CSV created with {} column(s)".format(len(headers)),
             "error": "",
             "data": {
                 "new_version": new_version,
+                "column_count": len(headers),
+                "imported_row_count": len(initial_rows),
             },
         }
 
