@@ -13,7 +13,7 @@
 
 - [x] **Phase 1: Backend Foundation** - Extract dependency-free backend modules (constants, validation, RBAC, presence)
 - [ ] **Phase 2: Backend Core Domain** - Extract data persistence layer (CSV, versions, audit, rules, trash) + gap closure
-- [ ] **Phase 3: Backend Orchestration** - Extract approval queue and daily limits management
+- [ ] **Phase 3: Backend Orchestration** - Extract orchestration modules (file locking, approval queue, daily limits, notifications)
 - [ ] **Phase 4: Backend Integration** - Refactor wl_handler.py as thin REST router
 - [ ] **Phase 5: Frontend Architecture** - Extract frontend modules and implement state manager
 - [ ] **Phase 6: Admin Panel** - Modularize control_panel.js and associated feature modules
@@ -130,36 +130,36 @@
 
 ### Phase 3: Backend Orchestration
 
-**Goal:** Extract 2 complex orchestration modules with wide dependencies on Phase 1 and Phase 2, establishing approval queue and daily limits enforcement.
+**Goal:** Extract 4 complex orchestration modules with wide dependencies on Phase 1 and Phase 2, establishing file locking, approval queue, daily limits enforcement, and notifications.
 
 **Depends on:** Phase 1, Phase 2
 
-**Requirements:** BMOD-11, BMOD-12, BMOD-13 (partial), BMOD-14 (partial), BMOD-15 (partial), TEST-01 (partial), TEST-04 (partial)
+**Requirements:** BMOD-11, BMOD-12, BMOD-13, BMOD-14, BMOD-15, TEST-01, TEST-04
 
 **Success Criteria** (what must be TRUE when phase completes):
 1. User can submit an edit for approval and admin can approve/reject with correct audit trail, all as before (no functional change)
-2. Two new modules exist and are imported: wl_limits.py, wl_approval.py
+2. Four new modules exist and are imported: wl_filelock.py, wl_limits.py, wl_approval.py, wl_notify.py
 3. Approval queue auto-cancels conflicting pending requests when a destructive action (delete rule/CSV) is approved
-4. Daily limits check passes for all role tiers; reset scheduling works across phase boundaries
-5. Concurrency tests pass for simultaneous CSV saves, approval races, and file locking under contention (5+ concurrent threads)
+4. Daily limits check passes for all role tiers; reset scheduling works at UTC boundaries; 0-semantics consistent (0=disabled, -1=unlimited)
+5. Concurrency tests pass for simultaneous CSV saves, approval races, file locking under contention (5+ concurrent threads); no data corruption or deadlocks
 6. Every module has ≥80% unit test coverage; no function >100 lines; CC <15 for all
 
 **Plans:** 2 plans in 2 waves
 
-- [ ] **03-01-PLAN.md** — Extract wl_limits.py (Layer 4, Wave 1)
+- [ ] **03-01-PLAN.md** — Extract wl_filelock.py and wl_limits.py (Layer 4, Wave 1) — PLANNED
   - Requirements: BMOD-11, BMOD-13, BMOD-14, BMOD-15, TEST-01
-  - Files: bin/wl_limits.py, tests/unit/test_limits.py, bin/wl_handler.py
-  - Tasks: 3 (create wl_limits.py, unit tests, wire handler)
+  - Files: bin/wl_filelock.py, bin/wl_limits.py, bin/wl_constants.py (RESET_ALL_USERS), tests/unit/test_filelock.py, tests/unit/test_limits.py, bin/wl_handler.py
+  - Tasks: 7 (create wl_filelock context manager with fcntl/RLock, add RESET_ALL_USERS constant, create wl_limits with 7 functions, 15+ filelock tests, 40+ limits tests, wire handler imports, run full test suite)
 
-- [ ] **03-02-PLAN.md** — Extract wl_approval.py and concurrency tests (Layer 4, Wave 2)
+- [ ] **03-02-PLAN.md** — Extract wl_approval.py, wl_notify.py, and concurrency tests (Layer 4, Wave 2) — PLANNED
   - Requirements: BMOD-12, BMOD-13, BMOD-14, BMOD-15, TEST-01, TEST-04
-  - Files: bin/wl_approval.py, tests/unit/test_approval.py, tests/integration/test_approval_chain.py, tests/integration/test_concurrency.py, bin/wl_handler.py
-  - Tasks: 6 (create wl_approval.py, unit tests, integration tests, concurrency tests, wire handler, verify phase completion)
-  - Depends on: 03-01 (approval gating checks daily limits)
+  - Files: bin/wl_approval.py, bin/wl_notify.py, tests/unit/test_approval.py, tests/unit/test_notify.py, tests/integration/test_approval_chain.py, tests/integration/test_concurrency.py, bin/wl_handler.py
+  - Tasks: 8 (create wl_approval with queue CRUD/conflict resolution/submission, create wl_notify with admin/analyst notifications, 50+ approval tests, 15+ notify tests, 5+ integration approval-chain tests, 5+ concurrency tests with 5+ threads, wire handler, verify phase completion)
+  - Depends on: 03-01 (approval gating checks daily limits, uses wl_filelock for queue locking)
 
 **Wave Structure:**
-- **Wave 1:** 03-01 (wl_limits) — foundation for approval gating
-- **Wave 2:** 03-02 (wl_approval + tests) — depends on wl_limits for daily limit checks
+- **Wave 1:** 03-01 (wl_filelock + wl_limits) — foundation for file locking and approval gating
+- **Wave 2:** 03-02 (wl_approval + wl_notify + tests) — depends on wl_limits for gating, uses wl_filelock for queue lock
 
 ---
 
@@ -266,7 +266,7 @@
 |-------|-------|--------|---------|-----------|
 | 1. Backend Foundation | 4 plans | Complete ✓ | — | — |
 | 2. Backend Core Domain | 4 core + 1 gap | In Progress (gap closure next) | — | — |
-| 3. Backend Orchestration | 2 plans | Planned | — | — |
+| 3. Backend Orchestration | 2 plans | Planned ✓ | — | — |
 | 4. Backend Integration | TBD | Not started | — | — |
 | 5. Frontend Architecture | TBD | Not started | — | — |
 | 6. Admin Panel | TBD | Not started | — | — |
@@ -285,4 +285,4 @@
 - **Phase 1 complete:** 4 executable plans with 2-wave structure, all passing tests, ready for Phase 2
 - **Phase 2 core complete:** 4 executable plans with 3-wave structure, 5 modules extracted, 132/132 tests passing
 - **Phase 2 gap closure:** Plan 02-05 created to refactor oversized functions (compute_diff 207→4 funcs, move_to_trash 139→3 funcs) to satisfy BMOD-13 requirement
-- **Phase 3 planned:** 2 executable plans with 2-wave structure, wl_limits + wl_approval with concurrency tests (5+ threads), ready for execution
+- **Phase 3 planned:** 2 executable plans with 2-wave structure, 4 modules (wl_filelock, wl_limits, wl_approval, wl_notify) with 155+ tests (55+ unit, 70+ integration/concurrency) covering file locking, daily limits, approval queue, conflict resolution, and 5+ thread concurrency stress tests, ready for execution via `/gsd:execute-phase 3`
