@@ -67,6 +67,7 @@ __all__ = [
     'EDIT_ROLES',
     'ADMIN_ROLES',
     'SUPERADMIN_ROLES',
+    'RESET_ALL_USERS',
     # Trash management
     'MIN_TRASH_RETENTION_DAYS',
     'DEFAULT_TRASH_RETENTION_DAYS',
@@ -305,6 +306,13 @@ SUPERADMIN_ROLES: Set[str] = {
     "wl_superadmin",
 }
 """Roles permitted to manage system-level limits, trash retention, and configuration."""
+
+RESET_ALL_USERS: str = "__all__"
+"""Sentinel constant for reset_daily_limits(analyst=RESET_ALL_USERS) meaning 'reset all analysts'.
+
+Used instead of magic string "all" to prevent sentinel value bugs (e.g., checking `if analyst:`
+treats "all" as truthy, then code looks up user named "all" and fails silently).
+This named constant makes intent explicit and prevents typos."""
 
 
 # ═══════════════════════════════════════════════════════════════════════════
