@@ -164,6 +164,8 @@ from wl_approval import (
     submit_dual_approval, check_approval_gate, expire_pending_approvals,
     check_conflicts, cancel_conflicts
 )
+# Layer 5: Approval replay orchestration
+from wl_replay import execute_approved_action
 
 # ---------------------------------------------------------------------------
 # Rotating file logger — backup audit trail independent of Splunk indexing
