@@ -4910,90 +4910,25 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         elif action_type in ("create_csv", "create_rule",
                              "remove_csv", "remove_rule"):
-            # Create/delete actions: replay the original action directly.
-            # These don't go through _save_csv — they use their own methods.
-            _method_map = {
-                "create_csv": self._create_csv,
-                "create_rule": self._create_rule,
-                "remove_csv": self._remove_csv,
-                "remove_rule": self._remove_rule,
+            # Create/delete actions: delegate to wl_replay (Layer 5).
+            session_key = request.get("system_authtoken", "") or \
+                request.get("session", {}).get("authtoken", "")
+            replay_context = {
+                "original_analyst": original_analyst,
+                "approving_admin": admin_user,
+                "request_id": request_id,
+                "action_type": action_type,
+                "session_key": session_key,
+                "approved_at": now,
+                "is_dual_admin": False,
             }
-            method = _method_map[action_type]
+            replay_item = dict(target)
+            replay_item["payload"] = stored_payload
 
-            # ── Option B: Validate preconditions before replay ──────
-            target_rule = target.get("detection_rule", "")
-            target_csv = csv_file
-            mapping = self._read_mapping()
-            rule_in_mapping = any(
-                m["rule_name"] == target_rule for m in mapping)
-            rule_in_registry = target_rule in read_rules_registry()
-            rule_exists = rule_in_mapping or rule_in_registry
-            csv_exists = any(
-                m["rule_name"] == target_rule and m["csv_file"] == target_csv
-                for m in mapping
-            )
+            replay_result = execute_approved_action(replay_context, replay_item)
 
-            precondition_error = None
-            if action_type == "create_csv" and not rule_exists:
-                precondition_error = (
-                    "Detection rule '{}' no longer exists. "
-                    "Cannot create CSV for a deleted rule.".format(target_rule))
-            elif action_type == "remove_rule" and not rule_exists:
-                precondition_error = (
-                    "Detection rule '{}' has already been removed.".format(
-                        target_rule))
-            elif action_type == "remove_csv" and not csv_exists:
-                precondition_error = (
-                    "CSV file '{}' for rule '{}' has already been "
-                    "removed.".format(target_csv, target_rule))
-
-            if precondition_error:
-                target["status"] = "failed"
-                target["resolved_by"] = admin_user
-                target["resolved_at"] = now
-                target["rejection_reason"] = precondition_error
-                _write_approval_queue(queue)
-                self._index_audit(request, {
-                    "timestamp": now, "analyst": admin_user,
-                    "action": "request_failed", "status": "failed",
-                    "detection_rule": target_rule,
-                    "csv_file": target_csv, "app_context": app_context,
-                    "request_id": request_id,
-                    "requester": target["analyst"],
-                    "approval_action_type": action_type,
-                    "failure_reason": precondition_error,
-                    "comment": precondition_error,
-                })
-                _add_notification(
-                    target["analyst"], "rejected",
-                    "Your {} request failed: {}".format(
-                        action_type.replace("_", " "), precondition_error),
-                    request_id,
-                    {"csv_file": target_csv,
-                     "detection_rule": target_rule,
-                     "action_type": action_type})
-                return self._resp(409, {
-                    "error": precondition_error,
-                    "request_id": request_id,
-                })
-
-            replay_payload = dict(stored_payload)
-            replay_payload["_from_approval"] = True
-            # Ensure key fields are present even if original_payload was
-            # not stored (e.g., direct submit_approval call)
-            if not replay_payload.get("detection_rule"):
-                replay_payload["detection_rule"] = target.get(
-                    "detection_rule", "")
-            if not replay_payload.get("csv_file"):
-                replay_payload["csv_file"] = csv_file
-            if not replay_payload.get("app_context"):
-                replay_payload["app_context"] = app_context
-
-            result = method(request, replay_payload, original_analyst)
-
-            result_body = json.loads(result.get("payload", "{}"))
-            if result.get("status", 500) >= 400:
-                fail_reason = result_body.get("error", "Unknown error")
+            if not replay_result.get("success"):
+                fail_reason = replay_result.get("error", "Unknown error")
                 target["status"] = "failed"
                 target["resolved_by"] = admin_user
                 target["resolved_at"] = now
@@ -5012,7 +4947,15 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                         admin_user, action_type.replace("_", " "),
                         target["analyst"]),
                 })
-                return self._resp(result["status"], {
+                _add_notification(
+                    target["analyst"], "rejected",
+                    "Your {} request failed: {}".format(
+                        action_type.replace("_", " "), fail_reason),
+                    request_id,
+                    {"csv_file": csv_file,
+                     "detection_rule": target["detection_rule"],
+                     "action_type": action_type})
+                return self._resp(409, {
                     "error": "Approval execution failed: " + fail_reason,
                     "request_id": request_id,
                 })
