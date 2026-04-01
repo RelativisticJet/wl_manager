@@ -126,7 +126,8 @@ from wl_csv import (
 
 # Layer 3: Detection Rules Registry (imported from wl_rules module)
 # ---------------------------------------------------------------------------
-from wl_rules import read_rules_registry, write_rules_registry, read_csv_mapping, get_rule_csv_file
+from wl_rules import (read_rules_registry, write_rules_registry, read_csv_mapping,
+                      get_rule_csv_file, get_rule_for_csv, create_rule_pipeline)
 
 # Layer 3: Trash Management (imported from wl_trash module)
 # ---------------------------------------------------------------------------
@@ -1532,8 +1533,20 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         return self._create_csv(request, payload, user)
 
     def _action_create_rule(self, request, payload, user, roles):
-        """POST action wrapper for create_rule."""
-        return self._create_rule(request, payload, user)
+        """POST: Register a new detection rule name."""
+        detection_rule = (payload.get("detection_rule") or "").strip()
+        result = create_rule_pipeline(detection_rule)
+        # Audit event (secondary — log+continue)
+        try:
+            evt = build_audit_event(
+                action="dr_created", analyst=user,
+                detection_rule=detection_rule, csv_file="",
+                app_context=APP_NAME, status="created",
+            )
+            self._index_audit(request, evt)
+        except Exception as exc:
+            _logger.error("Audit failed for create_rule: %s", exc)
+        return self._resp(200, result)
 
     def _action_remove_csv(self, request, payload, user, roles):
         """POST action wrapper for remove_csv."""
@@ -1673,77 +1686,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         return self._dispatch(self.POST_ACTIONS, action, request, user, roles, payload=payload)
 
     # ==================================================================
-    # Create Detection Rule
+    # Inline methods below are being extracted to domain modules.
+    # See create_rule_pipeline in wl_rules.py for the pattern.
     # ==================================================================
-    def _create_rule(self, request, payload, user):
-        """Register a new detection rule name (without creating a CSV yet)."""
-        detection_rule = (payload.get("detection_rule") or "").strip()
-
-        if not detection_rule:
-            return self._resp(400, {"error": "Detection rule name is required"})
-        if len(detection_rule) > 100:
-            return self._resp(400, {
-                "error": "Detection rule name too long: {} chars (max 100)".format(
-                    len(detection_rule))
-            })
-        if not all(c.isalnum() or c in ("_", "-", ".", " ") for c in detection_rule):
-            return self._resp(400, {
-                "error": "Detection rule name can only contain letters, "
-                         "numbers, underscores, hyphens, dots, and spaces"
-            })
-        if not any(c.isalnum() for c in detection_rule):
-            return self._resp(400, {
-                "error": "Detection rule name must contain at least one "
-                         "letter or number"
-            })
-
-        # Check if rule already exists in mapping or registry
-        mapping = self._read_mapping()
-        if any(e.get("rule_name") == detection_rule for e in mapping):
-            return self._resp(409, {
-                "error": "Rule '{}' already exists in CSV mapping".format(
-                    detection_rule)
-            })
-        with _detection_rules_modify():
-            registered = read_rules_registry()
-            if detection_rule in registered:
-                return self._resp(409, {
-                    "error": "Rule '{}' is already registered".format(
-                        detection_rule)
-                })
-            if len(registered) >= MAX_DETECTION_RULES:
-                return self._resp(400, {
-                    "error": "Maximum number of registered rules reached "
-                             "({})".format(MAX_DETECTION_RULES)
-                })
-
-            # Persist the rule name
-            registered.append(detection_rule)
-            try:
-                write_rules_registry(registered)
-            except OSError as exc:
-                _logger.error("Failed to write detection rules: %s", exc)
-                return self._resp(500, {
-                    "error": "Failed to save detection rule. "
-                             "Please check server logs."
-                })
-
-        # Audit event
-        evt = build_audit_event(
-            action="dr_created",
-            analyst=user,
-            detection_rule=detection_rule,
-            csv_file="",
-            app_context=APP_NAME,
-            status="created",
-        )
-        self._index_audit(request, evt)
-
-        return self._resp(200, {
-            "success": True,
-            "detection_rule": detection_rule,
-            "message": "Detection rule '{}' registered".format(detection_rule),
-        })
 
     # ==================================================================
     # Create CSV
