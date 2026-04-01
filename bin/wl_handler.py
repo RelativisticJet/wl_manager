@@ -156,6 +156,15 @@ from wl_limits import (
 from wl_filelock import file_lock
 
 # ---------------------------------------------------------------------------
+# Layer 3: Approval Queue (imported from Phase 3 modules)
+# ---------------------------------------------------------------------------
+from wl_approval import (
+    get_pending_for_csv, get_pending_for_rule, submit_approval,
+    submit_dual_approval, check_approval_gate, expire_pending_approvals,
+    check_conflicts, cancel_conflicts
+)
+
+# ---------------------------------------------------------------------------
 # Rotating file logger — backup audit trail independent of Splunk indexing
 # ---------------------------------------------------------------------------
 _logger = get_audit_logger()
@@ -235,71 +244,46 @@ def _detection_rules_modify():
 # Approval workflow helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _get_approval_queue_path():
-    """Return path to the global approval queue JSON file."""
-    versions_dir = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
-    os.makedirs(versions_dir, exist_ok=True)
-    return os.path.join(versions_dir, APPROVAL_QUEUE_FILE)
-
-
-_approval_queue_thread_lock = threading.RLock()
-
+# ═══════════════════════════════════════════════════════════════════════════
+# Approval Queue Helpers (wrappers around wl_approval module functions)
+# ═══════════════════════════════════════════════════════════════════════════
+# These wrappers provide backward compatibility with handler's existing code
+# while delegating to wl_approval module which handles file locking via wl_filelock.
+# ═══════════════════════════════════════════════════════════════════════════
 
 def _read_approval_queue():
-    """Read and return the approval queue list, or empty list on error."""
-    path = _get_approval_queue_path()
-    if not os.path.isfile(path):
-        return []
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except (json.JSONDecodeError, OSError):
-        return []
+    """Read and return the approval queue list, or empty list on error.
+
+    Wrapper around wl_approval._read_approval_queue() that converts
+    tuple (list, error) to just list (for backward compatibility).
+    """
+    from wl_approval import _read_approval_queue as wl_read_queue
+    queue, _ = wl_read_queue()
+    return queue
 
 
 def _write_approval_queue(queue):
-    """Write the approval queue to disk with file locking."""
-    path = _get_approval_queue_path()
-    with open(path, "w", encoding="utf-8") as fh:
-        if fcntl:
-            try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except (IOError, OSError):
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-        try:
-            json.dump(queue, fh, indent=2, default=str)
-        finally:
-            if fcntl:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    """Write the approval queue to disk atomically.
+
+    Wrapper around wl_approval._write_approval_queue() that handles
+    the tuple (success, error) return (for backward compatibility).
+    """
+    from wl_approval import _write_approval_queue as wl_write_queue
+    success, error = wl_write_queue(queue)
+    if not success:
+        _logger.error(f"Failed to write approval queue: {error}")
+    return success
 
 
 @contextmanager
 def _approval_queue_lock():
-    """Acquire an exclusive lock around approval queue read-modify-write cycles.
+    """Context manager for approval queue operations (backward compatibility).
 
-    Combines a threading.RLock (in-process) with a file-based lock
-    (cross-process) to prevent concurrent queue operations from
-    overwriting each other.
+    The new wl_approval module uses file_lock internally from wl_filelock,
+    so explicit locking in the handler is no longer needed. This is kept
+    for backward compatibility with existing code.
     """
-    with _approval_queue_thread_lock:
-        if not fcntl:
-            yield
-            return
-        lock_path = _get_approval_queue_path() + ".lock"
-        fh = open(lock_path, "w")  # noqa: SIM115
-        try:
-            try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except (IOError, OSError):
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-            yield
-        finally:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-            fh.close()
-            try:
-                os.remove(lock_path)
-            except OSError:
-                pass
+    yield  # No-op: wl_approval handles locking internally
 
 
 def _cancel_conflicting_requests(queue, detection_rule, csv_file,
@@ -307,60 +291,69 @@ def _cancel_conflicting_requests(queue, detection_rule, csv_file,
                                  audit_fn):
     """Cancel pending requests that conflict with a destructive action.
 
-    Called after a rule or CSV is removed (either directly by admin
-    or via approval replay) to invalidate orphaned pending requests.
+    Wrapper around wl_approval.cancel_conflicts() that also integrates with
+    the handler's auditing and notification systems.
 
     Args:
-        queue: The approval queue list (modified in place).
+        queue: The approval queue list.
         detection_rule: The rule that was removed/affected.
         csv_file: The CSV that was removed (or "" for rule removal).
-        trigger_action: "remove_rule" or "remove_csv".
+        trigger_action: "delete_rule" or "delete_csv".
         trigger_request_id: Request ID that triggered the cancel (or "").
         audit_fn: Callable(event_dict) to write audit events.
+
+    Returns:
+        List of cancelled entries.
     """
-    now = int(time.time())
-    cancelled = []
-    for entry in queue:
-        if entry.get("request_id") == trigger_request_id:
-            continue
-        if entry.get("status") != "pending":
-            continue
-        conflict = False
-        if trigger_action == "remove_rule":
-            if entry.get("detection_rule") == detection_rule:
-                conflict = True
-        elif trigger_action == "remove_csv":
-            if (entry.get("csv_file") == csv_file and
-                    entry.get("detection_rule") == detection_rule):
-                conflict = True
-        if not conflict:
-            continue
+    # Map handler's action names to wl_approval's action_type names
+    action_type_map = {
+        "remove_rule": "delete_rule",
+        "remove_csv": "delete_csv",
+    }
+    action_type = action_type_map.get(trigger_action, trigger_action)
 
-        entry["status"] = "cancelled"
-        entry["resolved_by"] = "system"
-        entry["resolved_at"] = now
-        entry["cancellation_reason"] = (
-            "Auto-cancelled: {} was approved, invalidating this "
-            "request".format(trigger_action.replace("_", " ")))
-        cancelled.append(entry)
+    # Build action dict for wl_approval.cancel_conflicts
+    action = {
+        "action_type": action_type,
+        "csv_file": csv_file,
+        "detection_rule": detection_rule,
+        "analyst": "system",  # Required for audit tracking
+    }
 
-        entity = detection_rule if trigger_action == "remove_rule" \
-            else csv_file
-        _add_notification(
-            entry["analyst"], "cancelled",
-            "Your {} request was auto-cancelled because {} '{}' "
-            "was removed".format(
-                entry["action_type"].replace("_", " "),
-                "rule" if trigger_action == "remove_rule" else "CSV",
-                entity),
-            entry["request_id"],
-            {"csv_file": entry.get("csv_file", ""),
-             "detection_rule": entry.get("detection_rule", ""),
-             "action_type": entry["action_type"]})
+    # Call wl_approval.cancel_conflicts to get new queue and cancelled entries
+    new_queue, cancelled_entries = cancel_conflicts(queue, action)
 
-    if cancelled:
-        _write_approval_queue(queue)
-        for entry in cancelled:
+    # Filter out the trigger request if it's in the list
+    if trigger_request_id:
+        cancelled_entries = [e for e in cancelled_entries
+                             if e.get("request_id") != trigger_request_id]
+
+    if cancelled_entries:
+        # Update the queue in place for caller
+        queue[:] = new_queue
+
+        # Add handler notifications
+        for entry in cancelled_entries:
+            entity = detection_rule if trigger_action == "remove_rule" \
+                else csv_file
+            _add_notification(
+                entry["analyst"], "cancelled",
+                "Your {} request was auto-cancelled because {} '{}' "
+                "was removed".format(
+                    entry["action_type"].replace("_", " "),
+                    "rule" if trigger_action == "remove_rule" else "CSV",
+                    entity),
+                entry["request_id"],
+                {"csv_file": entry.get("csv_file", ""),
+                 "detection_rule": entry.get("detection_rule", ""),
+                 "action_type": entry["action_type"]})
+
+        # Write updated queue
+        _write_approval_queue(new_queue)
+
+        # Audit each cancellation
+        now = int(time.time())
+        for entry in cancelled_entries:
             audit_fn({
                 "timestamp": now,
                 "analyst": "system",
@@ -373,7 +366,8 @@ def _cancel_conflicting_requests(queue, detection_rule, csv_file,
                 "comment": "Auto-cancelled due to {} approval".format(
                     trigger_action.replace("_", " ")),
             })
-    return cancelled
+
+    return cancelled_entries
 
 
 # ---------------------------------------------------------------------------
@@ -809,46 +803,21 @@ def _increment_daily_limit(user, action_type, count=1):
 def _expire_pending_approvals():
     """
     Auto-reject approval requests older than APPROVAL_EXPIRY_DAYS.
-    Also prune resolved entries older than 30 days.
+    Also prune resolved entries older than RESOLVED_HISTORY_DAYS.
     Called on every queue read.
-    Returns the (possibly modified) queue.
+
+    Wrapper around wl_approval.expire_pending_approvals() that maintains
+    handler compatibility while delegating the expiration logic to the
+    module.
+
+    Returns:
+        The (possibly modified) queue with expired entries marked.
     """
     queue = _read_approval_queue()
-    now = time.time()
-    changed = False
-
-    for item in queue:
-        if item["status"] == "pending":
-            age_days = (now - item["timestamp"]) / 86400
-            if age_days > APPROVAL_EXPIRY_DAYS:
-                item["status"] = "expired"
-                item["resolved_by"] = "system"
-                item["resolved_at"] = int(now)
-                item["rejection_reason"] = (
-                    "Expired after {} days without action".format(APPROVAL_EXPIRY_DAYS)
-                )
-                changed = True
-
-    # Prune resolved entries older than 30 days
-    cutoff = now - (30 * 86400)
-    before_len = len(queue)
-    queue = [item for item in queue
-             if item["status"] == "pending"
-             or (item.get("resolved_at") or now) > cutoff]
-    if len(queue) != before_len:
-        changed = True
-
-    # Cap resolved history at MAX_RESOLVED_HISTORY (keep newest)
-    pending = [item for item in queue if item["status"] == "pending"]
-    resolved = [item for item in queue if item["status"] != "pending"]
-    if len(resolved) > MAX_RESOLVED_HISTORY:
-        resolved.sort(key=lambda x: x.get("resolved_at") or 0, reverse=True)
-        resolved = resolved[:MAX_RESOLVED_HISTORY]
-        queue = pending + resolved
-        changed = True
-
-    if changed:
-        _write_approval_queue(queue)
+    # Call wl_approval's expire_pending_approvals to mark expired entries
+    queue = expire_pending_approvals(queue)
+    # Write back if there were any changes
+    _write_approval_queue(queue)
     return queue
 
 
