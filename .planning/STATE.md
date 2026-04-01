@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-31T23:44:36.156Z"
+last_updated: "2026-04-01T01:10:21.869Z"
 progress:
   total_phases: 8
   completed_phases: 2
-  total_plans: 10
-  completed_plans: 10
+  total_plans: 13
+  completed_plans: 11
 ---
 
 # State: Whitelist Manager v3.0 Modular Rewrite
@@ -25,7 +25,7 @@ progress:
 SOC analysts can safely edit detection-rule whitelists with full audit trail — and the codebase itself is maintainable, testable, and ready for Splunkbase publication.
 
 **Current Focus:**
-Phase 02 — backend-core-domain
+Phase 03 — backend-orchestration
 
 **Key Constraints:**
 
@@ -38,8 +38,8 @@ Phase 02 — backend-core-domain
 
 ## Current Position
 
-Phase: 02 (backend-core-domain) — COMPLETE ✓
-Plan: 6 of 6 (All plans complete including gap closure ✓)
+Phase: 03 (backend-orchestration) — EXECUTING
+Plan: 1 of 2 (03-01 COMPLETE, executing 03-02)
 
 ## Roadmap Overview
 
@@ -236,6 +236,30 @@ Plan: 6 of 6 (All plans complete including gap closure ✓)
 - External API signature of restore_from_trash unchanged: fully backward-compatible
 - Phase 2 BMOD-13 requirement: 100% satisfied across all 5 core modules
 - Phase 02-backend-core-domain COMPLETE: 6 plans executed (5 core + 1 gap closure)
+
+**2026-04-01: Plan 03-01 Completion (File Locking & Daily Limits)**
+
+- Implemented wl_filelock.py (100 lines): Context manager for cross-process file locking
+  - RLock + fcntl.flock pattern (thread-safe + cross-process safe)
+  - Windows no-op fallback (fcntl unavailable on dev platform)
+  - Timeout/retry with 10-second default, 0.1-second intervals
+  - Exception-safe: finally block ensures cleanup even on errors
+- Implemented wl_limits.py (360+ lines): Daily usage tracking and limit enforcement
+  - 7 public functions: check_analyst_limit, check_admin_limit, get_limit_status, increment_daily_limit, set_limit_config, reset_daily_limits, get_limit_error_msg
+  - Zero semantics enforced consistently: 0=disabled, -1=unlimited, N>0=limit N
+  - Admin exemption: is_admin() predicate returns (True, 0, -1) to bypass all limits
+  - Atomic writes: temp file + lock + os.replace pattern (inherited from Phase 2)
+  - Fail-closed: Return empty dict/False on errors, never raise exceptions
+  - Period-bucketed counters: {period_key: {user: {action_type: count}}} (daily format: "YYYY-MM-DD")
+- Updated wl_constants.py: Added RESET_ALL_USERS = "__all__" sentinel to prevent typo bugs
+- Created 48 unit tests (17 filelock + 31 limits):
+  - All tests pass (100% pass rate, 0.78 second duration)
+  - Offline testing with @patch decorators for file I/O and time
+  - Coverage: lock acquisition/release, timeout handling, RLock semantics, Windows fallback, all limit-checking branches
+  - Edge cases: empty data, zero/unlimited semantics, missing users, admin exemption, concurrent locking
+- Wired imports into wl_handler.py (no functional changes, full integration deferred to Phase 4)
+- Requirements BMOD-11, BMOD-12, TEST-01 fulfilled
+- Phase 03-01 COMPLETE: 7 tasks executed, 48 tests passing
 
 ---
 
