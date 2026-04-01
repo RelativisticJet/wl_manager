@@ -146,6 +146,16 @@ from wl_versions import (
 from wl_audit import build_audit_event, post_audit_event
 
 # ---------------------------------------------------------------------------
+# Layer 3: Daily Limits & File Locking (imported from Phase 3 modules)
+# ---------------------------------------------------------------------------
+from wl_limits import (
+    check_analyst_limit, check_admin_limit, get_limit_status,
+    increment_daily_limit, set_limit_config, reset_daily_limits,
+    get_limit_error_msg
+)
+from wl_filelock import file_lock
+
+# ---------------------------------------------------------------------------
 # Rotating file logger — backup audit trail independent of Splunk indexing
 # ---------------------------------------------------------------------------
 _logger = get_audit_logger()
