@@ -834,10 +834,187 @@ def _count_nonempty_cells(rows, col_name):
 
 
 class WhitelistHandler(PersistentServerConnectionApplication):
-    """Splunk PersistentServerConnectionApplication handler."""
+    """Splunk PersistentServerConnectionApplication handler with dispatch-table routing."""
+
+    # ===================================================================
+    # Dispatch Tables (class-level constants)
+    # ===================================================================
+    # Maps action names to (required_roles, method_name) tuples.
+    # If required_roles is None, the action is public (no RBAC check).
+    # Otherwise, at least one role in the set must be present.
+
+    GET_ACTIONS = {
+        # CSV Operations (read-only)
+        "get_rules": (None, "_action_get_rules"),
+        "get_csvs": (None, "_action_get_csvs"),
+        "get_csv_content": (None, "_action_get_csv_content"),
+        "get_mapping": (None, "_action_get_mapping"),
+        "get_versions": (None, "_action_get_versions"),
+        "check_csv_status": (None, "_action_check_csv_status"),
+        "get_col_widths": (None, "_action_get_col_widths"),
+        "get_apps": (None, "_action_get_apps"),
+
+        # Presence & Activity (read-only)
+        "report_presence": (None, "_action_report_presence"),
+        "get_presence": (None, "_action_get_presence"),
+
+        # Approval & Queue (read-only)
+        "get_pending_approvals": (None, "_action_get_pending_approvals"),
+        "get_request_csv": (ADMIN_ROLES, "_action_get_request_csv"),
+        "get_approval_queue": (ADMIN_ROLES, "_action_get_approval_queue"),
+
+        # Limits & Usage (read-only)
+        "check_daily_limit_status": (None, "_action_check_daily_limit_status"),
+        "get_daily_limits": (ADMIN_ROLES, "_action_get_daily_limits"),
+        "get_analyst_usage": (ADMIN_ROLES, "_action_get_analyst_usage"),
+        "get_admin_limits": (ADMIN_ROLES, "_action_get_admin_limits"),
+
+        # Notifications & Config (read-only)
+        "get_notifications": (None, "_action_get_notifications"),
+        "get_trash_config": (ADMIN_ROLES, "_action_get_trash_config"),
+        "list_trash": (ADMIN_ROLES, "_action_list_trash"),
+    }
+
+    POST_ACTIONS = {
+        # CSV Modifications
+        "save_csv": (EDIT_ROLES, "_action_save_csv"),
+        "add_row": (EDIT_ROLES, "_action_add_row"),
+        "remove_rows": (EDIT_ROLES, "_action_remove_rows"),
+        "revert_csv": (EDIT_ROLES, "_action_revert_csv"),
+        "save_col_widths": (EDIT_ROLES, "_action_save_col_widths"),
+
+        # CSV/Rule Creation & Deletion
+        "create_csv": (EDIT_ROLES, "_action_create_csv"),
+        "create_rule": (EDIT_ROLES, "_action_create_rule"),
+        "remove_csv": (EDIT_ROLES, "_action_remove_csv"),
+        "remove_rule": (EDIT_ROLES, "_action_remove_rule"),
+
+        # Approval Workflow
+        "submit_approval": (EDIT_ROLES, "_action_submit_approval"),
+        "submit_dual_approval": (EDIT_ROLES, "_action_submit_dual_approval"),
+        "process_approval": (ADMIN_ROLES, "_action_process_approval"),
+        "process_dual_approval": (ADMIN_ROLES, "_action_process_dual_approval"),
+        "check_approval_gate": (EDIT_ROLES, "_action_check_approval_gate"),
+        "cancel_request": (None, "_action_cancel_request"),
+
+        # Admin Operations
+        "set_daily_limits": (SUPERADMIN_ROLES, "_action_set_daily_limits"),
+        "set_admin_limits": (SUPERADMIN_ROLES, "_action_set_admin_limits"),
+        "reset_daily_limits": (SUPERADMIN_ROLES, "_action_reset_daily_limits"),
+        "reset_daily_usage": (SUPERADMIN_ROLES, "_action_reset_daily_usage"),
+        "save_as_default": (SUPERADMIN_ROLES, "_action_save_as_default"),
+        "reset_factory_defaults": (SUPERADMIN_ROLES, "_action_reset_factory_defaults"),
+        "set_trash_retention": (ADMIN_ROLES, "_action_set_trash_retention"),
+        "purge_trash": (ADMIN_ROLES, "_action_purge_trash"),
+        "restore_from_trash": (ADMIN_ROLES, "_action_restore_from_trash"),
+
+        # Notifications & Logging
+        "mark_notifications_read": (None, "_action_mark_notifications_read"),
+        "log_event": (None, "_action_log_event"),
+    }
 
     def __init__(self, command_line, command_arg):
         super().__init__()
+
+    # ------------------------------------------------------------------
+    # Dispatch Infrastructure
+    # ------------------------------------------------------------------
+
+    def _dispatch(self, table, action, request, user, roles, query=None, payload=None):
+        """
+        Shared dispatcher for GET and POST actions.
+
+        Verifies:
+        1. User is known (not "unknown")
+        2. Action exists in dispatch table
+        3. User has required roles (if specified)
+        4. Calls handler method via getattr()
+
+        Args:
+            table: Dict dispatch table (GET_ACTIONS or POST_ACTIONS)
+            action: Action name (from query or payload)
+            request: Splunk request object
+            user: Username ("unknown" if unauthenticated)
+            roles: Set of user's roles
+            query: Dict of query params (for GET)
+            payload: Dict of request payload (for POST)
+
+        Returns:
+            Dict with {status, headers, payload} (from _resp())
+        """
+        import time
+        start_time = time.time()
+
+        # Check authentication
+        if user == "unknown":
+            self._log_access(action, user, 401, start_time, 0)
+            return self._resp(401, {"error": "Session expired or not authenticated"})
+
+        # Check action exists
+        if action not in table:
+            self._log_access(action, user, 400, start_time, 0)
+            valid_actions = sorted(table.keys())
+            return self._resp(400, {
+                "error": f"Unknown action: {action}",
+                "valid_actions": valid_actions
+            })
+
+        # Extract required roles and handler name
+        required_roles, handler_name = table[action]
+
+        # Check RBAC if required
+        if required_roles is not None and not roles.intersection(required_roles):
+            self._log_access(action, user, 403, start_time, 0)
+            return self._resp(403, {
+                "error": "Permission denied: insufficient role"
+            })
+
+        # Call handler
+        try:
+            handler = getattr(self, handler_name)
+            if table is self.GET_ACTIONS:
+                response = handler(request, query, user, roles)
+            else:
+                response = handler(request, payload, user, roles)
+
+            # Extract status from response
+            status = response.get("status", 200)
+            payload_size = len(response.get("payload", ""))
+            self._log_access(action, user, status, start_time, payload_size)
+            return response
+
+        except FileNotFoundError as e:
+            self._log_access(action, user, 404, start_time, 0)
+            return self._resp(404, {"error": str(e)})
+        except PermissionError as e:
+            self._log_access(action, user, 403, start_time, 0)
+            return self._resp(403, {"error": str(e)})
+        except ValueError as e:
+            self._log_access(action, user, 400, start_time, 0)
+            return self._resp(400, {"error": str(e)})
+        except IOError as e:
+            self._log_access(action, user, 500, start_time, 0)
+            _logger.error(f"IO error in handler {handler_name}: {e}", exc_info=True)
+            return self._resp(500, {"error": "Internal server error"})
+        except Exception as e:
+            self._log_access(action, user, 500, start_time, 0)
+            _logger.error(f"Exception in handler {handler_name}: {e}", exc_info=True)
+            return self._resp(500, {"error": "Internal server error"})
+
+    def _log_access(self, action, user, status, start_time, payload_bytes):
+        """Log access event for monitoring and audit."""
+        import time
+        duration_ms = int((time.time() - start_time) * 1000)
+        access_log = {
+            "type": "access",
+            "action": action,
+            "user": user,
+            "status": status,
+            "duration_ms": duration_ms,
+            "payload_bytes": payload_bytes,
+            "ts": time.time(),
+        }
+        _logger.info(json.dumps(access_log))
 
     # ------------------------------------------------------------------
     # Entry point — Splunk calls this for every request
@@ -875,132 +1052,18 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     # GET
     # ==================================================================
     def _handle_get(self, request):
+        user = get_user(request)
+        roles = get_roles(request)
         query = self._parse_query(request)
         action = query.get("action", "")
 
-        if action == "get_rules":
-            return self._get_rules()
-
-        if action == "get_csvs":
-            return self._get_csvs(query.get("rule", ""))
-
-        if action == "get_csv_content":
-            return self._get_csv_content(
-                request, query.get("csv_file", ""), query.get("app", ""),
-                query.get("tz_offset", "0"),
-            )
-
-        if action == "get_mapping":
-            return self._get_mapping(request)
-
-        if action == "get_versions":
-            return self._get_versions(query.get("csv_file", ""), query.get("app", ""))
-
-        if action == "check_csv_status":
-            return self._check_csv_status(query.get("csv_file", ""), query.get("app", ""))
-
-        if action == "report_presence":
-            csv_file = query.get("csv_file", "")
-            user = get_user(request)
-            last_activity_str = query.get("last_activity", "")
-
-            # Validate inputs
-            if not csv_file:
-                return self._resp(400, {"error": "csv_file required"})
-            if len(user) > 100:
-                return self._resp(400, {"error": "Invalid user"})
-
-            # Parse last_activity timestamp
-            try:
-                last_activity = float(last_activity_str) if last_activity_str else None
-            except (ValueError, TypeError):
-                last_activity = None
-
-            # Call module function and wrap response
-            data, error = report_presence(csv_file, user, last_activity)
-            if error:
-                return self._resp(400, {"error": error})
-            return self._resp(200, {"csv_file": csv_file, **data})
-
-        if action == "get_col_widths":
-            return self._get_col_widths(query.get("csv_file", ""), query.get("app", ""))
-
-        if action == "get_apps":
-            return self._get_apps()
-
-        if action == "check_daily_limit_status":
-            user = get_user(request)
-            return self._check_daily_limit_status(user)
-
-        if action == "get_pending_approvals":
-            csv_file = query.get("csv_file", "")
-            pending = _get_pending_for_csv(csv_file)
-            roles = get_roles(request)
-            has_edit = is_editor(roles)
-            pending_info = [{
-                "request_id": p["request_id"],
-                "action_type": p["action_type"],
-                "description": p["description"],
-                "analyst": p["analyst"],
-                "timestamp": p["timestamp"],
-                # Only expose row-level details to editors/admins
-                "pending_highlight": p.get("pending_highlight", {}) if has_edit else {},
-                "payload": p.get("payload", {}) if has_edit else {},
-            } for p in pending]
-            return self._resp(200, {"pending_approvals": pending_info})
-
-        if action == "get_request_csv":
-            # Allow admins to download CSV data from a pending/resolved request
-            roles = get_roles(request)
-            if not is_admin(roles):
-                return self._resp(403, {
-                    "error": "Requires admin role to access request CSV data"})
-            request_id = query.get("request_id", "")
-            if not request_id:
-                return self._resp(400, {"error": "request_id is required"})
-            queue = _read_approval_queue()
-            target = None
-            for item in queue:
-                if item.get("request_id") == request_id:
-                    target = item
-                    break
-            if not target:
-                return self._resp(404, {"error": "Request not found"})
-            stored = target.get("payload", {})
-            orig = stored.get("original_payload", stored)
-            headers = orig.get("headers", [])
-            rows = orig.get("initial_rows", orig.get("rows", []))
-            if not headers and not rows:
-                return self._resp(404, {
-                    "error": "No CSV data in this request"})
-            return self._resp(200, {
-                "headers": headers,
-                "rows": rows,
-                "csv_file": target.get("csv_file", ""),
-                "detection_rule": target.get("detection_rule", ""),
+        if not action:
+            return self._resp(400, {
+                "error": "Missing or unknown action",
+                "valid_actions": sorted(self.GET_ACTIONS.keys()),
             })
 
-        if action == "get_notifications":
-            user = get_user(request)
-            data = _read_notifications()
-            user_notifs = data.get(user, [])
-            unread_count = sum(
-                1 for n in user_notifs if not n.get("read", True))
-            return self._resp(200, {
-                "notifications": user_notifs,
-                "unread_count": unread_count,
-            })
-
-        return self._resp(400, {
-            "error": "Missing or unknown action",
-            "valid_actions": [
-                "get_rules", "get_csvs", "get_csv_content", "get_mapping",
-                "get_versions", "check_csv_status", "report_presence",
-                "get_col_widths", "check_daily_limit_status",
-                "get_pending_approvals", "get_apps",
-                "get_notifications", "get_request_csv"
-            ],
-        })
+        return self._dispatch(self.GET_ACTIONS, action, request, user, roles, query=query)
 
     def _get_apps(self):
         """List installed Splunk apps that have a lookups/ directory."""
@@ -1270,6 +1333,319 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         return self._resp(200, {"success": True})
 
     # ==================================================================
+    # GET Action Wrappers (Wave 1 — Dispatch Pattern)
+    # ==================================================================
+    # These wrapper methods implement the _action_* interface for GET handlers.
+    # They accept (self, request, query, user, roles) and delegate to existing
+    # handler methods (_get_rules, _get_csvs, etc.).
+
+    def _action_get_rules(self, request, query, user, roles):
+        """GET action wrapper for get_rules."""
+        return self._get_rules()
+
+    def _action_get_csvs(self, request, query, user, roles):
+        """GET action wrapper for get_csvs."""
+        rule = query.get("rule", "")
+        return self._get_csvs(rule)
+
+    def _action_get_csv_content(self, request, query, user, roles):
+        """GET action wrapper for get_csv_content."""
+        csv_file = query.get("csv_file", "")
+        app_context = query.get("app", "")
+        tz_offset = query.get("tz_offset", "0")
+        return self._get_csv_content(request, csv_file, app_context, tz_offset)
+
+    def _action_get_mapping(self, request, query, user, roles):
+        """GET action wrapper for get_mapping."""
+        return self._get_mapping(request)
+
+    def _action_get_versions(self, request, query, user, roles):
+        """GET action wrapper for get_versions."""
+        csv_file = query.get("csv_file", "")
+        app_context = query.get("app", "")
+        return self._get_versions(csv_file, app_context)
+
+    def _action_check_csv_status(self, request, query, user, roles):
+        """GET action wrapper for check_csv_status."""
+        csv_file = query.get("csv_file", "")
+        app_context = query.get("app", "")
+        return self._check_csv_status(csv_file, app_context)
+
+    def _action_get_col_widths(self, request, query, user, roles):
+        """GET action wrapper for get_col_widths."""
+        csv_file = query.get("csv_file", "")
+        app_context = query.get("app", "")
+        return self._get_col_widths(csv_file, app_context)
+
+    def _action_get_apps(self, request, query, user, roles):
+        """GET action wrapper for get_apps."""
+        return self._get_apps()
+
+    def _action_report_presence(self, request, query, user, roles):
+        """GET action wrapper for report_presence."""
+        csv_file = query.get("csv_file", "")
+        if not csv_file:
+            return self._resp(400, {"error": "csv_file required"})
+
+        last_activity_str = query.get("last_activity", "")
+        try:
+            last_activity = float(last_activity_str) if last_activity_str else None
+        except (ValueError, TypeError):
+            last_activity = None
+
+        data, error = report_presence(csv_file, user, last_activity)
+        if error:
+            return self._resp(400, {"error": error})
+        return self._resp(200, {"csv_file": csv_file, **data})
+
+    def _action_get_presence(self, request, query, user, roles):
+        """GET action wrapper for get_presence."""
+        csv_file = query.get("csv_file", "")
+        if not csv_file:
+            return self._resp(400, {"error": "csv_file required"})
+
+        data, error = get_presence(csv_file)
+        if error:
+            return self._resp(400, {"error": error})
+        return self._resp(200, {"csv_file": csv_file, **data})
+
+    def _action_get_pending_approvals(self, request, query, user, roles):
+        """GET action wrapper for get_pending_approvals."""
+        csv_file = query.get("csv_file", "")
+        pending = get_pending_for_csv(csv_file)
+        has_edit = is_editor(roles)
+        pending_info = [{
+            "request_id": p["request_id"],
+            "action_type": p["action_type"],
+            "description": p["description"],
+            "analyst": p["analyst"],
+            "timestamp": p["timestamp"],
+            "pending_highlight": p.get("pending_highlight", {}) if has_edit else {},
+            "payload": p.get("payload", {}) if has_edit else {},
+        } for p in pending]
+        return self._resp(200, {"pending_approvals": pending_info})
+
+    def _action_get_request_csv(self, request, query, user, roles):
+        """GET action wrapper for get_request_csv (admin-only)."""
+        request_id = query.get("request_id", "")
+        if not request_id:
+            return self._resp(400, {"error": "request_id is required"})
+        queue = _read_approval_queue()
+        target = None
+        for item in queue:
+            if item.get("request_id") == request_id:
+                target = item
+                break
+        if not target:
+            return self._resp(404, {"error": "Request not found"})
+        stored = target.get("payload", {})
+        orig = stored.get("original_payload", stored)
+        headers = orig.get("headers", [])
+        rows = orig.get("initial_rows", orig.get("rows", []))
+        if not headers and not rows:
+            return self._resp(404, {"error": "No CSV data in this request"})
+        return self._resp(200, {
+            "headers": headers,
+            "rows": rows,
+            "csv_file": target.get("csv_file", ""),
+            "detection_rule": target.get("detection_rule", ""),
+        })
+
+    def _action_get_approval_queue(self, request, query, user, roles):
+        """GET action wrapper for get_approval_queue (admin-only)."""
+        queue = _read_approval_queue()
+        return self._resp(200, {"approval_queue": queue})
+
+    def _action_check_daily_limit_status(self, request, query, user, roles):
+        """GET action wrapper for check_daily_limit_status."""
+        return self._check_daily_limit_status(user)
+
+    def _action_get_daily_limits(self, request, query, user, roles):
+        """GET action wrapper for get_daily_limits (admin-only)."""
+        return self._get_daily_limits_action()
+
+    def _action_get_analyst_usage(self, request, query, user, roles):
+        """GET action wrapper for get_analyst_usage (admin-only)."""
+        payload = {}  # Not used for GET, but kept for signature consistency
+        return self._get_analyst_usage_action(payload)
+
+    def _action_get_admin_limits(self, request, query, user, roles):
+        """GET action wrapper for get_admin_limits (admin-only)."""
+        admin_limits = _read_admin_limits()
+        return self._resp(200, {"admin_limits": admin_limits})
+
+    def _action_get_notifications(self, request, query, user, roles):
+        """GET action wrapper for get_notifications."""
+        data = _read_notifications()
+        user_notifs = data.get(user, [])
+        unread_count = sum(1 for n in user_notifs if not n.get("read", True))
+        return self._resp(200, {
+            "notifications": user_notifs,
+            "unread_count": unread_count,
+        })
+
+    def _action_get_trash_config(self, request, query, user, roles):
+        """GET action wrapper for get_trash_config (admin-only)."""
+        path = os.path.join(OWN_LOOKUPS, TRASH_CONFIG_FILE)
+        config = {}
+        if os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass
+        return self._resp(200, {"trash_config": config})
+
+    def _action_list_trash(self, request, query, user, roles):
+        """GET action wrapper for list_trash (admin-only)."""
+        items = list_trash()
+        return self._resp(200, {"trash_items": items})
+
+    # ==================================================================
+    # POST Action Wrappers (Stubs for Wave 2-3)
+    # ==================================================================
+    # These stubs will be implemented in subsequent waves.
+    # For now, they delegate to existing POST handler methods.
+
+    def _action_save_csv(self, request, payload, user, roles):
+        """POST action wrapper for save_csv."""
+        return self._save_csv(request, payload, user)
+
+    def _action_add_row(self, request, payload, user, roles):
+        """POST action wrapper for add_row (delegates to save_csv pipeline)."""
+        return self._save_csv(request, payload, user)
+
+    def _action_remove_rows(self, request, payload, user, roles):
+        """POST action wrapper for remove_rows (delegates to save_csv pipeline)."""
+        return self._save_csv(request, payload, user)
+
+    def _action_revert_csv(self, request, payload, user, roles):
+        """POST action wrapper for revert_csv."""
+        return self._revert_csv(request, payload, user)
+
+    def _action_save_col_widths(self, request, payload, user, roles):
+        """POST action wrapper for save_col_widths."""
+        return self._save_col_widths(payload)
+
+    def _action_create_csv(self, request, payload, user, roles):
+        """POST action wrapper for create_csv."""
+        return self._create_csv(request, payload, user)
+
+    def _action_create_rule(self, request, payload, user, roles):
+        """POST action wrapper for create_rule."""
+        return self._create_rule(request, payload, user)
+
+    def _action_remove_csv(self, request, payload, user, roles):
+        """POST action wrapper for remove_csv."""
+        return self._remove_csv(request, payload, user)
+
+    def _action_remove_rule(self, request, payload, user, roles):
+        """POST action wrapper for remove_rule."""
+        return self._remove_rule(request, payload, user)
+
+    def _action_submit_approval(self, request, payload, user, roles):
+        """POST action wrapper for submit_approval."""
+        return self._submit_approval(request, payload, user)
+
+    def _action_submit_dual_approval(self, request, payload, user, roles):
+        """POST action wrapper for submit_dual_approval."""
+        return self._submit_dual_approval(request, payload, user)
+
+    def _action_process_approval(self, request, payload, user, roles):
+        """POST action wrapper for process_approval."""
+        return self._process_approval(request, payload, user)
+
+    def _action_process_dual_approval(self, request, payload, user, roles):
+        """POST action wrapper for process_dual_approval."""
+        return self._process_dual_approval(request, payload, user)
+
+    def _action_check_approval_gate(self, request, payload, user, roles):
+        """POST action wrapper for check_approval_gate."""
+        return self._check_approval_gate(request, payload, user)
+
+    def _action_cancel_request(self, request, payload, user, roles):
+        """POST action wrapper for cancel_request."""
+        return self._cancel_request(request, payload, user)
+
+    def _action_set_daily_limits(self, request, payload, user, roles):
+        """POST action wrapper for set_daily_limits (superadmin-only)."""
+        return self._set_daily_limits_action(request, payload, user)
+
+    def _action_set_admin_limits(self, request, payload, user, roles):
+        """POST action wrapper for set_admin_limits (superadmin-only)."""
+        admin = payload.get("admin", "")
+        limits = payload.get("limits", {})
+        admin_limits = _read_admin_limits()
+        admin_limits[admin] = limits
+        _write_admin_limits(admin_limits)
+        return self._resp(200, {"success": True})
+
+    def _action_reset_daily_limits(self, request, payload, user, roles):
+        """POST action wrapper for reset_daily_limits (superadmin-only)."""
+        return self._reset_daily_limits_action(request, user)
+
+    def _action_reset_daily_usage(self, request, payload, user, roles):
+        """POST action wrapper for reset_daily_usage (superadmin-only)."""
+        return self._reset_daily_usage_action(payload, user)
+
+    def _action_save_as_default(self, request, payload, user, roles):
+        """POST action wrapper for save_as_default (superadmin-only)."""
+        return self._save_as_default_action(request, user)
+
+    def _action_reset_factory_defaults(self, request, payload, user, roles):
+        """POST action wrapper for reset_factory_defaults (superadmin-only)."""
+        return self._reset_factory_defaults_action(request, user)
+
+    def _action_set_trash_retention(self, request, payload, user, roles):
+        """POST action wrapper for set_trash_retention (admin-only)."""
+        path = os.path.join(OWN_LOOKUPS, TRASH_CONFIG_FILE)
+        config = {}
+        if os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        retention_days = payload.get("retention_days", DEFAULT_TRASH_RETENTION_DAYS)
+        if retention_days < MIN_TRASH_RETENTION_DAYS:
+            return self._resp(400, {
+                "error": f"Retention must be >= {MIN_TRASH_RETENTION_DAYS} days"
+            })
+
+        config["retention_days"] = retention_days
+        os.makedirs(OWN_LOOKUPS, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+
+        return self._resp(200, {"success": True})
+
+    def _action_purge_trash(self, request, payload, user, roles):
+        """POST action wrapper for purge_trash (admin-only)."""
+        purged = purge_trash_item(payload.get("item_id", ""))
+        return self._resp(200, {"success": purged})
+
+    def _action_restore_from_trash(self, request, payload, user, roles):
+        """POST action wrapper for restore_from_trash (admin-only)."""
+        item_id = payload.get("item_id", "")
+        success, error = restore_from_trash(item_id, payload.get("comment", ""))
+        if not success:
+            return self._resp(400, {"error": error})
+        return self._resp(200, {"success": True})
+
+    def _action_mark_notifications_read(self, request, payload, user, roles):
+        """POST action wrapper for mark_notifications_read."""
+        data = _read_notifications()
+        for notif in data.get(user, []):
+            notif["read"] = True
+        _write_notifications(data)
+        return self._resp(200, {"success": True})
+
+    def _action_log_event(self, request, payload, user, roles):
+        """POST action wrapper for log_event."""
+        return self._log_event(request, payload)
+
+    # ==================================================================
     # POST
     # ==================================================================
     def _handle_post(self, request):
@@ -1288,442 +1664,13 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         payload = json.loads(request.get("payload", "{}"))
         action = payload.get("action", "")
 
-        # Column widths — any authenticated user can save (display preference)
-        if action == "save_col_widths":
-            return self._save_col_widths(payload)
-
-        # Audit logging for frontend actions (export/import) — edit roles only
-        if action == "log_event":
-            if not roles.intersection(EDIT_ROLES | ADMIN_ROLES):
-                return self._resp(403, {"error": "Permission denied"})
-            return self._log_event(request, payload)
-
-        # Notification actions — any authenticated user
-        if action == "mark_notifications_read":
-            notif_ids = payload.get("notification_ids", [])
-            data = _read_notifications()
-            user_notifs = data.get(user, [])
-            for n in user_notifs:
-                if notif_ids == "all" or n["id"] in notif_ids:
-                    n["read"] = True
-            data[user] = user_notifs
-            _write_notifications(data)
-            return self._resp(200, {"success": True})
-
-        # ── Approval workflow actions ─────────────────────────────────
-        # submit_approval and check_approval_gate require EDIT_ROLES
-        if action == "submit_approval":
-            if not is_editor(roles):
-                return self._resp(403, {"error": "Permission denied"})
-            return self._submit_approval(request, payload, user)
-
-        if action == "check_approval_gate":
-            if not is_editor(roles):
-                return self._resp(403, {"error": "Permission denied"})
-            return self._check_approval_gate(request, payload, user)
-
-        # Cancel own request — any authenticated user who owns the request
-        if action == "cancel_request":
-            if not roles.intersection(EDIT_ROLES | ADMIN_ROLES):
-                return self._resp(403, {"error": "Permission denied"})
-            return self._cancel_request(request, payload, user)
-
-        # Admin-only approval management actions
-        if action == "process_approval":
-            if not is_admin(roles):
-                return self._resp(403, {
-                    "error": "Requires admin role to process approvals"
-                })
-            return self._process_approval(request, payload, user)
-
-        if action == "get_approval_queue":
-            if not is_admin(roles):
-                return self._resp(403, {
-                    "error": "Requires admin role to view the approval queue"
-                })
-            resp = self._get_approval_queue_action()
-            # Inject role tier info for frontend UI gating
-            body = json.loads(resp.get("payload", "{}"))
-            body["is_superadmin"] = bool(
-                is_superadmin(roles))
-            resp["payload"] = json.dumps(body, default=str)
-            return resp
-
-        if action == "get_daily_limits":
-            if not is_admin(roles):
-                return self._resp(403, {
-                    "error": "Requires admin role to view daily limits"
-                })
-            return self._get_daily_limits_action()
-
-        if action == "set_daily_limits":
-            if not is_admin(roles):
-                return self._resp(403, {
-                    "error": "Requires admin role to set daily limits"
-                })
-            return self._set_daily_limits_action(request, payload, user)
-
-        if action == "get_analyst_usage":
-            if not is_admin(roles):
-                return self._resp(403, {
-                    "error": "Requires admin role to view analyst usage"
-                })
-            return self._get_analyst_usage_action(payload)
-
-        if action == "reset_daily_usage":
-            if not is_admin(roles):
-                return self._resp(403, {
-                    "error": "Requires admin role to reset daily usage"
-                })
-            return self._reset_daily_usage_action(payload, user)
-
-        if action == "reset_daily_limits":
-            if not is_admin(roles):
-                return self._resp(403, {
-                    "error": "Requires admin role to reset limits"
-                })
-            return self._reset_daily_limits_action(request, user)
-
-        if action == "save_as_default":
-            if not is_admin(roles):
-                return self._resp(403, {
-                    "error": "Requires admin role to save custom defaults"
-                })
-            return self._save_as_default_action(request, user)
-
-        if action == "reset_factory_defaults":
-            if not is_admin(roles):
-                return self._resp(403, {
-                    "error": "Requires admin role to reset to factory defaults"
-                })
-            return self._reset_factory_defaults_action(request, user)
-
-        # ── Trash management endpoints ─────────────────────────────────
-        if action == "list_trash":
-            if not is_admin(roles):
-                return self._resp(403, {
-                    "error": "Requires admin role to view trash"})
-            # Lazy auto-cleanup on access (EC6)
-            purged = auto_cleanup_trash()
-            items = list_trash()
-            return self._resp(200, {
-                "trash": items,
-                "auto_purged": purged,
+        if not action:
+            return self._resp(400, {
+                "error": "Missing or unknown action",
+                "valid_actions": sorted(self.POST_ACTIONS.keys()),
             })
 
-        if action == "restore_from_trash":
-            if not is_admin(roles):
-                return self._resp(403, {
-                    "error": "Requires admin role to restore from trash"})
-            trash_id = payload.get("trash_id", "")
-            if not trash_id:
-                return self._resp(400, {
-                    "error": "trash_id is required"})
-            # Sanitize: trash_id should only contain safe chars
-            if not all(c.isalnum() or c in "_-." for c in trash_id):
-                return self._resp(400, {
-                    "error": "Invalid trash_id"})
-            restore_comment = sanitize_text(
-                payload.get("comment", ""))[:500]
-            success, msg, meta = restore_from_trash(trash_id)
-            if success:
-                self._index_audit(request, {
-                    "action": "trash_restored",
-                    "timestamp": int(time.time()),
-                    "analyst": user,
-                    "item_type": meta.get("item_type", ""),
-                    "name": meta.get("name", ""),
-                    "detection_rule": meta.get("rule_name", ""),
-                    "original_deleted_by": meta.get("deleted_by", ""),
-                    "original_deleted_at": meta.get(
-                        "deleted_at_human", ""),
-                    "comment": restore_comment or "Restored from trash",
-                })
-                return self._resp(200, {
-                    "success": True, "message": msg})
-            return self._resp(409, {"error": msg})
-
-        if action == "purge_trash":
-            # Permanent purge — requires dual-admin approval.
-            # Direct purge only allowed from dual-approval replay.
-            if not is_superadmin(roles):
-                return self._resp(403, {
-                    "error": "Requires super-admin role to permanently "
-                             "purge trash items"})
-            trash_id = payload.get("trash_id", "")
-            if not trash_id:
-                return self._resp(400, {
-                    "error": "trash_id is required"})
-            if not all(c.isalnum() or c in "_-." for c in trash_id):
-                return self._resp(400, {
-                    "error": "Invalid trash_id"})
-            purge_comment = sanitize_text(
-                payload.get("comment", ""))[:500]
-            if not purge_comment:
-                return self._resp(400, {
-                    "error": "A reason is required for permanent purge"})
-            # Require dual-approval unless replayed from approved request
-            if not payload.get("_from_dual_approval"):
-                return self._resp(403, {
-                    "error": "Permanent purge requires dual-admin approval. "
-                             "Submit via the dual-approval workflow.",
-                    "requires_dual_approval": True,
-                })
-            # Read metadata before purging for audit
-            trash_dir = _get_trash_dir()
-            meta_path = os.path.join(
-                trash_dir, trash_id, "metadata.json")
-            meta = {}
-            if os.path.isfile(meta_path):
-                try:
-                    with open(meta_path, "r",
-                              encoding="utf-8") as fh:
-                        meta = json.load(fh)
-                except (json.JSONDecodeError, OSError):
-                    pass
-            success, msg = purge_trash_item(trash_id)
-            if success:
-                self._index_audit(request, {
-                    "action": "trash_purged",
-                    "timestamp": int(time.time()),
-                    "analyst": user,
-                    "item_type": meta.get("item_type", ""),
-                    "name": meta.get("name", ""),
-                    "detection_rule": meta.get("rule_name", ""),
-                    "original_deleted_by": meta.get("deleted_by", ""),
-                    "comment": purge_comment,
-                    "dual_approved": True,
-                })
-                return self._resp(200, {
-                    "success": True, "message": msg})
-            return self._resp(404, {"error": msg})
-
-        if action == "set_trash_retention":
-            if not is_superadmin(roles):
-                return self._resp(403, {
-                    "error": "Requires super-admin role to set trash "
-                             "retention period"})
-            days = payload.get("retention_days")
-            try:
-                days = int(days)
-            except (ValueError, TypeError):
-                return self._resp(400, {
-                    "error": "retention_days must be an integer"})
-            if days < 7 or days > 365:
-                return self._resp(400, {
-                    "error": "retention_days must be between 7 and 365. "
-                             "Minimum 7 days ensures recovery window."})
-            config = _read_trash_config()
-            old_days = config.get("retention_days",
-                                  DEFAULT_TRASH_RETENTION_DAYS)
-            config["retention_days"] = days
-            _write_trash_config(config)
-            self._index_audit(request, {
-                "action": "trash_retention_changed",
-                "timestamp": int(time.time()),
-                "analyst": user,
-                "old_retention_days": old_days,
-                "new_retention_days": days,
-                "comment": sanitize_text(
-                    payload.get("comment", ""))[:500],
-            })
-            return self._resp(200, {
-                "success": True,
-                "message": "Trash retention set to {} days".format(days),
-            })
-
-        if action == "get_trash_config":
-            if not is_admin(roles):
-                return self._resp(403, {
-                    "error": "Requires admin role to view trash config"})
-            config = _read_trash_config()
-            return self._resp(200, {"config": config})
-
-        # ── Admin limits (superadmin-only) ─────────────────────────────
-        if action == "get_admin_limits":
-            if not is_admin(roles):
-                return self._resp(403, {
-                    "error": "Requires admin role to view admin limits"})
-            admin_lim = _read_admin_limits()
-            return self._resp(200, {
-                "admin_limits": admin_lim,
-                "defaults": dict(DEFAULT_ADMIN_LIMITS),
-            })
-
-        if action == "set_admin_limits":
-            if not is_superadmin(roles):
-                return self._resp(403, {
-                    "error": "Requires super-admin role to set admin "
-                             "daily limits"})
-            new_limits = payload.get("limits", {})
-            if not isinstance(new_limits, dict):
-                return self._resp(400, {
-                    "error": "limits must be a dict"})
-            comment = sanitize_text(
-                payload.get("comment", ""))[:500]
-            admin_cfg = _read_admin_limits()
-            old_values = {}
-            for key in DEFAULT_ADMIN_LIMITS:
-                if key in new_limits:
-                    try:
-                        val = int(new_limits[key])
-                    except (ValueError, TypeError):
-                        return self._resp(400, {
-                            "error": "{} must be an integer".format(key)})
-                    if val < 0 or val > 100:
-                        return self._resp(400, {
-                            "error": "{} must be 0-100".format(key)})
-                    old_values[key] = admin_cfg.get(key,
-                        DEFAULT_ADMIN_LIMITS.get(key, 0))
-                    admin_cfg[key] = val
-            _write_admin_limits(admin_cfg)
-            self._index_audit(request, {
-                "action": "admin_limits_changed",
-                "timestamp": int(time.time()),
-                "analyst": user,
-                "old_values": json.dumps(old_values),
-                "new_values": json.dumps(
-                    {k: admin_cfg[k] for k in old_values}),
-                "comment": comment,
-            })
-            return self._resp(200, {
-                "success": True,
-                "message": "Admin limits updated",
-                "admin_limits": admin_cfg,
-            })
-
-        # ── Dual-admin approval for destructive admin actions ──────────
-        if action == "submit_dual_approval":
-            if not is_admin(roles):
-                return self._resp(403, {
-                    "error": "Requires admin role to submit dual-approval"
-                             " requests"})
-            return self._submit_dual_approval(request, payload, user)
-
-        if action == "process_dual_approval":
-            if not is_admin(roles):
-                return self._resp(403, {
-                    "error": "Requires admin role to process dual-approval"
-                             " requests"})
-            return self._process_dual_approval(request, payload, user)
-
-        if action == "create_rule":
-            is_admin = is_admin(roles)
-            if not is_admin:
-                cfg = _read_limit_config()
-                if not cfg.get("allow_analyst_create_rules", False):
-                    return self._resp(403, {
-                        "error": "Creating new detection rules is currently "
-                                 "restricted to admins. An administrator has "
-                                 "disabled this permission for analysts."
-                    })
-                if not is_editor(roles):
-                    return self._resp(403, {
-                        "error": "Permission denied. Your account requires "
-                                 "one of these roles: "
-                                 + ", ".join(sorted(EDIT_ROLES))
-                    })
-                if cfg.get("require_reason_rule_creation", False):
-                    return self._submit_create_delete_approval(
-                        request, payload, user, "create_rule",
-                        "Create detection rule '{}'".format(
-                            payload.get("detection_rule", "")))
-            return self._create_rule(request, payload, user)
-
-        if action == "create_csv":
-            is_admin = is_admin(roles)
-            if not is_admin:
-                cfg = _read_limit_config()
-                if not cfg.get("allow_analyst_create_csv", False):
-                    return self._resp(403, {
-                        "error": "Creating new CSV files is currently "
-                                 "restricted to admins. An administrator has "
-                                 "disabled this permission for analysts."
-                    })
-                if not is_editor(roles):
-                    return self._resp(403, {
-                        "error": "Permission denied. Your account requires "
-                                 "one of these roles: "
-                                 + ", ".join(sorted(EDIT_ROLES))
-                    })
-                if cfg.get("require_reason_csv_creation", False):
-                    return self._submit_create_delete_approval(
-                        request, payload, user, "create_csv",
-                        "Create CSV '{}' for rule '{}'".format(
-                            payload.get("csv_file", ""),
-                            payload.get("detection_rule", "")))
-            return self._create_csv(request, payload, user)
-
-        if action == "remove_rule":
-            is_admin = is_admin(roles)
-            if not is_admin:
-                cfg = _read_limit_config()
-                if not cfg.get("allow_analyst_delete_rules", False):
-                    return self._resp(403, {
-                        "error": "Removing detection rules is currently "
-                                 "restricted to admins. An administrator has "
-                                 "disabled this permission for analysts."
-                    })
-                if not is_editor(roles):
-                    return self._resp(403, {
-                        "error": "Permission denied. Your account requires "
-                                 "one of these roles: "
-                                 + ", ".join(sorted(EDIT_ROLES))
-                    })
-                if cfg.get("require_reason_rule_deletion", False):
-                    return self._submit_create_delete_approval(
-                        request, payload, user, "remove_rule",
-                        "Remove detection rule '{}'".format(
-                            payload.get("rule_name", "")))
-            return self._remove_rule(request, payload, user)
-
-        if action == "remove_csv":
-            is_admin = is_admin(roles)
-            if not is_admin:
-                cfg = _read_limit_config()
-                if not cfg.get("allow_analyst_delete_csv", False):
-                    return self._resp(403, {
-                        "error": "Removing CSV files is currently "
-                                 "restricted to admins. An administrator has "
-                                 "disabled this permission for analysts."
-                    })
-                if not is_editor(roles):
-                    return self._resp(403, {
-                        "error": "Permission denied. Your account requires "
-                                 "one of these roles: "
-                                 + ", ".join(sorted(EDIT_ROLES))
-                    })
-                if cfg.get("require_reason_csv_deletion", False):
-                    return self._submit_create_delete_approval(
-                        request, payload, user, "remove_csv",
-                        "Remove CSV '{}' from rule '{}'".format(
-                            payload.get("csv_file", ""),
-                            payload.get("rule_name", "")))
-            return self._remove_csv(request, payload, user)
-
-        # ── RBAC check for data-modifying actions ─────────────────────
-        if not is_editor(roles):
-            return self._resp(403, {
-                "error": (
-                    "Permission denied. "
-                    "Your account requires one of these roles: "
-                    + ", ".join(sorted(EDIT_ROLES))
-                )
-            })
-
-        if action == "save_csv":
-            return self._save_csv(request, payload, user)
-
-        if action == "revert_csv":
-            return self._revert_csv(request, payload, user)
-
-        return self._resp(400, {
-            "error": "Unknown POST action. Valid: save_csv, revert_csv, "
-                     "create_csv, remove_rule, remove_csv, save_col_widths, "
-                     "submit_approval, check_approval_gate, process_approval, "
-                     "get_approval_queue, get_daily_limits, set_daily_limits, "
-                     "get_analyst_usage, reset_daily_usage"
-        })
+        return self._dispatch(self.POST_ACTIONS, action, request, user, roles, payload=payload)
 
     # ==================================================================
     # Create Detection Rule
