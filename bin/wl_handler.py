@@ -2580,6 +2580,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         column_renames, explicit_row_add_reason, user, request,
         payload=None, _from_approval=False,
     ):
+        """Save CSV after approval gates and limit checks."""
         # ── Optimistic locking — reject if file changed since load ───
         if expected_mtime is not None:
             try:
@@ -2627,7 +2628,6 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     new_headers = list(old_headers)
                     actual_idx = new_headers.index(col)
                     new_headers.pop(actual_idx)
-                    # Rebuild visible index mapping to find insert point
                     vis = [h for h in new_headers if not h.startswith("_")]
                     target_col = None
                     if 1 <= to <= len(vis):
@@ -2671,9 +2671,6 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 })
 
         # ── Determine which limit actions apply to this save ──────────
-        # Server-side: determine "bulk edit" from actual diff, not client flag.
-        # An edit is "bulk" if 2+ rows were edited in one save (regardless of
-        # what the client claims via _bulk_edit_count).
         actual_edited = diff.get("edited_count", 0)
         is_bulk_edit = actual_edited >= 2
         limit_actions = []
@@ -2714,7 +2711,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # ── Determine if user is admin (for gate + limit exemptions) ──
         user_roles = get_roles(request) if request else set()
-        is_admin_user = bool(user_is_admin(roles))
+        is_admin_user = bool(is_admin(user_roles))
 
         # ── Daily limit enforcement (block only direct analyst actions,
         #    not admin-approved replays or admin direct actions) ────────
@@ -2734,10 +2731,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     })
 
         # ── Server-side approval gate enforcement ─────────────────────
-        # Prevent direct API callers from bypassing the approval workflow.
-        # Admins are exempt — they ARE the approvers.
         if not _from_approval and not is_admin_user:
-            # Bulk row removal gate
             actual_removed = diff.get("removed_count", 0)
             if actual_removed >= _get_threshold("bulk_row_removal_threshold"):
                 return self._resp(403, {
@@ -2745,14 +2739,12 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                              "Use the approval workflow.".format(actual_removed),
                     "requires_approval": True,
                 })
-            # Bulk row edit gate (server-computed, not client flag)
             if is_bulk_edit and actual_edited >= _get_threshold("bulk_row_edit_threshold"):
                 return self._resp(403, {
                     "error": "Bulk editing {} rows requires admin approval. "
                              "Use the approval workflow.".format(actual_edited),
                     "requires_approval": True,
                 })
-            # Bulk row addition gate
             actual_added = diff.get("added_count", 0)
             if actual_added >= _get_threshold("bulk_row_addition_threshold"):
                 return self._resp(403, {
@@ -2760,11 +2752,6 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                              "Use the approval workflow.".format(actual_added),
                     "requires_approval": True,
                 })
-            # NOTE: Single-row inline edits (edited_count < 2) are NOT
-            # subject to an approval gate.  They are governed by the
-            # "row_edit" daily limit enforced above.  Only edits
-            # touching 2+ rows trigger the bulk_row_edit approval gate.
-            # Column removal gate (non-empty cells)
             for cr in column_removal_reasons:
                 col = cr.get("column", "")
                 nonempty = _count_nonempty_cells(old_rows, col)
@@ -2777,273 +2764,36 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                         "requires_approval": True,
                     })
 
-        # ── Stamp row-level history on newly added rows ──────────────
-        ts_now = str(int(datetime.now(timezone.utc).timestamp()))
-
-        # Use object identity (id) to stamp only truly new rows, not
-        # pre-existing rows that happen to have the same visible content.
-        added_ids = {id(entry) for entry in diff["added"]}
-
-        for row in new_rows:
-            if id(row) in added_ids:
-                row["_added_by"] = user
-                row["_added_at"] = ts_now
-
-        # Ensure metadata columns are in the header list for CSV write
-        write_headers = list(new_headers)
-        for meta in ("_added_by", "_added_at"):
-            if meta not in write_headers:
-                write_headers.append(meta)
-
-        # ── Write AFTER state ─────────────────────────────────────────
-        write_csv(path, write_headers, new_rows)
-
-        # ── Snapshot version ─────────────────────────────────────────
-        try:
-            _, _ = snapshot_version(path, user, action_label="save")
-        except OSError as exc:
-            _logger.warning("Failed to snapshot version for %s: %s", csv_file, exc)
-
-        # ── Build a removal-reason lookup for quick matching ─────────
-        # Strip _ metadata columns so keys match between the frontend's
-        # row snapshot and the diff's removed entries (read from disk).
-        def _visible_key(row):
-            cleaned = {k: v for k, v in row.items() if not k.startswith("_")}
-            return json.dumps(cleaned, sort_keys=True, default=str)
-
-        reason_map = {}
-        for rr in removal_reasons:
-            rr_row = rr.get("row", {})
-            reason_map[_visible_key(rr_row)] = rr.get("reason", "")
-
-        # ── Common audit fields ──────────────────────────────────────
-        ts = int(datetime.now(timezone.utc).timestamp())
+        # ── Call save_csv_pipeline for execution ──────────────────────
         has_comment_col = "Comment" in new_headers
+        session_key = request.get("session_key", "") if request else ""
 
-        # If per-row Comment column exists, the summary comment should
-        # say so (the per-action events carry each row's own comment).
-        summary_comment = analyst_comment
-        if has_comment_col and (not analyst_comment or analyst_comment == "__per_row__"):
-            summary_comment = "See per-row comments"
+        pipeline_result = save_csv_pipeline(
+            csv_path=path,
+            new_headers=new_headers,
+            new_rows=new_rows,
+            comment=analyst_comment,
+            analyst=user,
+            session_key=session_key,
+            removal_reasons=removal_reasons,
+            bulk_removal=bulk_removal,
+            column_removal_reasons=column_removal_reasons,
+            row_reorder=row_reorder,
+            column_reorder=column_reorder,
+            column_renames=column_renames,
+            explicit_row_add_reason=explicit_row_add_reason,
+            has_comment_col=has_comment_col,
+            csv_file=csv_file,
+            app_context=app_context,
+            detection_rule=detection_rule,
+        )
 
-        common = {
-            "timestamp": ts,
-            "analyst": user,
-            "detection_rule": detection_rule,
-            "csv_file": csv_file,
-            "app_context": app_context,
-            "comment": summary_comment,
-        }
-        # When executed via approval, include the request_id in every audit event.
-        # Only trust _approval_request_id when _from_approval is True to
-        # prevent non-approval saves from injecting fake request IDs.
-        if _from_approval:
-            approval_request_id = payload.get("_approval_request_id", "")
-            if approval_request_id:
-                common["request_id"] = approval_request_id
-
-        # ── Helper: strip internal _ columns from a row ────────────────
-        def _clean_entry(row):
-            return {k: v for k, v in row.items() if not k.startswith("_")}
-
-        # ── Helper: build numbered fields + "value" summary string ────
-        # Returns (numbered_dict, value_string) where:
-        #   numbered_dict = {"user_row_3": "jsmith", "src_ip_row_3": "10.0.0.1"}
-        #   value_list    = ["user_row_3: jsmith", "src_ip_row_3: 10.0.0.1", ...]
-        def _build_row_fields(entries, row_num_map):
-            lines = []
-            for entry in entries:
-                row_num = row_num_map.get(id(entry), 0)
-                cleaned = _clean_entry(entry)
-                for col_name, col_val in sorted(cleaned.items()):
-                    field_name = "{}_row_{}".format(col_name, row_num)
-                    lines.append("{}: {}".format(field_name, col_val))
-            return lines
-
-        # ── Map added rows to row numbers in the NEW csv ─────────────
-        # Row number = position in new_rows (1-based)
-        # diff["added"] entries are the same Python objects as in new_rows
-        # (from the list comprehension in _compute_diff), so we can match
-        # by identity (id()) — no key-based scanning needed.
-        new_row_id_to_pos = {id(row): i + 1 for i, row in enumerate(new_rows)}
-        added_row_map = {}
-        for entry in diff["added"]:
-            pos = new_row_id_to_pos.get(id(entry))
-            if pos is not None:
-                added_row_map[id(entry)] = pos
-
-        # ── "added" audit event (single event for all added rows) ────
-        if diff["added_count"] > 0:
-            added_values = _build_row_fields(
-                diff["added"], added_row_map
-            )
-            evt = dict(common, **{
-                "action": "row_added",
-                "added_row_count": diff["added_count"],
-                "value": added_values,
-                "row_add_reason": explicit_row_add_reason or summary_comment,
-                "added_by": user,
-                "added_at": ts,
+        if not pipeline_result.get("success"):
+            return self._resp(500, {
+                "error": pipeline_result.get("error", "Pipeline execution failed"),
             })
-            self._index_audit(request, evt)
-
-        # ── Removal audit events ─────────────────────────────────────
-        # Map removed rows to their 1-based position in old_rows.
-        # diff["removed"] entries are the same Python objects as in old_rows,
-        # so we match by identity (id()) for correct duplicate handling.
-        old_row_id_to_pos = {id(row): i + 1 for i, row in enumerate(old_rows)}
-        def _removed_row_map(removed_entries):
-            rmap = {}
-            for entry in removed_entries:
-                pos = old_row_id_to_pos.get(id(entry))
-                if pos is not None:
-                    rmap[id(entry)] = pos
-            return rmap
-
-        if bulk_removal and diff["removed_count"] > 0:
-            # Bulk removal via "Remove Selected" button
-            bulk_reason = bulk_removal[0].get("reason", "") if bulk_removal else ""
-
-            removed_values = _build_row_fields(
-                diff["removed"], _removed_row_map(diff["removed"])
-            )
-            evt = dict(common, **{
-                "action": "row_removed_multiple" if diff["removed_count"] > 1 else "row_removed",
-                "removed_row_count": diff["removed_count"],
-                "value": removed_values,
-                "row_remove_reason": bulk_reason,
-                "removed_by": user,
-                "removed_at": ts,
-            })
-            self._index_audit(request, evt)
-        elif diff["removed_count"] > 0:
-            # Single row removal via "Remove" button
-            single_reason = ""
-            for rr in removal_reasons:
-                single_reason = rr.get("reason", "")
-
-            removed_values = _build_row_fields(
-                diff["removed"], _removed_row_map(diff["removed"])
-            )
-            evt = dict(common, **{
-                "action": "row_removed",
-                "removed_row_count": diff["removed_count"],
-                "value": removed_values,
-                "row_remove_reason": single_reason,
-                "removed_by": user,
-                "removed_at": ts,
-            })
-            self._index_audit(request, evt)
-
-        # ── "edited" audit event (cell-level changes) ────────────
-        if diff["edited_count"] > 0:
-            edit_value_lines = []
-            edit_details = {}
-            for edit_entry in diff["edited"]:
-                rn = edit_entry["row_num"]
-                for change in edit_entry["changed_fields"]:
-                    field = change["field"]
-                    before_key = "{}_row_{}_before".format(field, rn)
-                    after_key = "{}_row_{}_after".format(field, rn)
-                    edit_details[before_key] = change["before"]
-                    edit_details[after_key] = change["after"]
-                    edit_value_lines.append("{}: {}".format(before_key, change["before"]))
-                    edit_value_lines.append("{}: {}".format(after_key, change["after"]))
-
-            # When edits accompany a removal, use a distinct comment
-            edit_comment = summary_comment
-            if (bulk_removal or removal_reasons) and diff["removed_count"] > 0:
-                edit_comment = "Edited alongside removal"
-
-            evt = dict(common, **{
-                "action": "row_edited",
-                "edited_row_count": diff["edited_count"],
-                "value": edit_value_lines,
-                "row_edit_reason": edit_comment,
-                "edited_by": user,
-                "edited_at": ts,
-            })
-            self._index_audit(request, evt)
-
-        # ── Column change audit events ─────────────────────────────
-        if diff.get("removed_columns"):
-            col_reason = ""
-            for cr in column_removal_reasons:
-                if cr.get("column") in diff["removed_columns"]:
-                    col_reason = cr.get("reason", "")
-                    break
-
-            value_lines = []
-            for col in diff["removed_columns"]:
-                for i, row in enumerate(old_rows):
-                    cell = row.get(col, "")
-                    if cell:
-                        value_lines.append("{}_row_{}: {}".format(col, i + 1, cell))
-
-            evt = dict(common, **{
-                "action": "column_removed",
-                "column_count": len(diff["removed_columns"]),
-                "columns": diff["removed_columns"],
-                "value": value_lines,
-                "column_remove_reason": col_reason,
-                "changed_by": user,
-                "changed_at": ts,
-            })
-            self._index_audit(request, evt)
-
-        if diff.get("added_columns"):
-            evt = dict(common, **{
-                "action": "column_added",
-                "column_count": len(diff["added_columns"]),
-                "columns": diff["added_columns"],
-                "value": ["column: " + c for c in diff["added_columns"]],
-                "changed_by": user,
-                "changed_at": ts,
-            })
-            self._index_audit(request, evt)
-
-        # ── Column rename audit events ───────────────────────────
-        if column_renames:
-            for cr in column_renames:
-                evt = dict(common, **{
-                    "action": "column_renamed",
-                    "column_renamed_before": cr["old_name"],
-                    "column_renamed_after": cr["new_name"],
-                    "column_count": 1,
-                    "value": [cr["old_name"] + " -> " + cr["new_name"]],
-                    "changed_by": user,
-                    "changed_at": ts,
-                })
-                self._index_audit(request, evt)
-
-        # ── Row reorder audit event ────────────────────────────────
-        if row_reorder and isinstance(row_reorder, dict):
-            evt = dict(common, **{
-                "action": "row_reordered",
-                "row_number_before": row_reorder.get("from_position"),
-                "row_number_after": row_reorder.get("to_position"),
-                "reordered_by": user,
-                "reordered_at": ts,
-            })
-            self._index_audit(request, evt)
-
-        # ── Column reorder audit event ─────────────────────────────
-        if column_reorder and isinstance(column_reorder, dict):
-            evt = dict(common, **{
-                "action": "column_reordered",
-                "column_name": column_reorder.get("column"),
-                "column_number_before": column_reorder.get("from_position"),
-                "column_number_after": column_reorder.get("to_position"),
-                "reordered_by": user,
-                "reordered_at": ts,
-            })
-            self._index_audit(request, evt)
 
         # ── Increment daily limit counters (by actual change count) ───
-        # Always increment for usage tracking visibility, even for
-        # approval replays.  The limit CHECK is already skipped for
-        # replays and admins (line ~3846), but usage must be recorded
-        # so Analyst Usage dashboard reflects all activity accurately.
         for limit_action in limit_actions:
             if limit_action == "bulk_row_removal":
                 actual_count = diff.get("removed_count", 1)
@@ -3071,9 +2821,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "file_mtime": int(os.path.getmtime(path)),
         })
 
-    # ------------------------------------------------------------------
-    # Revert CSV to a previous version
-    # ------------------------------------------------------------------
+
     def _revert_csv(self, request, payload, user, _from_approval=False):
         """Revert a CSV file to a previous version snapshot."""
         csv_file = payload.get("csv_file", "")
