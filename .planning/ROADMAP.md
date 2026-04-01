@@ -12,8 +12,8 @@
 ## Phases
 
 - [x] **Phase 1: Backend Foundation** - Extract dependency-free backend modules (constants, validation, RBAC, presence)
-- [ ] **Phase 2: Backend Core Domain** - Extract data persistence layer (CSV, versions, audit, rules, trash) + gap closure
-- [ ] **Phase 3: Backend Orchestration** - Extract orchestration modules (file locking, approval queue, daily limits, notifications)
+- [x] **Phase 2: Backend Core Domain** - Extract data persistence layer (CSV, versions, audit, rules, trash) + gap closure
+- [x] **Phase 3: Backend Orchestration** - Extract orchestration modules (file locking, approval queue, daily limits, notifications)
 - [ ] **Phase 4: Backend Integration** - Refactor wl_handler.py as thin REST router
 - [ ] **Phase 5: Frontend Architecture** - Extract frontend modules and implement state manager
 - [ ] **Phase 6: Admin Panel** - Modularize control_panel.js and associated feature modules
@@ -151,10 +151,10 @@
   - Files: bin/wl_filelock.py, bin/wl_limits.py, bin/wl_constants.py (RESET_ALL_USERS), tests/unit/test_filelock.py, tests/unit/test_limits.py, bin/wl_handler.py
   - Tasks: 7/7 completed (create wl_filelock context manager with fcntl/RLock, add RESET_ALL_USERS constant, create wl_limits with 7 functions, 17 filelock tests, 31 limits tests, wire handler imports, run full test suite: 48/48 passing)
 
-- [ ] **03-02-PLAN.md** — Extract wl_approval.py, wl_notify.py, and concurrency tests (Layer 4, Wave 2) — PLANNED
+- [x] **03-02-PLAN.md** — Extract wl_approval.py, wl_notify.py, and concurrency tests (Layer 4, Wave 2) — COMPLETED
   - Requirements: BMOD-12, BMOD-13, BMOD-14, BMOD-15, TEST-01, TEST-04
   - Files: bin/wl_approval.py, bin/wl_notify.py, tests/unit/test_approval.py, tests/unit/test_notify.py, tests/integration/test_approval_chain.py, tests/integration/test_concurrency.py, bin/wl_handler.py
-  - Tasks: 8 (create wl_approval with queue CRUD/conflict resolution/submission, create wl_notify with admin/analyst notifications, 50+ approval tests, 15+ notify tests, 5+ integration approval-chain tests, 5+ concurrency tests with 5+ threads, wire handler, verify phase completion)
+  - Tasks: 8/8 completed (create wl_approval with 8 exported functions covering queue CRUD, conflict resolution, submission; create wl_notify with admin/analyst notifications; 52 approval unit tests, 16 notify unit tests, 8 integration approval-chain tests, 5 concurrency tests with 10 threads across 5 CSVs; wire handler with adapters for backward compatibility; verify phase completion with 382/382 tests passing)
   - Depends on: 03-01 (approval gating checks daily limits, uses wl_filelock for queue locking)
 
 **Wave Structure:**
@@ -266,7 +266,7 @@
 |-------|-------|--------|---------|-----------|
 | 1. Backend Foundation | 4 plans | Complete ✓ | — | — |
 | 2. Backend Core Domain | 4 core + 2 gap | Complete ✓ | — | — |
-| 3. Backend Orchestration | 2 plans | In Progress (03-01 Complete, 03-02 Planned) | — | — |
+| 3. Backend Orchestration | 2 plans | Complete ✓ (03-01 ✓, 03-02 ✓) | — | 2026-04-01 |
 | 4. Backend Integration | TBD | Not started | — | — |
 | 5. Frontend Architecture | TBD | Not started | — | — |
 | 6. Admin Panel | TBD | Not started | — | — |
@@ -286,4 +286,4 @@
 - **Phase 2 core complete:** 4 executable plans with 3-wave structure, 5 modules extracted, 132/132 tests passing
 - **Phase 2 gap closure:** Plans 02-05 and 02-06 executed to refactor oversized functions (compute_diff 207→4 funcs, move_to_trash 139→3 funcs, restore_from_trash 187→dispatcher+helpers) to satisfy BMOD-13 requirement
 - **Phase 3 plan 03-01 complete:** Extracted wl_filelock.py (100 lines) and wl_limits.py (360+ lines) with 48 unit tests (17 filelock, 31 limits), 100% pass rate, covering file locking with RLock + fcntl.flock (Unix) and Windows no-op, daily limits with zero semantics (0=disabled, -1=unlimited, N=limit), admin exemption via RBAC, atomic writes, and fail-closed error handling. RESET_ALL_USERS sentinel added to wl_constants.py. Imports wired into wl_handler.py (no functional changes, full integration deferred to Phase 4).
-- **Phase 3 plan 03-02 planned:** Extraction of wl_approval.py and wl_notify.py with 70+ integration/concurrency tests covering approval queue conflict resolution and 5+ thread concurrency stress tests, ready for execution
+- **Phase 3 plan 03-02 complete:** Extracted wl_approval.py (187 statements, 91% coverage, 8 exported functions covering approval queue CRUD, conflict detection/cancellation, dual-admin workflows) and integrated with wl_handler.py via adapter functions maintaining backward compatibility. Created 68 new tests (52 approval unit + 16 notify unit) and executed full integration suite: 382 tests passing (356 unit + 26 integration, 1 skipped), 28% overall coverage. Concurrency tests with 10 threads across 5 different CSVs, read-while-write mixing, and lock-ordering validation all passing. Phase 3 COMPLETE (both 03-01 and 03-02 executed).
