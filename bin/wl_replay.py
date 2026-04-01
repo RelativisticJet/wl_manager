@@ -575,5 +575,7 @@ REPLAY_HANDLERS = {
     "create_rule": _execute_replay_create_rule,
     "delete_csv": _execute_replay_delete_csv,
     "delete_rule": _execute_replay_delete_rule,
+    "remove_csv": _execute_replay_delete_csv,   # Alias: approval queue uses remove_*
+    "remove_rule": _execute_replay_delete_rule,  # Alias: approval queue uses remove_*
     "revert_csv": _execute_replay_revert_csv,
 }
