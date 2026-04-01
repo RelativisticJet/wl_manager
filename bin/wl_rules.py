@@ -14,20 +14,27 @@ No interdependencies with trash, approval, or audit modules.
 import json
 import os
 import csv
-from typing import List, Dict, Optional
+import logging
+from threading import Lock
+from typing import List, Dict, Optional, Tuple
 
 # Import sys.path setup from wl_handler pattern
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
-from wl_constants import OWN_LOOKUPS, DETECTION_RULES_FILE, MAPPING_FILE
+from wl_constants import OWN_LOOKUPS, DETECTION_RULES_FILE, MAPPING_FILE, MAX_DETECTION_RULES
 
+
+_logger = logging.getLogger("wl_rules")
+_detection_rules_lock = Lock()
 
 __all__ = [
     'read_rules_registry',
     'write_rules_registry',
     'read_csv_mapping',
     'get_rule_csv_file',
+    'get_rule_for_csv',
+    'create_rule_pipeline',
 ]
 
 
@@ -132,3 +139,75 @@ def get_rule_csv_file(rule_name: str) -> Optional[str]:
     """
     mapping = read_csv_mapping()
     return mapping.get(rule_name)
+
+
+def get_rule_for_csv(csv_file: str) -> str:
+    """Reverse lookup: find the detection rule name for a given CSV file."""
+    mapping = read_csv_mapping()
+    for rule, csvf in mapping.items():
+        if csvf == csv_file:
+            return rule
+    return ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Pipeline Functions (Layer 3 orchestration)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def create_rule_pipeline(detection_rule: str) -> Dict:
+    """
+    Register a new detection rule name (without creating a CSV).
+
+    Validates name, checks uniqueness in both mapping and registry,
+    persists to registry file under lock.
+
+    Args:
+        detection_rule: Rule name to register (will be stripped).
+
+    Returns:
+        Dict with keys: success (bool), detection_rule (str), message (str).
+
+    Raises:
+        ValueError: Invalid or duplicate rule name, or limit reached.
+        OSError: Failed to write registry file.
+    """
+    detection_rule = (detection_rule or "").strip()
+
+    if not detection_rule:
+        raise ValueError("Detection rule name is required")
+    if len(detection_rule) > 100:
+        raise ValueError(
+            "Detection rule name too long: {} chars (max 100)".format(len(detection_rule))
+        )
+    if not all(c.isalnum() or c in ("_", "-", ".", " ") for c in detection_rule):
+        raise ValueError(
+            "Detection rule name can only contain letters, "
+            "numbers, underscores, hyphens, dots, and spaces"
+        )
+    if not any(c.isalnum() for c in detection_rule):
+        raise ValueError(
+            "Detection rule name must contain at least one letter or number"
+        )
+
+    # Check mapping (rule_csv_map.csv)
+    mapping = read_csv_mapping()
+    if detection_rule in mapping:
+        raise ValueError("Rule '{}' already exists in CSV mapping".format(detection_rule))
+
+    # Check registry under lock
+    with _detection_rules_lock:
+        registered = read_rules_registry()
+        if detection_rule in registered:
+            raise ValueError("Rule '{}' is already registered".format(detection_rule))
+        if len(registered) >= MAX_DETECTION_RULES:
+            raise ValueError(
+                "Maximum number of registered rules reached ({})".format(MAX_DETECTION_RULES)
+            )
+        registered.append(detection_rule)
+        write_rules_registry(registered)  # raises OSError on failure
+
+    return {
+        "success": True,
+        "detection_rule": detection_rule,
+        "message": "Detection rule '{}' registered".format(detection_rule),
+    }
