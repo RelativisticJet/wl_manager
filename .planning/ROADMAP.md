@@ -183,16 +183,17 @@
 
 **Plans:** 3 plans in 3 waves
 
-- [ ] **04-01-PLAN.md** — Create wl_replay.py (Layer 5) and implement GET handlers (Wave 1)
+- [x] **04-01-PLAN.md** — Create wl_replay.py (Layer 5) and implement GET handlers (Wave 1) — COMPLETED
   - Requirements: BMOD-01, TEST-02
   - Files: bin/wl_replay.py, bin/wl_handler.py (dispatch tables, GET handlers), tests/integration/test_handler_dispatch.py, tests/unit/test_replay.py
   - Tasks: 3 (create wl_replay module with execute_approved_action, implement dispatch tables and GET handlers, create dispatch + replay tests)
   - Depends on: none (Wave 1 sets up foundation)
 
-- [ ] **04-02-PLAN.md** — Implement simple POST handlers (Wave 2)
+- [x] **04-02-PLAN.md** — Implement simple POST handlers (Wave 2) — COMPLETED
   - Requirements: BMOD-01
   - Files: bin/wl_handler.py (simple POST handlers), bin/wl_wrapper.py (merge/delete), tests/integration/test_handler_simple_post.py
   - Tasks: 3 (implement 6+ stateless POST handlers, analyze and merge/delete wl_wrapper.py, create simple POST tests)
+  - Status: 3/3 tasks completed, 9 Wave 2 handlers verified and tested, wl_wrapper.py deleted, 29 integration tests created
   - Depends on: 04-01 (dispatch table pattern established)
 
 - [ ] **04-03-PLAN.md** — Implement complex POST handlers and Docker smoke tests (Wave 3)

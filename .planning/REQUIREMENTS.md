@@ -81,7 +81,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BMOD-01 | Phase 4 | Pending |
+| BMOD-01 | Phase 4 | In Progress (04-01, 04-02 complete; 04-03 pending) |
 | BMOD-02 | Phase 1 | Complete |
 | BMOD-03 | Phase 1 | Complete |
 | BMOD-04 | Phase 1 | Pending |
@@ -105,7 +105,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FMOD-07 | Phase 6 | Pending |
 | FMOD-08 | Phase 5 | Pending |
 | TEST-01 | Phase 1, Phase 2, Phase 3, Phase 4 | Complete |
-| TEST-02 | Phase 4 | Pending |
+| TEST-02 | Phase 4 | In Progress (GET/simple POST handlers tested; complex POST pending) |
 | TEST-03 | Phase 7 | Pending |
 | TEST-04 | Phase 3, Phase 7 | Pending |
 | TEST-05 | Phase 5, Phase 7 | Pending |
