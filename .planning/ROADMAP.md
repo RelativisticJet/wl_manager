@@ -181,7 +181,7 @@
 4. Integration tests verify all action → module call → audit event chain works end-to-end
 5. Existing API contract preserved: no request/response shape changes; audit.xml dashboard continues working
 
-**Plans:** 3 plans in 3 waves
+**Plans:** 5 plans in 4 waves (3 core + 2 gap-closure)
 
 - [x] **04-01-PLAN.md** — Create wl_replay.py (Layer 5) and implement GET handlers (Wave 1) — COMPLETED
   - Requirements: BMOD-01, TEST-02
@@ -202,10 +202,26 @@
   - Tasks: 4 (implement 8+ complex POST handlers with pipelines and approval gating, wire wl_approval/wl_replay integration, update scripts to use modules, create mock and Docker tests)
   - Depends on: 04-02 (simple POST pattern established)
 
-**Wave Structure:**
-- **Wave 1:** 04-01 (wl_replay, dispatch tables, GET handlers) — foundation for handler refactoring
-- **Wave 2:** 04-02 (simple POST handlers, wl_wrapper merge/delete) — builds on dispatch pattern
-- **Wave 3:** 04-03 (complex POST handlers, approval gating, scripts, Docker tests) — full integration with approval/replay, backward compatibility validation
+- [ ] **04-04-PLAN.md** — Extract handler business logic to domain pipelines (Gap Closure, Wave 1)
+  - Requirements: BMOD-01, TEST-02
+  - Files: bin/wl_csv.py, bin/wl_versions.py, bin/wl_rules.py, bin/wl_trash.py, bin/wl_handler.py, tests/integration/test_handler_complex_post.py
+  - Tasks: 6 (extract save_csv_pipeline, create_csv_pipeline, revert_csv_pipeline, rule pipelines, reduce handler to 200-250 lines, create integration tests)
+  - Status: Gap closure plan created to address verification gap: handler still 5,856 lines instead of goal 200-250 lines
+  - Depends on: 04-03 (complex POST handlers logic ready for extraction)
+
+- [ ] **04-05-PLAN.md** — Wire wl_replay into approval workflow and run Docker smoke tests (Gap Closure, Wave 2)
+  - Requirements: BMOD-01, TEST-02
+  - Files: bin/wl_handler.py, bin/wl_replay.py, tests/integration/test_docker_handler_smoke.py
+  - Tasks: 5 (import wl_replay, wire into process_approval, verify dual-admin flow, create Docker smoke tests, run against live container)
+  - Status: Gap closure plan created to address verification gaps: wl_replay orphaned (zero refs in handler), Docker tests designed but not executed
+  - Depends on: 04-04 (handler pipelines extracted for integration), has checkpoint gate for dual-admin verification
+
+**Wave Structure (including gap-closure):**
+- **Wave 1 (Core):** 04-01 (wl_replay, dispatch tables, GET handlers) — foundation for handler refactoring
+- **Wave 2 (Core):** 04-02 (simple POST handlers, wl_wrapper merge/delete) — builds on dispatch pattern
+- **Wave 3 (Core):** 04-03 (complex POST handlers, approval gating, scripts, Docker tests) — full integration with approval/replay, backward compatibility validation
+- **Wave 1 (Gap-Closure):** 04-04 (extract business logic to pipelines, reduce handler size) — addresses handler size gap
+- **Wave 2 (Gap-Closure):** 04-05 (wire wl_replay, run Docker smoke tests) — addresses wl_replay integration and test execution gaps
 
 ---
 
@@ -294,7 +310,7 @@
 | 1. Backend Foundation | 4 plans | Complete ✓ | — | — |
 | 2. Backend Core Domain | 6 plans | Complete ✓ | — | — |
 | 3. Backend Orchestration | 3 plans | Complete ✓ | — | 2026-04-01 |
-| 4. Backend Integration | 3 plans | Planning ✓ | — | — |
+| 4. Backend Integration | 5 plans | Planning ✓ | — | — |
 | 5. Frontend Architecture | TBD | Not started | — | — |
 | 6. Admin Panel | TBD | Not started | — | — |
 | 7. Test Coverage & Validation | TBD | Not started | — | — |
@@ -313,4 +329,4 @@
 - **Phase 2 core complete:** 4 executable plans with 3-wave structure, 5 modules extracted, 132/132 tests passing
 - **Phase 2 gap closure:** Plans 02-05 and 02-06 executed to refactor oversized functions (compute_diff 207→4 funcs, move_to_trash 139→3 funcs, restore_from_trash 187→dispatcher+helpers) to satisfy BMOD-13 requirement
 - **Phase 3 complete:** 3 plans executed (03-01, 03-02, 03-03), 4 orchestration modules extracted (wl_filelock, wl_limits, wl_approval, wl_notify), 382+ tests passing, approval queue with conflict resolution and notifications fully integrated
-- **Phase 4 planning complete:** 3 executable plans with 3-wave structure designed (04-01 dispatch/GET handlers, 04-02 simple POST, 04-03 complex POST/Docker tests), wl_replay.py Layer 5 module architecture defined, all locked decisions from CONTEXT.md incorporated, ready for execution
+- **Phase 4 planning complete:** 3 core plans + 2 gap-closure plans designed (04-01 dispatch/GET handlers, 04-02 simple POST, 04-03 complex POST, 04-04 extract business logic, 04-05 wire replay/Docker tests), wl_replay.py Layer 5 module architecture defined, gap closure plans address: (1) handler size reduction 5856→200-250 lines via pipeline extraction, (2) wl_replay integration into approval workflow, (3) Docker smoke test execution against live container, ready for execution
