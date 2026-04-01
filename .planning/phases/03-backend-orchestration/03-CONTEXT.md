@@ -1,224 +1,151 @@
-# Phase 3: Backend Orchestration — Phase Context
+# Phase 3: Backend Orchestration - Context
 
-**Phase:** 03-backend-orchestration  
-**Goals:** Extract 2 complex orchestration modules implementing approval queue management and daily limits enforcement.  
-**Depends on:** Phase 1 (constants, logging, validation, RBAC), Phase 2 (CSV, versions, audit, rules, trash)  
-**User:** Oleh | **Date:** 2026-03-31
+**Gathered:** 2026-04-01
+**Status:** Ready for planning
 
----
+<domain>
+## Phase Boundary
 
-## Phase Scope & Decisions
+Extract 4 orchestration modules from wl_handler.py: wl_limits.py (daily usage tracking and enforcement), wl_approval.py (approval queue CRUD, conflict resolution, submission), wl_notify.py (admin and analyst notifications), and wl_filelock.py (shared file locking utility). These modules orchestrate Phase 2's data persistence modules and Phase 1's foundation. Replay orchestration (_process_approval_inner) stays in handler until Phase 4.
 
-### What This Phase Accomplishes
+</domain>
 
-Phase 3 extracts the 2 orchestration modules that coordinate approvals and enforce daily limits across all user operations from the monolithic `wl_handler.py`:
+<decisions>
+## Implementation Decisions
 
-- **wl_limits.py** — Daily usage tracking, per-role limit enforcement, daily reset scheduling, admin limit gating
-- **wl_approval.py** — Approval queue CRUD, request submission, approval/rejection/cancellation, destructive action auto-cancellation, approval expiry, request replay
+### Approval Replay Architecture
+- **Handler passthrough pattern**: wl_approval.py manages queue CRUD, conflict resolution, submission, and expiration. Actual replay orchestration (_process_approval_inner, which calls _save_csv/_revert_csv with _from_approval=True) stays in handler until Phase 4.
+- **Action registry preparation**: Define ACTION_HANDLERS dict in handler mapping action types to replay functions. Phase 4 will migrate this to the module. Structured for future migration.
+- **Submit functions exported**: wl_approval.py exports submit_approval() and submit_dual_approval() — encapsulate validation + queue write + notification trigger.
+- **Expiration in module**: expire_pending_approvals() belongs in wl_approval.py (pure queue manipulation, no handler dependency).
+- **Validation split**: RBAC checks stay in handler (owns request context). Payload validation (required fields, reason length) moves to wl_approval.py.
+- **Module triggers notifications**: wl_approval.py calls wl_notify functions directly for submission and cancellation events.
 
-These modules build on Phase 1–2 infrastructure and handle the most complex business logic in the system:
-- State machine transitions (pending → approved/rejected/cancelled/expired/failed)
-- File locking on shared queue data
-- Auto-cancellation of conflicting requests (delete rule while edits pending)
-- Replay of Phase 2 operations (save_csv, revert_csv, add_rule, etc.) with original analyst as context
-- Concurrency safety under 5+ simultaneous requests
-- Daily counter reset with timezone awareness
+### Queue Schema & Validation
+- **Unified queue**: Single approval_queue.json file with entry type field distinguishing standard, create/delete, and dual-admin entries. Single lock, single file.
+- **Validate on read+write**: Schema validation on both directions. Catches corrupted queue files and legacy entries.
+- **Fail entire read on corruption**: If validation finds corrupted/invalid entry, return error and refuse to process queue. Fail-closed — admin must manually fix. Consistent with project error handling pattern.
+- **Specific query helpers**: get_pending_for_csv(csv_file), get_pending_for_rule(rule_name) — not generic predicate-based API. Self-documenting, matches current usage patterns.
+- **Schema-aware field access**: Claude's discretion on whether to normalize entries on read or use get_csv_file(entry) helpers.
 
-### Locked Decisions (from discussion)
+### Conflict Resolution
+- **Trigger on every approve**: Check for conflicts on every approval processing, not just destructive actions. Catches edge cases like approving an edit after CSV was modified by another approved edit.
+- **CSV-level cancel added**: When a CSV is trashed/deleted, cancel all pending edits for that CSV. Extends current rule-level cancel.
+- **Restore triggers conflicts too**: Trash + delete + restore all trigger conflict checks. Restoring cancels pending 'create CSV' requests for the same name.
+- **Dry run mode**: check_conflicts(queue, action) returns what WOULD be cancelled without side effects. cancel_conflicts() actually cancels. Useful for testing and future UI preview.
+- **Return cancelled list + notify**: cancel_conflicts() returns (new_queue, cancelled_entries). Module also triggers notifications to affected analysts via wl_notify.
+- **Functional style**: No in-place mutation. cancel_conflicts() returns a new queue copy + cancelled entries list. Caller writes if they want.
+- **Precondition validation**: When processing an approved action, validate preconditions (CSV exists, rule exists) before replay. Fail + audit log with action='approval_precondition_failed' on stale requests.
+- **Audit trail for cancellations**: Auto-cancel audit events include 'cancelled_by_action' and 'cancelled_by_analyst' fields for full traceability.
 
-**Module Boundaries:**
-- wl_limits.py exports: `get_limit_config()`, `set_limit_config(config)`, `read_daily_limits()`, `write_daily_limits(counters)`, `get_counter_period_key(tz_offset_minutes=0)`, `check_daily_limit(user, action_type, action_count=1)`, `check_admin_daily_limit(admin_user, action_type, action_count=1)`, `increment_daily_limit(user, action_type, count=1)`, `increment_admin_daily_limit(admin_user, action_type, count=1)`, `reset_daily_usage(analyst, admin_user)`, `get_daily_limit_status(user)`
-- wl_approval.py exports: `read_approval_queue()`, `write_approval_queue(queue)`, `get_approval_queue_path()`, `submit_approval_request(action_type, analyst, **kwargs)`, `get_approval_request(request_id)`, `process_approval_decision(request_id, decision, admin_user, rejection_reason="", cancellation_reason="", admin_comment="")`, `auto_cancel_conflicting_requests(csv_file, action_type)`, `expire_pending_approvals()`, `get_pending_for_csv(csv_file)`, `replay_approved_request(queue_item, admin_user)`
+### Daily Limits Architecture
+- **Separate subsystems**: check_analyst_limit() and check_admin_limit() as distinct functions. Matches current code structure. Explicit about which system is being checked.
+- **Reset logic in module**: reset_daily_limits(analyst=None) in wl_limits.py. Handler's scheduled search action just calls the module function.
+- **0 = disabled everywhere**: Consistent semantic across both analyst and admin limit systems. max_count==0 means 'this limit is not enforced'. Fixes documented inconsistency from MEMORY.md.
+- **Status API**: get_limit_status(user, roles) returns {action_type: {current: N, max: M, remaining: R}} for all action types. Enables frontend progress display.
+- **Approval gate in wl_approval.py**: check_approval_gate(user, action_type, action_count, roles) combines limit check (calls wl_limits) + threshold check. Single function for 'does this action need approval?'.
+- **Admin exemption in module**: check_analyst_limit() accepts roles parameter, returns 'exempt' for admin roles. Module knows about RBAC exemptions.
+- **All config in wl_limits.py**: Both limit config AND approval thresholds read/written by wl_limits.py. Single source of truth for 'when do actions get gated'.
+- **Direct handler calls for admin actions**: Handler's _set_daily_limits_action calls wl_limits.set_limit_config() directly. Simple, matches Phase 2 pattern.
+- **RESET_ALL_USERS constant**: Add RESET_ALL_USERS = '__all__' to wl_constants.py. Module checks against constant, not magic string 'all'. Prevents sentinel value bug permanently.
+- **Error messages in module**: _daily_limit_error_msg logic lives in wl_limits.py. Module returns formatted error string, handler passes to response.
 
-**Error Handling Pattern:**
-- Both modules: return (data, error_msg) tuples for file operations; raise exceptions on system errors (import failures, etc.)
-- Daily limits: (allowed_bool, current_int, max_int) tuple pattern maintained from monolith
-- Approval queue: JSON parse errors logged + fallback to empty queue (non-breaking)
+### Concurrency Model
+- **Shared lock utility**: Extract wl_filelock.py providing file_lock(path, timeout) context manager. Used by wl_approval, wl_versions, and any module needing file locking. DRY for file locking.
+- **Exclusive locks first**: Start with exclusive-only file locks. Add read/write lock semantics later when performance data shows contention on reads. YAGNI until measured.
+- **No-op on Windows**: fcntl on Unix, no-op on Windows. Matches Phase 2's wl_versions pattern. Windows is dev-only, production is always Linux.
+- **Lock ordering**: Document and enforce with runtime assertion. LOCK_ORDER: 1) approval_queue, 2) daily_limits, 3) csv_file. Raises LockOrderViolation if locks acquired out of order.
+- **Both test layers**: Unit tests use mocks for logic (deterministic). Integration tests use temp files for real I/O (realistic). Matches Phase 2 testing strategy.
+- **Concurrency test goals**: Data integrity as primary (must pass: valid JSON, all entries present, no corruption). Ordering guarantees as best-effort (log violations but don't fail test).
 
-**File Locking:**
-- Approval queue: single RLock for entire queue; acquired during read-modify-write cycles
-- Daily limits: separate RLock for counters file
-- Lock timeouts: 10 seconds with 3 retries, 100ms backoff
-- Both use contextlib.contextmanager for guaranteed release
+### Notification Module (wl_notify.py)
+- **Full scope**: notify_admins(session_key, type, details) + notify_analyst(session_key, analyst, type, details). Covers all approval events: submissions, approvals, rejections, auto-cancellations.
+- **Extracted from handler**: _notify_admins and analyst notification logic moved to wl_notify.py. Both handler and wl_approval.py can import it.
 
-**Concurrency Patterns:**
-- Approval replay must be atomic: lock queue → validate preconditions (CSV exists, rule exists) → call Phase 2 functions → update queue status → post audit event → unlock
-- Daily limits check-then-increment must be atomic: read counters → validate against limit → log the use → write counters
-- Race condition: two simultaneous requests for same user hitting same daily limit → serialize via lock
-
-**Auto-Cancellation Strategy:**
-When a destructive action (delete CSV, delete rule) is APPROVED:
-1. Find all pending requests for same CSV/rule
-2. For each pending request:
-   - If action_type is incompatible (edit on deleted CSV), auto-cancel
-   - Mark with status="auto_cancelled", rejection_reason="CSV/rule deleted by approved request"
-   - Post audit event: action="request_auto_cancelled"
-
-**Test Structure:**
-- Unit tests in `tests/unit/test_limits.py`, `tests/unit/test_approval.py`
-- Concurrency tests in `tests/integration/test_concurrency.py` (5+ simultaneous threads, approval races, limit enforcement)
-- Integration tests in `tests/integration/test_approval_chain.py` (submit → approve → replay → audit)
-- Coverage target: ≥80% per module
-
-**No Functional Change Principle:**
-- Every limit/approval function has a direct counterpart in wl_handler.py (~1-to-1 mapping)
-- Handler passes through to modules without business logic changes
-- API contracts frozen: request/response shapes unchanged
-- Audit event structure unchanged
+### Module Count & Roadmap
+- **4 modules total**: wl_limits.py, wl_approval.py, wl_notify.py, wl_filelock.py. Roadmap should be updated to reflect expanded scope.
 
 ### Claude's Discretion
+- Schema-aware field access strategy (normalize on read vs helper functions)
+- Grouping of queue CRUD helper functions within wl_approval.py
+- Integration test depth for concurrency scenarios beyond 5-thread smoke test
+- Lock acquisition strategy (contextlib ExitStack vs manual acquire/release) in wl_filelock.py
 
-- Lock acquisition strategy (RLock vs separate Locks) — preferring single RLock per file for simplicity
-- Timezone handling for daily reset (offset_minutes param) — implement ISO 8601 date-based keys
-- Auto-cancellation priority (delete rule vs edit rule) — implement full cascade logic
-- Queue item schema versioning (old/new request formats) — handle gracefully during replay
-- Request replay validation (re-verify all preconditions) — validate CSV exists, rule exists, analyst still has permissions
+</decisions>
 
-### Deferred Ideas (OUT OF SCOPE)
+<canonical_refs>
+## Canonical References
 
-- Advanced approval workflows (multi-level, weighted approval) — single-level approval only
-- Machine learning-based anomaly detection for limits — static thresholds only
-- Distributed approval queue (Redis/database backend) — single-file JSON only
-- Webhook notifications for approval events — notifications table only (existing system)
-- Approval history audit dashboards — requires Phase 8
+**Downstream agents MUST read these before planning or implementing.**
 
----
+### Handler source code
+- `bin/wl_handler.py` — Contains all approval queue, daily limits, conflict resolution, and notification logic to be extracted (lines 228-800 for queue/limits functions, lines 2463-5804 for handler methods)
 
-## Requirements Coverage
+### Phase 2 modules (dependencies)
+- `bin/wl_csv.py` — CSV read/write/diff (called during approval replay)
+- `bin/wl_versions.py` — Version snapshots (called during approval replay)
+- `bin/wl_audit.py` — Audit event construction (called for approval audit trail)
+- `bin/wl_rules.py` — Rules registry (checked during conflict resolution)
+- `bin/wl_trash.py` — Trash operations (called during approved delete/restore)
 
-| ID | Description | This Phase | Module |
-|----|-------------|-----------|--------|
-| BMOD-11 | wl_limits.py enforces per-role daily limits with role-aware thresholds | **Core** | wl_limits |
-| BMOD-12 | wl_approval.py manages approval queue, request submission, approval/rejection/cancellation | **Core** | wl_approval |
-| BMOD-13 | No function exceeds 100 lines or cyclomatic complexity of 15 | **Applied to all modules** | all |
-| BMOD-14 | Consistent error handling pattern (fail-closed with state rollback) | **Applied to all modules** | all |
-| BMOD-15 | No duplicated logic across backend modules (DRY compliance) | **Applied to Phase 3** | all |
-| TEST-01 (partial) | Unit test suite covering ≥80% of Phase 3 modules | **Embedded in each plan** | all |
-| TEST-04 (partial) | Concurrency tests for simultaneous CSV saves, approval races, file locking (5+ threads) | **Integration tests** | all |
+### Phase 1 modules (dependencies)
+- `bin/wl_constants.py` — Constants including APPROVAL_QUEUE_FILE, DEFAULT_LIMITS, DEFAULT_ADMIN_LIMITS, role sets
+- `bin/wl_rbac.py` — Role checking functions (is_admin, can_approve, get_user, get_roles)
+- `bin/wl_validation.py` — Input sanitization (used in approval payload validation)
 
----
+### Memory & patterns
+- `CLAUDE.md` — Project architecture, deployment flow, audit event structure, version control system, diff algorithm
+- `~/.claude/projects/c--Users-PC-wl-manager/memory/MEMORY.md` — Critical bug patterns: sentinel value bugs, set-vs-counter, precondition validation, dual UI paths, role inference
+- `~/.claude/projects/c--Users-PC-wl-manager/memory/feedback_precondition_validation.md` — Queued operation precondition pattern
+- `~/.claude/projects/c--Users-PC-wl-manager/memory/feedback_sentinel_values.md` — Sentinel value truthy-check lesson
 
-## Architecture Patterns (Phase 1-2 Dependencies)
+</canonical_refs>
 
-### Layer Hierarchy
-```
-Layer 0 (Phase 1): wl_constants (APPROVAL_EXPIRY_DAYS, MAX_TRACKED_ANALYSTS, etc.)
-                    ↓
-Layer 1 (Phase 1): wl_logging
-                    ↓
-Layer 2 (Phase 1): wl_validation, wl_rbac
-                    ↓
-Layer 3 (Phase 2): wl_csv, wl_versions, wl_audit, wl_rules, wl_trash
-                    ↓
-Layer 4 (Phase 3): wl_limits, wl_approval (orchestration)
-```
+<code_context>
+## Existing Code Insights
 
-All Phase 3 modules import from Layers 0-3 only. No circular imports. No forward dependencies.
+### Reusable Assets
+- **wl_versions.py file locking pattern**: Context manager with fcntl/no-op Windows fallback, 10s timeout, 3 retries — direct template for wl_filelock.py
+- **Phase 2 dispatcher pattern**: Proven refactoring approach for oversized functions (compute_diff, move_to_trash, restore_from_trash)
+- **wl_audit.build_audit_event()**: Ready-to-use for building approval/cancellation/precondition-failure audit events
+- **wl_rbac role predicates**: is_admin(), can_approve(), can_approve_own_requests() — used by approval gate and limit exemptions
 
-### Type Hints & Exports
+### Established Patterns
+- **Error handling**: Fail-closed with state rollback (Phase 2 convention)
+- **Module structure**: __all__ exports, type hints on all signatures, selective imports from Phase 1
+- **Test structure**: tests/unit/test_{module}.py for unit, tests/integration/ for cross-module
+- **File I/O**: Atomic writes via temp file + rename for JSON config files
 
-Every Phase 3 module:
-- Exports explicit `__all__` with public API functions
-- Uses type hints on all function signatures
-- Imports Phase 1-2 modules selectively
+### Integration Points
+- **Handler → wl_approval**: submit_approval, submit_dual_approval, get_pending_for_csv, expire_pending_approvals, check_approval_gate
+- **Handler → wl_limits**: check_analyst_limit, check_admin_limit, get_limit_status, set_limit_config, reset_daily_limits, increment_daily_limit
+- **wl_approval → wl_limits**: check_approval_gate calls wl_limits internally
+- **wl_approval → wl_notify**: submit and cancel functions trigger notifications
+- **wl_approval → wl_filelock**: Queue lock acquired via shared file_lock utility
+- **wl_approval → wl_audit**: Cancellation and precondition-failure audit events
 
-### Lock Management
+</code_context>
 
-Approval queue and daily limits require file locks:
-- Approval queue lock: single RLock held during read-modify-write of queue file
-- Daily limits lock: separate RLock held during read-modify-write of counters file
-- Lock failures on write: logged but don't crash (reads proceed without lock)
-- Lock acquisitions: via context managers (contextlib.contextmanager)
+<specifics>
+## Specific Ideas
 
-### Approval State Machine
+- Lock ordering enforcement via runtime assertion — fail-fast approach, catches ordering bugs in development
+- Functional conflict resolution (return new copy, don't mutate in-place) — safer for testing, no side-effect surprises
+- RESET_ALL_USERS constant in wl_constants.py prevents the documented sentinel value bug permanently
+- Action registry dict in handler (ACTION_HANDLERS) prepares for Phase 4 migration without blocking Phase 3
 
-```
-[pending] ──approve→ [approved] ──replay→ [succeeded|failed]
-          ──reject→  [rejected]
-          ──cancel→  [cancelled]
-          ──expire→  [expired]
-          ──auto_cancel→ [auto_cancelled]
-```
+</specifics>
 
-Each transition:
-- Updates queue item status, resolved_by, resolved_at
-- Posts audit event with action=`request_[status]`
-- Notifies analyst via notifications table (existing system)
+<deferred>
+## Deferred Ideas
 
-### Request Replay Logic
+- Read/write lock semantics in wl_filelock.py — deferred until performance data shows read contention. Start with exclusive-only.
+- Replay orchestration migration to wl_approval.py — deferred to Phase 4 (thin router refactoring)
+- Queue entry schema migration (normalize dual-admin entries) — deferred unless conflict resolution requires it
 
-When approval is processed with `decision="approve"`:
-1. Validate preconditions (CSV exists, rule exists, analyst still has permission)
-2. Re-read current CSV state (analyst's old state may be stale)
-3. Call Phase 2 function with original analyst as context (e.g., `save_csv(path, headers, rows, analyst=target['analyst'])`)
-4. Update queue item status="approved" (or "failed" if replay fails)
-5. Post audit event with action="request_approved" or "request_failed"
-6. Notify analyst
-
-Precondition validation (before replay):
-- `action_type not in _no_csv_actions` → verify CSV file exists at expected path
-- `action_type in {"add_rule", "remove_rule", "edit_rule"}` → verify rule exists in registry
-- `action_type == "remove_csv"` → verify CSV exists (about to be deleted)
-- All actions → verify analyst role still has permission (re-check RBAC)
-
-### Daily Limits Constants
-
-From wl_constants (Phase 1 imports):
-```python
-DEFAULT_LIMITS = {
-    "row_removal": 50,
-    "row_addition": 50,
-    "row_edit": 100,
-    "bulk_row_removal": 10,
-    "bulk_row_edit": 10,
-    "column_removal": 5,
-    "revert": 5,
-    "rule_deletion": 2,
-    "csv_deletion": 1,
-    "approval_count": 20,  # Admin-specific
-}
-
-APPROVAL_EXPIRY_DAYS = 30
-MAX_TRACKED_ANALYSTS = 1000  # Prevent unbounded memory in counters file
-MAX_RESOLVED_HISTORY = 5000  # Keep only newest 5000 resolved entries
-```
+</deferred>
 
 ---
 
-## Phase Success Criteria
-
-When Phase 3 completes, ALL of the following must be TRUE:
-
-1. **Functional Preservation**: User can submit edits for approval, admin can approve/reject with correct audit trail, limits are enforced, all as before (no functional change)
-2. **Module Extraction**: Two new modules exist in `bin/` and are imported by wl_handler.py: wl_limits, wl_approval
-3. **Complexity Control**: No function exceeds 100 lines; no module exceeds CC=15; visible complexity reduced
-4. **Test Coverage**: ≥80% unit test coverage per module; concurrency tests with 5+ threads; approval chain integration tests
-5. **Auto-Cancellation**: Destructive actions (delete CSV/rule) auto-cancel conflicting pending requests
-6. **Concurrency Safety**: 5+ simultaneous CSV saves, approval races, and file locking under contention all pass
-7. **Daily Limits**: Check passes for all role tiers; reset scheduling works; admin limits gate approval counts
-
----
-
-## Deliverables
-
-- 2 new Python modules in `bin/`: wl_limits.py, wl_approval.py
-- 2 unit test files in `tests/unit/`: test_limits.py, test_approval.py
-- 2 integration test files: test_approval_chain.py, test_concurrency.py
-- Updated `bin/wl_handler.py`: imports new modules, calls extracted functions instead of inline logic
-- Updated ROADMAP.md with Phase 3 plan details
-- Coverage reports showing ≥80% per module
-- Git commits: one module per commit (wl_limits, wl_approval)
-
----
-
-## Next Phase: Phase 4
-
-Phase 4 depends on Phase 3 completion:
-- wl_handler.py becomes thin REST router (remaining ~200 lines)
-- All action handlers (get_csv, save_csv, process_approval, etc.) delegate to Phase 1-3 modules
-- No business logic remains in handler itself
-
----
-
-*Context created: 2026-03-31*
-*Last updated: 2026-03-31*
+*Phase: 03-backend-orchestration*
+*Context gathered: 2026-04-01*
