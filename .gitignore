@@ -46,8 +46,7 @@ lookups/_presence.json
 
 # Development/testing files
 # Note: tests/ directory is committed to git; only cache excluded via .pytest_cache
-test_*.py
-*_test.py
+# test_*.py patterns are excluded only for ad-hoc test files in root, not in tests/
 CLAUDE.md
 login-check
 081-after-rule-select
