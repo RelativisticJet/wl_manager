@@ -1,0 +1,36 @@
+**Plans:** 4/5 plans executed (4 core + 1 gap-closure)
+
+- [x] **02-01-PLAN.md** — Extract wl_csv.py (Layer 3, Wave 1) — COMPLETED
+  - Requirements: BMOD-06
+  - Files: bin/wl_csv.py, tests/unit/test_csv.py, bin/wl_handler.py (wire imports)
+  - Tasks: 3 (create wl_csv.py, unit tests, wire handler calls)
+
+- [x] **02-02-PLAN.md** — Extract wl_rules.py and wl_trash.py (Layer 3, Wave 1) — COMPLETED
+  - Requirements: BMOD-09, BMOD-10
+  - Files: bin/wl_rules.py, bin/wl_trash.py, tests/unit/test_rules.py, tests/unit/test_trash.py, bin/wl_handler.py
+  - Tasks: 5 (create wl_rules, create wl_trash, unit tests for each, wire handler)
+  - Depends on: 02-01
+
+- [x] **02-03-PLAN.md** — Extract wl_versions.py (Layer 3, Wave 2) — COMPLETED
+  - Requirements: BMOD-07
+  - Files: bin/wl_versions.py, tests/unit/test_versions.py, bin/wl_handler.py
+  - Tasks: 3 (create wl_versions, unit tests, wire handler)
+  - Depends on: 02-01 (calls wl_csv.read_csv, write_csv)
+
+- [x] **02-04-PLAN.md** — Extract wl_audit.py and integration tests (Layer 3, Wave 3) — COMPLETED
+  - Requirements: BMOD-08, BMOD-13, BMOD-14, BMOD-15, TEST-01
+  - Files: bin/wl_audit.py, tests/unit/test_audit.py, tests/integration/test_persistence.py, bin/wl_handler.py
+  - Tasks: 5 (create wl_audit, unit tests, integration tests, wire handler, verify phase completion)
+  - Depends on: 02-03 (imports from all Phase 2 modules)
+
+- [ ] **02-05-PLAN.md** — Refactor oversized functions to comply with BMOD-13 (Gap Closure, Wave 1)
+  - Requirements: BMOD-13
+  - Files: bin/wl_csv.py (compute_diff refactoring), bin/wl_trash.py (move_to_trash refactoring)
+  - Tasks: 2 (refactor compute_diff into 4 focused functions, refactor move_to_trash into 3 focused functions)
+  - Gap source: VERIFICATION.md identified compute_diff (207 lines) and move_to_trash (139 lines) exceeding 100-line limit
+
+**Wave Structure (including gap-closure):**
+- **Wave 1 (Core):** 02-01 (wl_csv), 02-02 (wl_rules, wl_trash) — independent extraction
+- **Wave 1 (Gap-Closure):** 02-05 (function refactoring) — can run in parallel with core Wave 1 (modifies existing files, not new ones)
+- **Wave 2 (Core):** 02-03 (wl_versions) — depends on 02-01 for CSV operations
+- **Wave 3 (Core):** 02-04 (wl_audit + integration) — depends on all Phase 2 modules, final wiring

@@ -390,12 +390,14 @@ require([
                                 'data-dual="' + (item.is_dual_admin ? 'true' : 'false') + '" ' +
                                 'style="background:#e74c3c;color:#fff;margin-right:4px">Reject</span>'
                         ) +
-                        '<span class="btn btn-small wl-cp-download-btn" ' +
-                            'data-csv="' + _.escape(item.csv_file) + '" ' +
-                            'data-app="' + _.escape(item.app_context || "") + '" ' +
-                            'data-request-id="' + _.escape(item.request_id) + '" ' +
-                            'data-action-type="' + _.escape(item.action_type) + '"' +
-                            '>Download CSV</span>' +
+                        (item.csv_file && item.csv_file !== "__rule_operation__"
+                            ? '<span class="btn btn-small wl-cp-download-btn" ' +
+                                'data-csv="' + _.escape(item.csv_file) + '" ' +
+                                'data-app="' + _.escape(item.app_context || "") + '" ' +
+                                'data-request-id="' + _.escape(item.request_id) + '" ' +
+                                'data-action-type="' + _.escape(item.action_type) + '"' +
+                                '>Download CSV</span>'
+                            : '') +
                     '</td></tr>';
             });
             html += '</tbody></table>';
@@ -1750,6 +1752,7 @@ require([
             var trashId = $(this).data("trash-id");
             showCpConfirm("Restore from Trash",
                 "Restore this item to its original location?",
+                "Restore",
                 function () {
                     restPost({
                         action: "restore_from_trash",
@@ -1951,6 +1954,7 @@ require([
         $("#wl-reset-admin-limits").on("click", function () {
             showCpConfirm("Reset Admin Limits",
                 "Reset all admin limits to factory defaults?",
+                "Reset",
                 function () {
                     restPost({
                         action: "set_admin_limits",
