@@ -2937,202 +2937,42 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     "revert_col_changes": total_col_changes,
                 })
 
-        # ── Overwrite CSV with the version content ───────────────────
-        write_csv(path, new_headers, new_rows)
-
-        # ── Get the current (latest) version label before modifying ────
-        current_version_display = ""
-        try:
-            manifest, _ = read_version_manifest(path)
-            if manifest:
-                versions_list = manifest.get("versions", [])
-                if versions_list:
-                    current_version_display = versions_list[-1].get("display", "")
-        except OSError:
-            pass
-
-        # ── Remove the source version first (it will be replaced by
-        #    the revert snapshot, so removing it avoids duplicates and
-        #    keeps the count correct before pruning) ───────────────────
-        try:
-            manifest, _ = read_version_manifest(path)
-            updated_versions = []
-            for entry in manifest.get("versions", []):
-                if entry.get("filename") == version_filename:
-                    old_path = os.path.join(versions_dir, entry["filename"])
-                    try:
-                        os.remove(old_path)
-                    except OSError:
-                        pass
-                else:
-                    updated_versions.append(entry)
-            manifest["versions"] = updated_versions
-            _, _ = write_version_manifest(path, manifest)
-        except OSError as exc:
-            _logger.warning("Failed to clean source version for %s: %s",
-                            csv_file, exc)
-
-        # ── Snapshot the revert (becomes a new version entry) ────────
-        new_record_display = ""
-        try:
-            _, new_record_display = snapshot_version(
-                path, user, action_label="revert"
-            )
-        except OSError as exc:
-            _logger.warning("Failed to snapshot after revert for %s: %s",
-                            csv_file, exc)
-
-        # ── Audit event ──────────────────────────────────────────────
-        now = datetime.now(timezone.utc)
-        ts = int(now.timestamp())
-        ts_display_now = now.strftime("%d-%m-%Y %H:%M:%S")
-
-        summary = (
-            "User {} revert {} {} version to {} "
-            "(which became the latest in the record {}) at {} GMT+00"
-            .format(user, csv_file, current_version_display,
-                    version_display, new_record_display, ts_display_now)
+        # ── Call pipeline to execute the revert ──────────────────────
+        result = revert_csv_pipeline(
+            csv_path=path,
+            version_filename=version_filename,
+            version_display=version_display,
+            revert_reason=revert_reason,
+            analyst=user,
+            session_key=self.session_key,
+            csv_file=csv_file,
+            app_context=app_context,
+            detection_rule=detection_rule,
         )
 
-        # Build value lines showing what changed (with row numbers)
-        value_lines = []
-
-        # Helper: build a visible-key for row matching
-        vis_hdrs = [h for h in (new_headers or old_headers) if not h.startswith("_")]
-        def _vis_key(row):
-            return tuple(row.get(h, "") for h in vis_hdrs)
-
-        # Map restored (added) rows to their position in new_rows.
-        # diff entries are same objects as in new_rows/old_rows, so use id().
-        rev_new_id_to_pos = {id(r): i + 1 for i, r in enumerate(new_rows)}
-        for entry in diff.get("added", []):
-            row_num = rev_new_id_to_pos.get(id(entry), 0)
-            cleaned = {k: v for k, v in entry.items() if not k.startswith("_")}
-            for col, val in sorted(cleaned.items()):
-                value_lines.append("restoredback_{}_row_{}: {}".format(col, row_num, val))
-
-        # Map reverted-away (removed) rows to their position in old_rows
-        rev_old_id_to_pos = {id(r): i + 1 for i, r in enumerate(old_rows)}
-        for entry in diff.get("removed", []):
-            row_num = rev_old_id_to_pos.get(id(entry), 0)
-            cleaned = {k: v for k, v in entry.items() if not k.startswith("_")}
-            for col, val in sorted(cleaned.items()):
-                value_lines.append("removedback_{}_row_{}: {}".format(col, row_num, val))
-
-        # Edited rows: show old_row_num → new_row_num
-        for entry in diff.get("edited", []):
-            old_rn = entry.get("old_row_num", 0)
-            new_rn = entry.get("row_num", 0)
-            row_label = "{}_{}".format(old_rn, new_rn) if old_rn != new_rn else str(new_rn)
-            for chg in entry.get("changed_fields", []):
-                value_lines.append("changedback_{}_row_{}: {} -> {}".format(
-                    chg["field"], row_label, chg["before"], chg["after"]))
-
-        # ── Detect row position changes ────────────────────────────
-        # Build maps: visible_key → list of 1-based positions
-        old_key_positions = {}
-        for idx, r in enumerate(old_rows):
-            k = _vis_key(r)
-            old_key_positions.setdefault(k, []).append(idx + 1)
-
-        new_key_positions = {}
-        for idx, r in enumerate(new_rows):
-            k = _vis_key(r)
-            new_key_positions.setdefault(k, []).append(idx + 1)
-
-        moveback_rows = []
-        used_old = {}  # track which position index we've consumed per key
-        used_new = {}
-        for k in old_key_positions:
-            if k not in new_key_positions:
-                continue
-            old_pos_list = old_key_positions[k]
-            new_pos_list = new_key_positions[k]
-            for i in range(min(len(old_pos_list), len(new_pos_list))):
-                if old_pos_list[i] != new_pos_list[i]:
-                    # First visible field as row identifier
-                    row_id = ", ".join("{}={}".format(vis_hdrs[j], k[j])
-                                       for j in range(min(2, len(vis_hdrs)))
-                                       if k[j])
-                    moveback_rows.append({
-                        "row_id": row_id,
-                        "before": old_pos_list[i],
-                        "after": new_pos_list[i],
-                    })
-
-        for mr in moveback_rows:
-            rn = mr["before"]  # use actual row number as field identifier
-            value_lines.append("moveback_row_{}_number_before: {}".format(rn, rn))
-            value_lines.append("moveback_row_{}_number_after: {}".format(rn, mr["after"]))
-            if mr["row_id"]:
-                value_lines.append("moveback_row_{}_id: {}".format(rn, mr["row_id"]))
-
-        # ── Detect column position changes ─────────────────────────
-        old_vis_cols = [h for h in old_headers if not h.startswith("_")]
-        new_vis_cols = [h for h in new_headers if not h.startswith("_")]
-        common_cols = set(old_vis_cols) & set(new_vis_cols)
-
-        moveback_cols = []
-        for col in common_cols:
-            old_pos = old_vis_cols.index(col) + 1
-            new_pos = new_vis_cols.index(col) + 1
-            if old_pos != new_pos:
-                moveback_cols.append({
-                    "column": col,
-                    "before": old_pos,
-                    "after": new_pos,
-                })
-
-        moveback_cols.sort(key=lambda x: x["before"])
-        for mc in moveback_cols:
-            cn = mc["before"]  # use actual column number as field identifier
-            value_lines.append("moveback_column_{}_name: {}".format(cn, mc["column"]))
-            value_lines.append("moveback_column_{}_number_before: {}".format(cn, cn))
-            value_lines.append("moveback_column_{}_number_after: {}".format(cn, mc["after"]))
-
-        evt = {
-            "timestamp": ts,
-            "analyst": user,
-            "detection_rule": detection_rule,
-            "csv_file": csv_file,
-            "app_context": app_context,
-            "comment": revert_reason,
-            "revert_reason": revert_reason,
-            "action": "revert",
-            "reverted_from_version": current_version_display,
-            "reverted_to_version": version_display,
-            "new_record_version": new_record_display,
-            "row_count_before": len(old_rows),
-            "row_count_after": len(new_rows),
-            "restoredback_row_count": diff["added_count"],
-            "removedback_row_count": diff["removed_count"],
-            "editedback_row_count": diff["edited_count"],
-            "restoredback_column_count": len(diff.get("added_columns", [])),
-            "restoredback_column_name": diff.get("added_columns", []),
-            "removedback_column_count": len(diff.get("removed_columns", [])),
-            "removedback_column_name": diff.get("removed_columns", []),
-            "moveback_row_count": len(moveback_rows),
-            "moveback_column_count": len(moveback_cols),
-            "value": value_lines,
-            "reverted_by": user,
-            "reverted_at": ts,
-        }
-        self._index_audit(request, evt)
+        if not result.get("success"):
+            _logger.error("revert_csv_pipeline failed: %s", result.get("error"))
+            return self._resp(500, {
+                "error": result.get("error", "Failed to revert CSV file")
+            })
 
         # ── Increment daily revert counter ─────────────────────────────
         _increment_daily_limit(user, "revert")
+
+        # Extract results from pipeline
+        pipeline_data = result.get("data", {})
+        pipeline_diff = result.get("diff", {})
 
         old_vis_hdrs = [h for h in old_headers if not h.startswith("_")]
         new_vis_hdrs = [h for h in new_headers if not h.startswith("_")]
 
         return self._resp(200, {
             "message": "CSV reverted successfully",
-            "diff": diff,
+            "diff": pipeline_diff,
             "rows_before": len(old_rows),
             "rows_after": len(new_rows),
             "cols_before": len(old_vis_hdrs),
             "cols_after": len(new_vis_hdrs),
-            "summary": summary,
             "file_mtime": int(os.path.getmtime(path)),
         })
 
@@ -3140,7 +2980,6 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     # Approval workflow handlers
     # ------------------------------------------------------------------
 
-    @staticmethod
     def _extract_request_reasons(action_type, stored_payload):
         """Extract user-provided reason fields from a stored approval payload.
 
