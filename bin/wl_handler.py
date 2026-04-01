@@ -121,7 +121,7 @@ from wl_presence import report_presence, get_presence, cleanup_presence, reset_p
 # ---------------------------------------------------------------------------
 from wl_csv import (
     read_csv, write_csv, compute_diff, get_expire_column, remove_expired_rows,
-    get_column_widths, set_column_widths
+    get_column_widths, set_column_widths, save_csv_pipeline, create_csv_pipeline
 )
 
 # Layer 3: Detection Rules Registry (imported from wl_rules module)
@@ -138,7 +138,7 @@ from wl_trash import move_to_trash, list_trash, restore_from_trash, purge_trash_
 # ---------------------------------------------------------------------------
 from wl_versions import (
     get_versions_dir, read_version_manifest, write_version_manifest,
-    snapshot_version, get_versions_list
+    snapshot_version, get_versions_list, revert_csv_pipeline
 )
 
 # ---------------------------------------------------------------------------
