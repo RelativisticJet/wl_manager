@@ -88,7 +88,7 @@
 5. Integration tests verify end-to-end chain: CSV save → version snapshot → audit event posting → trash soft-delete (all work as before)
 6. DRY compliance: no duplicated logic for version snapshots, diff computation, or audit field construction across modules
 
-**Plans:** 4 core + 1 gap-closure (5 total)
+**Plans:** 4 core + 2 gap-closure (6 total)
 
 - [x] **02-01-PLAN.md** — Extract wl_csv.py (Layer 3, Wave 1) — COMPLETED
   - Requirements: BMOD-06
@@ -113,18 +113,20 @@
   - Tasks: 5 (create wl_audit, unit tests, integration tests, wire handler, verify phase completion)
   - Depends on: 02-03 (imports from all Phase 2 modules)
 
-- [ ] **02-05-PLAN.md** — Refactor oversized functions to comply with BMOD-13 (Gap Closure, Wave 1)
+- [x] **02-05-PLAN.md** — Refactor oversized functions (Gap Closure, Wave 1) — COMPLETED
   - Requirements: BMOD-13
-  - Files: bin/wl_csv.py (compute_diff refactoring), bin/wl_trash.py (move_to_trash refactoring)
-  - Tasks: 2 (refactor compute_diff into 4 focused functions, refactor move_to_trash into 3 focused functions)
-  - Gap source: VERIFICATION.md identified compute_diff (207 lines) and move_to_trash (139 lines) exceeding 100-line limit
-  - Depends on: none (modifies already-created modules)
+  - Status: compute_diff refactored 207→74 lines, move_to_trash refactored 139→71 lines, all functions now ≤100 lines
+
+- [x] **02-06-PLAN.md** — Refactor restore_from_trash (Gap Closure, Wave 2) — COMPLETED
+  - Requirements: BMOD-13
+  - Status: restore_from_trash refactored 187→53 lines dispatcher, all functions ≤100 lines
 
 **Wave Structure (including gap-closure):**
 - **Wave 1 (Core):** 02-01 (wl_csv), 02-02 (wl_rules, wl_trash) — independent extraction
-- **Wave 1 (Gap-Closure):** 02-05 (function refactoring) — can run in parallel with core Wave 1 (modifies existing files, not new ones)
+- **Wave 1 (Gap-Closure):** 02-05 (function refactoring)
 - **Wave 2 (Core):** 02-03 (wl_versions) — depends on 02-01 for CSV operations
 - **Wave 3 (Core):** 02-04 (wl_audit + integration) — depends on all Phase 2 modules, final wiring
+- **Wave 2 (Gap-Closure):** 02-06 (restore_from_trash refactoring)
 
 ---
 
@@ -148,20 +150,15 @@
 
 - [x] **03-01-PLAN.md** — Extract wl_filelock.py and wl_limits.py (Layer 4, Wave 1) — COMPLETED
   - Requirements: BMOD-11, BMOD-13, BMOD-14, BMOD-15, TEST-01
-  - Files: bin/wl_filelock.py, bin/wl_limits.py, bin/wl_constants.py (RESET_ALL_USERS), tests/unit/test_filelock.py, tests/unit/test_limits.py, bin/wl_handler.py
-  - Tasks: 7/7 completed (create wl_filelock context manager with fcntl/RLock, add RESET_ALL_USERS constant, create wl_limits with 7 functions, 17 filelock tests, 31 limits tests, wire handler imports, run full test suite: 48/48 passing)
+  - Status: 7 tasks completed, 48 unit tests, 100% pass rate, file locking with RLock+fcntl, daily limits with zero semantics (0=disabled, -1=unlimited), admin exemption, atomic writes
 
-- [x] **03-02-PLAN.md** — Extract wl_approval.py, wl_notify.py, and concurrency tests (Layer 4, Wave 2) — COMPLETED
+- [x] **03-02-PLAN.md** — Extract wl_approval.py and wl_notify.py (Layer 4, Wave 2) — COMPLETED
   - Requirements: BMOD-12, BMOD-13, BMOD-14, BMOD-15, TEST-01, TEST-04
-  - Files: bin/wl_approval.py, bin/wl_notify.py, tests/unit/test_approval.py, tests/unit/test_notify.py, tests/integration/test_approval_chain.py, tests/integration/test_concurrency.py, bin/wl_handler.py
-  - Tasks: 8/8 completed (create wl_approval with 8 exported functions covering queue CRUD, conflict resolution, submission; create wl_notify with admin/analyst notifications; 52 approval unit tests, 16 notify unit tests, 8 integration approval-chain tests, 5 concurrency tests with 10 threads across 5 CSVs; wire handler with adapters for backward compatibility; verify phase completion with 382/382 tests passing)
-  - Depends on: 03-01 (approval gating checks daily limits, uses wl_filelock for queue locking)
+  - Status: 8 tasks completed, 382 tests passing (356 unit + 26 integration), approval queue CRUD, conflict resolution, dual-admin workflows, notifications, concurrency tests
 
-- [x] **03-03-PLAN.md** — Gap Closure: Notifications Wiring and Function Size Compliance (Wave 2 closure) — COMPLETED
+- [x] **03-03-PLAN.md** — Gap Closure: Notifications Wiring (Wave 2 closure) — COMPLETED
   - Requirements: BMOD-12, BMOD-13
-  - Files: bin/wl_approval.py (refactored), tests/unit/test_approval.py, tests/integration/test_approval_chain.py
-  - Tasks: 6/6 completed (extract _validate_submission_inputs helper, extract _create_queue_entry helper, refactor submit_approval 111→97 lines, wire notify_admins in submit_approval, wire notify_analyst in cancel_conflicts, verify BMOD-13 compliance: all functions ≤100 lines, CC<15; all 51 tests passing)
-  - Depends on: 03-02 (refactors existing wl_approval module to close integration gap)
+  - Status: 6 tasks completed, wl_notify integrated into submit_approval and cancel_conflicts, all functions ≤100 lines, CC<15
 
 **Wave Structure:**
 - **Wave 1:** 03-01 (wl_filelock + wl_limits) — foundation for file locking and approval gating
@@ -179,12 +176,35 @@
 
 **Success Criteria** (what must be TRUE when phase completes):
 1. User can perform all CSV operations (load, edit, save, revert, add rule, delete rule, approve) with zero functional change
-2. wl_handler.py is rewritten as a thin router (~200 lines): action dispatchers call domain modules instead of monolithic inline code
+2. wl_handler.py is rewritten as a thin router (~200-250 lines): action dispatchers call domain modules instead of monolithic inline code
 3. All 15+ REST action handlers (get_csv, save_csv, add_rule, delete_rule, process_approval, etc.) are tested with live Splunk container
 4. Integration tests verify all action → module call → audit event chain works end-to-end
 5. Existing API contract preserved: no request/response shape changes; audit.xml dashboard continues working
 
-**Plans:** TBD
+**Plans:** 3 plans in 3 waves
+
+- [ ] **04-01-PLAN.md** — Create wl_replay.py (Layer 5) and implement GET handlers (Wave 1)
+  - Requirements: BMOD-01, TEST-02
+  - Files: bin/wl_replay.py, bin/wl_handler.py (dispatch tables, GET handlers), tests/integration/test_handler_dispatch.py, tests/unit/test_replay.py
+  - Tasks: 3 (create wl_replay module with execute_approved_action, implement dispatch tables and GET handlers, create dispatch + replay tests)
+  - Depends on: none (Wave 1 sets up foundation)
+
+- [ ] **04-02-PLAN.md** — Implement simple POST handlers (Wave 2)
+  - Requirements: BMOD-01
+  - Files: bin/wl_handler.py (simple POST handlers), bin/wl_wrapper.py (merge/delete), tests/integration/test_handler_simple_post.py
+  - Tasks: 3 (implement 6+ stateless POST handlers, analyze and merge/delete wl_wrapper.py, create simple POST tests)
+  - Depends on: 04-01 (dispatch table pattern established)
+
+- [ ] **04-03-PLAN.md** — Implement complex POST handlers and Docker smoke tests (Wave 3)
+  - Requirements: BMOD-01, TEST-02
+  - Files: bin/wl_handler.py (complex POST handlers), bin/wl_expiration_cleanup.py, bin/wl_expiring_soon.py, tests/integration/test_handler_complex_post.py, tests/integration/test_docker_handler_smoke.py
+  - Tasks: 4 (implement 8+ complex POST handlers with pipelines and approval gating, wire wl_approval/wl_replay integration, update scripts to use modules, create mock and Docker tests)
+  - Depends on: 04-02 (simple POST pattern established)
+
+**Wave Structure:**
+- **Wave 1:** 04-01 (wl_replay, dispatch tables, GET handlers) — foundation for handler refactoring
+- **Wave 2:** 04-02 (simple POST handlers, wl_wrapper merge/delete) — builds on dispatch pattern
+- **Wave 3:** 04-03 (complex POST handlers, approval gating, scripts, Docker tests) — full integration with approval/replay, backward compatibility validation
 
 ---
 
@@ -271,9 +291,9 @@
 | Phase | Plans | Status | Started | Completed |
 |-------|-------|--------|---------|-----------|
 | 1. Backend Foundation | 4 plans | Complete ✓ | — | — |
-| 2. Backend Core Domain | 4 core + 2 gap | Complete ✓ | — | — |
-| 3. Backend Orchestration | 2 plans | Complete ✓ (03-01 ✓, 03-02 ✓) | — | 2026-04-01 |
-| 4. Backend Integration | TBD | Not started | — | — |
+| 2. Backend Core Domain | 6 plans | Complete ✓ | — | — |
+| 3. Backend Orchestration | 3 plans | Complete ✓ | — | 2026-04-01 |
+| 4. Backend Integration | 3 plans | Planning ✓ | — | — |
 | 5. Frontend Architecture | TBD | Not started | — | — |
 | 6. Admin Panel | TBD | Not started | — | — |
 | 7. Test Coverage & Validation | TBD | Not started | — | — |
@@ -291,5 +311,5 @@
 - **Phase 1 complete:** 4 executable plans with 2-wave structure, all passing tests, ready for Phase 2
 - **Phase 2 core complete:** 4 executable plans with 3-wave structure, 5 modules extracted, 132/132 tests passing
 - **Phase 2 gap closure:** Plans 02-05 and 02-06 executed to refactor oversized functions (compute_diff 207→4 funcs, move_to_trash 139→3 funcs, restore_from_trash 187→dispatcher+helpers) to satisfy BMOD-13 requirement
-- **Phase 3 plan 03-01 complete:** Extracted wl_filelock.py (100 lines) and wl_limits.py (360+ lines) with 48 unit tests (17 filelock, 31 limits), 100% pass rate, covering file locking with RLock + fcntl.flock (Unix) and Windows no-op, daily limits with zero semantics (0=disabled, -1=unlimited, N=limit), admin exemption via RBAC, atomic writes, and fail-closed error handling. RESET_ALL_USERS sentinel added to wl_constants.py. Imports wired into wl_handler.py (no functional changes, full integration deferred to Phase 4).
-- **Phase 3 plan 03-02 complete:** Extracted wl_approval.py (187 statements, 91% coverage, 8 exported functions covering approval queue CRUD, conflict detection/cancellation, dual-admin workflows) and integrated with wl_handler.py via adapter functions maintaining backward compatibility. Created 68 new tests (52 approval unit + 16 notify unit) and executed full integration suite: 382 tests passing (356 unit + 26 integration, 1 skipped), 28% overall coverage. Concurrency tests with 10 threads across 5 different CSVs, read-while-write mixing, and lock-ordering validation all passing. Phase 3 COMPLETE (both 03-01 and 03-02 executed).
+- **Phase 3 complete:** 3 plans executed (03-01, 03-02, 03-03), 4 orchestration modules extracted (wl_filelock, wl_limits, wl_approval, wl_notify), 382+ tests passing, approval queue with conflict resolution and notifications fully integrated
+- **Phase 4 planning complete:** 3 executable plans with 3-wave structure designed (04-01 dispatch/GET handlers, 04-02 simple POST, 04-03 complex POST/Docker tests), wl_replay.py Layer 5 module architecture defined, all locked decisions from CONTEXT.md incorporated, ready for execution
