@@ -3505,6 +3505,118 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         return result
 
+    def _fail_approval_request(self, request, queue, target, admin_user,
+                                fail_reason, extra_evt=None, notify=True,
+                                status_code=409):
+        """Mark an approval request as failed: update queue, audit, optionally notify.
+
+        Centralizes the repeated pattern of failing an approval request.
+
+        Args:
+            request: Splunk request object (for audit posting).
+            queue: The approval queue list (mutated in place).
+            target: The queue entry to fail (mutated in place).
+            admin_user: Admin performing the action.
+            fail_reason: Human-readable failure reason.
+            extra_evt: Optional dict of additional audit event fields.
+            notify: Whether to send notification to analyst (default True).
+            status_code: HTTP status code for response (default 409).
+
+        Returns:
+            HTTP response dict via self._resp().
+        """
+        now = int(time.time())
+        target["status"] = "failed"
+        target["resolved_by"] = admin_user
+        target["resolved_at"] = now
+        target["rejection_reason"] = fail_reason
+        _write_approval_queue(queue)
+
+        evt = {
+            "timestamp": now, "analyst": admin_user,
+            "action": "request_failed", "status": "failed",
+            "detection_rule": target.get("detection_rule", ""),
+            "csv_file": target.get("csv_file", ""),
+            "app_context": target.get("app_context", ""),
+            "request_id": target.get("request_id", ""),
+            "requester": target.get("analyst", ""),
+            "approval_action_type": target.get("action_type", ""),
+            "failure_reason": fail_reason,
+            "comment": "{} failed to approve {} request created by {}".format(
+                admin_user, target.get("action_type", "").replace("_", " "),
+                target.get("analyst", "")),
+        }
+        evt.update(self._extract_request_reasons(
+            target.get("action_type", ""), target.get("payload", {})))
+        if extra_evt:
+            evt.update(extra_evt)
+        self._index_audit(request, evt)
+
+        if notify:
+            _add_notification(
+                target["analyst"], "rejected",
+                "Your {} request failed: {}".format(
+                    target["action_type"].replace("_", " "), fail_reason),
+                target["request_id"],
+                {"csv_file": target.get("csv_file", ""),
+                 "detection_rule": target.get("detection_rule", ""),
+                 "action_type": target.get("action_type", "")})
+
+        return self._resp(status_code, {
+            "error": fail_reason,
+            "request_id": target.get("request_id", ""),
+        })
+
+    def _approve_request(self, request, queue, target, admin_user,
+                          admin_comment="", extra_evt=None):
+        """Mark an approval request as approved: update queue, audit, notify.
+
+        Centralizes the repeated pattern of approving a request
+        (appeared 5 times in _process_approval_inner).
+
+        Args:
+            request: Splunk request object (for audit posting).
+            queue: The approval queue list (mutated in place).
+            target: The queue entry to approve (mutated in place).
+            admin_user: Admin performing the action.
+            admin_comment: Optional admin comment.
+            extra_evt: Optional dict of additional audit event fields.
+        """
+        now = int(time.time())
+        target["status"] = "approved"
+        target["resolved_by"] = admin_user
+        target["resolved_at"] = now
+        target["admin_comment"] = admin_comment if admin_comment else "Approved"
+        _write_approval_queue(queue)
+
+        evt = {
+            "timestamp": now, "analyst": admin_user,
+            "action": "request_approved", "status": "approved",
+            "detection_rule": target.get("detection_rule", ""),
+            "csv_file": target.get("csv_file", ""),
+            "app_context": target.get("app_context", ""),
+            "request_id": target.get("request_id", ""),
+            "requester": target.get("analyst", ""),
+            "approval_action_type": target.get("action_type", ""),
+            "comment": "{} approved {} request created by {}".format(
+                admin_user, target.get("action_type", "").replace("_", " "),
+                target.get("analyst", "")),
+        }
+        evt.update(self._extract_request_reasons(
+            target.get("action_type", ""), target.get("payload", {})))
+        if extra_evt:
+            evt.update(extra_evt)
+        self._index_audit(request, evt)
+
+        _add_notification(
+            target["analyst"], "approved",
+            "Your {} request was approved by {}".format(
+                target["action_type"].replace("_", " "), admin_user),
+            target["request_id"],
+            {"csv_file": target.get("csv_file", ""),
+             "detection_rule": target.get("detection_rule", ""),
+             "action_type": target.get("action_type", "")})
+
     def _process_approval_inner(self, request, payload, admin_user):
         request_id = payload.get("request_id", "")
         decision = payload.get("decision", "")
@@ -3669,28 +3781,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 if os.path.isfile(fallback) and safe_realpath(fallback, APPS_DIR):
                     path = safe_realpath(fallback, APPS_DIR)
             if path is None:
-                target["status"] = "failed"
-                target["resolved_by"] = admin_user
-                target["resolved_at"] = now
-                target["rejection_reason"] = "CSV file no longer exists"
-                _write_approval_queue(queue)
-                _failed_evt = {
-                    "timestamp": now, "analyst": admin_user,
-                    "action": "request_failed", "status": "failed",
-                    "detection_rule": target["detection_rule"],
-                    "csv_file": csv_file, "app_context": app_context,
-                    "request_id": request_id,
-                    "requester": target["analyst"],
-                    "approval_action_type": action_type,
-                    "failure_reason": "CSV file no longer exists",
-                    "comment": "{} failed to approve {} request created by {}".format(
-                        admin_user, action_type.replace("_", " "),
-                        target["analyst"]),
-                }
-                _failed_evt.update(self._extract_request_reasons(
-                    action_type, target.get("payload", {})))
-                self._index_audit(request, _failed_evt)
-                return self._resp(404, {"error": "CSV file not found"})
+                return self._fail_approval_request(
+                    request, queue, target, admin_user,
+                    "CSV file no longer exists",
+                    notify=False, status_code=404)
 
             # Read current CSV state and build a fresh payload
             cur_headers, cur_rows = read_csv(path)
@@ -3729,41 +3823,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                                 actual_count, requested_count)
                             if actual_count > 0
                             else "Locked rows no longer found in CSV")
-                target["status"] = "failed"
-                target["resolved_by"] = admin_user
-                target["resolved_at"] = now
-                target["rejection_reason"] = fail_msg
-                _write_approval_queue(queue)
-                _failed_evt = {
-                    "timestamp": now, "analyst": admin_user,
-                    "action": "request_failed", "status": "failed",
-                    "detection_rule": target["detection_rule"],
-                    "csv_file": csv_file, "app_context": app_context,
-                    "request_id": request_id,
-                    "requester": target["analyst"],
-                    "approval_action_type": action_type,
-                    "failure_reason": fail_msg,
-                    "requested_count": requested_count,
-                    "actual_count": actual_count,
-                    "comment": "{} failed to approve {} request created by {}".format(
-                        admin_user, action_type.replace("_", " "),
-                        target["analyst"]),
-                }
-                _failed_evt.update(self._extract_request_reasons(
-                    action_type, stored_payload))
-                self._index_audit(request, _failed_evt)
-                _add_notification(
-                    target["analyst"], "rejected",
-                    "Your {} request failed: {}".format(
-                        action_type.replace("_", " "), fail_msg),
-                    request_id,
-                    {"csv_file": csv_file,
-                     "detection_rule": target["detection_rule"],
-                     "action_type": action_type})
-                return self._resp(409, {
-                    "error": fail_msg,
-                    "request_id": request_id,
-                })
+                return self._fail_approval_request(
+                    request, queue, target, admin_user, fail_msg,
+                    extra_evt={"requested_count": requested_count,
+                               "actual_count": actual_count})
 
             replay_payload = {
                 "action": "save_csv",
@@ -3782,34 +3845,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         elif action_type == "column_removal":
             col_name = hl.get("column_name", "")
             if col_name not in cur_headers:
-                target["status"] = "failed"
-                target["resolved_by"] = admin_user
-                target["resolved_at"] = now
-                target["rejection_reason"] = (
-                    "Column '{}' no longer exists".format(col_name))
-                _write_approval_queue(queue)
-                _failed_evt = {
-                    "timestamp": now, "analyst": admin_user,
-                    "action": "request_failed", "status": "failed",
-                    "detection_rule": target["detection_rule"],
-                    "csv_file": csv_file, "app_context": app_context,
-                    "request_id": request_id,
-                    "requester": target["analyst"],
-                    "approval_action_type": action_type,
-                    "failure_reason": "Column '{}' no longer exists".format(
-                        col_name),
-                    "comment": "{} failed to approve {} request created by {}".format(
-                        admin_user, action_type.replace("_", " "),
-                        target["analyst"]),
-                }
-                _failed_evt.update(self._extract_request_reasons(
-                    action_type, stored_payload))
-                self._index_audit(request, _failed_evt)
-                return self._resp(409, {
-                    "error": "Column '{}' no longer exists in the CSV."
-                             .format(col_name),
-                    "request_id": request_id,
-                })
+                return self._fail_approval_request(
+                    request, queue, target, admin_user,
+                    "Column '{}' no longer exists".format(col_name),
+                    notify=False)
             new_h = [h for h in cur_headers if h != col_name]
             new_r = [{k: v for k, v in row.items() if k != col_name}
                      for row in cur_rows]
@@ -3858,34 +3897,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             new_rows_to_add.reverse()  # restore original order
 
             if not new_rows_to_add:
-                target["status"] = "failed"
-                target["resolved_by"] = admin_user
-                target["resolved_at"] = now
-                target["rejection_reason"] = (
-                    "New rows could not be identified from stored payload")
-                _write_approval_queue(queue)
-                _failed_evt = {
-                    "timestamp": now, "analyst": admin_user,
-                    "action": "request_failed", "status": "failed",
-                    "detection_rule": target["detection_rule"],
-                    "csv_file": csv_file, "app_context": app_context,
-                    "request_id": request_id,
-                    "requester": target["analyst"],
-                    "approval_action_type": action_type,
-                    "failure_reason": (
-                        "New rows could not be identified from stored payload"),
-                    "comment": "{} failed to approve {} request created by {}".format(
-                        admin_user, action_type.replace("_", " "),
-                        target["analyst"]),
-                }
-                _failed_evt.update(self._extract_request_reasons(
-                    action_type, stored_payload))
-                self._index_audit(request, _failed_evt)
-                return self._resp(409, {
-                    "error": "The rows from this request could not be "
-                             "identified. Request has been marked as failed.",
-                    "request_id": request_id,
-                })
+                return self._fail_approval_request(
+                    request, queue, target, admin_user,
+                    "New rows could not be identified from stored payload",
+                    notify=False)
 
             # Check for duplicates — rows that already exist in current CSV
             cur_key_counts = Counter(
@@ -3901,35 +3916,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 dup_fail_msg = ("{} of {} rows already exist in CSV. "
                                 "CSV was modified since submission.".format(
                                     dup_count, len(new_rows_to_add)))
-                target["status"] = "failed"
-                target["resolved_by"] = admin_user
-                target["resolved_at"] = now
-                target["rejection_reason"] = dup_fail_msg
-                _write_approval_queue(queue)
-                self._index_audit(request, {
-                    "timestamp": now, "analyst": admin_user,
-                    "action": "request_failed", "status": "failed",
-                    "detection_rule": target["detection_rule"],
-                    "csv_file": csv_file, "app_context": app_context,
-                    "request_id": request_id,
-                    "requester": target["analyst"],
-                    "approval_action_type": action_type,
-                    "failure_reason": dup_fail_msg,
-                    "duplicate_count": dup_count,
-                    "comment": dup_fail_msg,
-                })
-                _add_notification(
-                    target["analyst"], "rejected",
-                    "Your {} request failed: {}".format(
-                        action_type.replace("_", " "), dup_fail_msg),
-                    request_id,
-                    {"csv_file": csv_file,
-                     "detection_rule": target["detection_rule"],
-                     "action_type": action_type})
-                return self._resp(409, {
-                    "error": dup_fail_msg,
-                    "request_id": request_id,
-                })
+                return self._fail_approval_request(
+                    request, queue, target, admin_user, dup_fail_msg,
+                    extra_evt={"duplicate_count": dup_count})
 
             # Merge headers — use current CSV headers, add any new ones
             # from the stored payload that don't already exist
@@ -4050,34 +4039,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             locked_counts = Counter(json.dumps(rk) for rk in row_keys)
 
             if edit_col not in cur_headers:
-                target["status"] = "failed"
-                target["resolved_by"] = admin_user
-                target["resolved_at"] = now
-                target["rejection_reason"] = (
-                    "Column '{}' no longer exists".format(edit_col))
-                _write_approval_queue(queue)
-                _failed_evt = {
-                    "timestamp": now, "analyst": admin_user,
-                    "action": "request_failed", "status": "failed",
-                    "detection_rule": target["detection_rule"],
-                    "csv_file": csv_file, "app_context": app_context,
-                    "request_id": request_id,
-                    "requester": target["analyst"],
-                    "approval_action_type": action_type,
-                    "failure_reason": "Column '{}' no longer exists".format(
-                        edit_col),
-                    "comment": "{} failed to approve {} request created by {}".format(
-                        admin_user, action_type.replace("_", " "),
-                        target["analyst"]),
-                }
-                _failed_evt.update(self._extract_request_reasons(
-                    action_type, stored_payload))
-                self._index_audit(request, _failed_evt)
-                return self._resp(409, {
-                    "error": "Column '{}' no longer exists in the CSV."
-                             .format(edit_col),
-                    "request_id": request_id,
-                })
+                return self._fail_approval_request(
+                    request, queue, target, admin_user,
+                    "Column '{}' no longer exists".format(edit_col),
+                    notify=False)
 
             # Apply edit to matching rows
             edited_count = 0
@@ -4098,41 +4063,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                                  .format(edited_count, edit_requested)
                                  if edited_count > 0
                                  else "Target rows no longer found in CSV")
-                target["status"] = "failed"
-                target["resolved_by"] = admin_user
-                target["resolved_at"] = now
-                target["rejection_reason"] = edit_fail_msg
-                _write_approval_queue(queue)
-                _failed_evt = {
-                    "timestamp": now, "analyst": admin_user,
-                    "action": "request_failed", "status": "failed",
-                    "detection_rule": target["detection_rule"],
-                    "csv_file": csv_file, "app_context": app_context,
-                    "request_id": request_id,
-                    "requester": target["analyst"],
-                    "approval_action_type": action_type,
-                    "failure_reason": edit_fail_msg,
-                    "requested_count": edit_requested,
-                    "actual_count": edited_count,
-                    "comment": "{} failed to approve {} request created by {}".format(
-                        admin_user, action_type.replace("_", " "),
-                        target["analyst"]),
-                }
-                _failed_evt.update(self._extract_request_reasons(
-                    action_type, stored_payload))
-                self._index_audit(request, _failed_evt)
-                _add_notification(
-                    target["analyst"], "rejected",
-                    "Your {} request failed: {}".format(
-                        action_type.replace("_", " "), edit_fail_msg),
-                    request_id,
-                    {"csv_file": csv_file,
-                     "detection_rule": target["detection_rule"],
-                     "action_type": action_type})
-                return self._resp(409, {
-                    "error": edit_fail_msg,
-                    "request_id": request_id,
-                })
+                return self._fail_approval_request(
+                    request, queue, target, admin_user, edit_fail_msg,
+                    extra_evt={"requested_count": edit_requested,
+                               "actual_count": edited_count})
 
             replay_payload = {
                 "action": "save_csv",
@@ -4248,36 +4182,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
             if not replay_result.get("success"):
                 fail_reason = replay_result.get("error", "Unknown error")
-                target["status"] = "failed"
-                target["resolved_by"] = admin_user
-                target["resolved_at"] = now
-                target["rejection_reason"] = "Execution failed: " + fail_reason
-                _write_approval_queue(queue)
-                self._index_audit(request, {
-                    "timestamp": now, "analyst": admin_user,
-                    "action": "request_failed", "status": "failed",
-                    "detection_rule": target["detection_rule"],
-                    "csv_file": csv_file, "app_context": app_context,
-                    "request_id": request_id,
-                    "requester": target["analyst"],
-                    "approval_action_type": action_type,
-                    "failure_reason": "Execution failed: " + fail_reason,
-                    "comment": "{} failed to execute {} request by {}".format(
-                        admin_user, action_type.replace("_", " "),
-                        target["analyst"]),
-                })
-                _add_notification(
-                    target["analyst"], "rejected",
-                    "Your {} request failed: {}".format(
-                        action_type.replace("_", " "), fail_reason),
-                    request_id,
-                    {"csv_file": csv_file,
-                     "detection_rule": target["detection_rule"],
-                     "action_type": action_type})
-                return self._resp(409, {
-                    "error": "Approval execution failed: " + fail_reason,
-                    "request_id": request_id,
-                })
+                return self._fail_approval_request(
+                    request, queue, target, admin_user,
+                    "Execution failed: " + fail_reason)
 
             # Mark as approved
             target["status"] = "approved"
