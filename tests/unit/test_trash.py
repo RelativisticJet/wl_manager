@@ -24,6 +24,7 @@ from wl_trash import (
     move_to_trash,
     list_trash,
     restore_from_trash,
+    restore_from_trash_pipeline,
     purge_trash_item,
     auto_cleanup_trash,
     get_trash_dir,
@@ -375,3 +376,73 @@ class TestAutoCleanupTrash:
             count = auto_cleanup_trash()
 
         assert count == 0
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Pipeline Tests
+# ════════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+class TestRestoreFromTrashPipeline:
+    """Tests for restore_from_trash_pipeline."""
+
+    @patch("wl_audit.post_audit_event")
+    @patch("wl_audit.build_audit_event", return_value={"action": "restored"})
+    @patch("wl_trash.restore_from_trash")
+    def test_restore_csv_success(self, mock_restore, mock_build, mock_post):
+        """Successful CSV restoration returns structured result and posts audit."""
+        mock_restore.return_value = (
+            {"item_type": "csv", "name": "DR1.csv", "rule_name": "rule1"},
+            ""
+        )
+
+        result = restore_from_trash_pipeline(
+            "DR1__csv__20260402", "admin", "sess123", comment="restoring")
+
+        assert result["success"] is True
+        assert "DR1.csv" in result["message"]
+        assert result["data"]["item_type"] == "csv"
+        assert result["data"]["item_name"] == "DR1.csv"
+        mock_post.assert_called_once()
+
+    @patch("wl_audit.post_audit_event")
+    @patch("wl_audit.build_audit_event", return_value={"action": "restored"})
+    @patch("wl_trash.restore_from_trash")
+    def test_restore_rule_success(self, mock_restore, mock_build, mock_post):
+        """Successful rule restoration."""
+        mock_restore.return_value = (
+            {"item_type": "rule", "name": "my_rule", "rule_name": ""},
+            ""
+        )
+
+        result = restore_from_trash_pipeline(
+            "my_rule__rule__20260402", "admin", "sess123")
+
+        assert result["success"] is True
+        assert "RULE" in result["message"]
+        mock_post.assert_called_once()
+
+    @patch("wl_trash.restore_from_trash")
+    def test_restore_not_found(self, mock_restore):
+        """Restore non-existent item returns error."""
+        mock_restore.return_value = ({}, "Trash item not found")
+
+        result = restore_from_trash_pipeline(
+            "ghost__csv__20260402", "admin", "sess123")
+
+        assert result["success"] is False
+        assert "not found" in result["error"]
+
+    @patch("wl_trash.restore_from_trash")
+    def test_restore_conflict(self, mock_restore):
+        """Restore with name conflict returns error."""
+        mock_restore.return_value = (
+            {"item_type": "csv", "name": "DR1.csv"},
+            "Cannot restore: 'DR1.csv' already exists."
+        )
+
+        result = restore_from_trash_pipeline(
+            "DR1__csv__20260402", "admin", "sess123")
+
+        assert result["success"] is False
+        assert "already exists" in result["error"]

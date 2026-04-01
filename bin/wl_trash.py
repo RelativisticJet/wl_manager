@@ -38,6 +38,7 @@ __all__ = [
     'move_to_trash',
     'list_trash',
     'restore_from_trash',
+    'restore_from_trash_pipeline',
     'purge_trash_item',
     'auto_cleanup_trash',
     'get_trash_dir',
@@ -692,3 +693,73 @@ def auto_cleanup_trash() -> int:
         return purged
     except Exception:
         return 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Pipeline Functions (Layer 3 orchestration)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def restore_from_trash_pipeline(
+    item_id: str,
+    analyst: str,
+    session_key: str,
+    comment: str = "",
+) -> Dict:
+    """
+    Restore item from trash with audit event posting.
+
+    Wraps restore_from_trash with structured return and audit trail.
+
+    The handler retains responsibility for:
+    - Input validation
+    - RBAC checks
+    - Response formatting
+
+    Args:
+        item_id: Trash item identifier.
+        analyst: Username performing the restore.
+        session_key: Splunk session key for audit posting.
+        comment: Optional reason for restoration.
+
+    Returns:
+        Dict with keys:
+        - success: bool
+        - message: str — Human-readable status
+        - error: str — Error description if success=False
+        - data: dict — {item_type, item_name} on success
+    """
+    from wl_audit import build_audit_event, post_audit_event
+
+    meta, error = restore_from_trash(item_id)
+    if error:
+        return {
+            "success": False,
+            "message": "",
+            "error": error,
+            "data": {},
+        }
+
+    item_type = meta.get("item_type", "")
+    item_name = meta.get("name", "")
+
+    evt = build_audit_event(
+        action="restored",
+        analyst=analyst,
+        detection_rule=meta.get("rule_name", "") if item_type == "csv" else item_name,
+        csv_file=item_name if item_type == "csv" else "",
+        comment=comment or "Restored from trash",
+        item_type=item_type,
+        trash_id=item_id,
+    )
+    post_audit_event(session_key, evt)
+
+    return {
+        "success": True,
+        "message": "{} '{}' restored from trash".format(
+            item_type.upper(), item_name),
+        "error": "",
+        "data": {
+            "item_type": item_type,
+            "item_name": item_name,
+        },
+    }

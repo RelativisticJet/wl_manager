@@ -127,11 +127,13 @@ from wl_csv import (
 # Layer 3: Detection Rules Registry (imported from wl_rules module)
 # ---------------------------------------------------------------------------
 from wl_rules import (read_rules_registry, write_rules_registry, read_csv_mapping,
-                      get_rule_csv_file, get_rule_for_csv, create_rule_pipeline)
+                      get_rule_csv_file, get_rule_for_csv, create_rule_pipeline,
+                      delete_rule_pipeline, delete_csv_pipeline)
 
 # Layer 3: Trash Management (imported from wl_trash module)
 # ---------------------------------------------------------------------------
-from wl_trash import move_to_trash, list_trash, restore_from_trash, purge_trash_item, auto_cleanup_trash
+from wl_trash import (move_to_trash, list_trash, restore_from_trash,
+                      restore_from_trash_pipeline, purge_trash_item, auto_cleanup_trash)
 
 # ---------------------------------------------------------------------------
 # Layer 3: Version Snapshots & Manifest (imported from wl_versions module)
@@ -1500,12 +1502,150 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         return self._resp(200, result)
 
     def _action_remove_csv(self, request, payload, user, roles):
-        """POST action wrapper for remove_csv."""
-        return self._remove_csv(request, payload, user)
+        """POST action wrapper for remove_csv — delegates to delete_csv_pipeline."""
+        csv_file = (payload.get("csv_file") or "").strip()
+        rule_name = (payload.get("rule_name") or "").strip()
+        removal_type = payload.get("removal_type", "")
+        comment = (payload.get("comment") or "").strip()[:500]
+
+        if not csv_file:
+            return self._resp(400, {"error": "csv_file is required"})
+        if not is_safe_filename(csv_file):
+            return self._resp(400, {"error": "Invalid CSV filename"})
+        if removal_type not in ("unlink", "permanent"):
+            return self._resp(400, {
+                "error": "removal_type must be 'unlink' or 'permanent'"})
+        if not comment:
+            return self._resp(400, {"error": "A reason is required"})
+
+        # Admin daily limit for CSV deletion (soft delete)
+        if removal_type == "permanent":
+            if is_admin(roles) and not is_superadmin(roles):
+                allowed, current, maximum = _check_admin_daily_limit(
+                    user, "csv_deletion")
+                if not allowed:
+                    return self._resp(429, {
+                        "error": _daily_limit_error_msg(
+                            "csv_deletion", 1, current, maximum,
+                            contact="your super-admin"),
+                        "limit_type": "admin_csv_deletion",
+                        "current": current,
+                        "maximum": maximum,
+                        "disabled": maximum == 0,
+                    })
+
+        # Call pipeline
+        result = delete_csv_pipeline(
+            csv_file, removal_type, comment, user,
+            self.sessionKey, rule_name=rule_name)
+
+        if not result.get("success"):
+            return self._resp(404, {"error": result.get("error", "Delete failed")})
+
+        data = result.get("data", {})
+        resolved_rule = data.get("rule_name", rule_name)
+
+        # Auto-cancel pending approval requests
+        with _approval_queue_lock():
+            queue = _read_approval_queue()
+            if data.get("rule_also_removed"):
+                _cancel_conflicting_requests(
+                    queue, resolved_rule, "", "remove_rule", "",
+                    lambda evt: self._index_audit(request, evt))
+            else:
+                _cancel_conflicting_requests(
+                    queue, resolved_rule, csv_file, "remove_csv", "",
+                    lambda evt: self._index_audit(request, evt))
+
+        # Increment admin daily limit counter
+        if data.get("trashed"):
+            if is_admin(roles) and not is_superadmin(roles):
+                _increment_admin_daily_limit(user, "csv_deletion")
+
+        return self._resp(200, {
+            "success": True,
+            "message": result.get("message", ""),
+            "rule_also_removed": data.get("rule_also_removed", False),
+            "trashed": data.get("trashed", False),
+            "trash_id": data.get("trash_id", ""),
+        })
 
     def _action_remove_rule(self, request, payload, user, roles):
-        """POST action wrapper for remove_rule."""
-        return self._remove_rule(request, payload, user)
+        """POST action wrapper for remove_rule — delegates to delete_rule_pipeline."""
+        rule_name = (payload.get("rule_name") or "").strip()
+        removal_type = payload.get("removal_type", "")
+        comment = (payload.get("comment") or "").strip()[:500]
+
+        if not rule_name:
+            return self._resp(400, {"error": "rule_name is required"})
+        if removal_type not in ("unlink", "permanent"):
+            return self._resp(400, {
+                "error": "removal_type must be 'unlink' or 'permanent'"})
+        if not comment:
+            return self._resp(400, {"error": "A reason is required"})
+
+        # Admin daily limit for rule deletion
+        if removal_type == "permanent":
+            if is_admin(roles) and not is_superadmin(roles):
+                allowed, current, maximum = _check_admin_daily_limit(
+                    user, "rule_deletion")
+                if not allowed:
+                    return self._resp(429, {
+                        "error": _daily_limit_error_msg(
+                            "rule_deletion", 1, current, maximum,
+                            contact="your super-admin"),
+                        "limit_type": "admin_rule_deletion",
+                        "current": current,
+                        "maximum": maximum,
+                        "disabled": maximum == 0,
+                    })
+
+        # Dual-admin check for rules with 3+ CSVs
+        _from_dual = payload.get("_from_dual_approval", False)
+        if removal_type == "permanent" and not _from_dual:
+            _is_superadmin = bool(roles.intersection(SUPERADMIN_ROLES))
+            mapping = self._read_mapping()
+            affected_csvs = [e["csv_file"] for e in mapping
+                             if e.get("rule_name") == rule_name]
+            csv_count = len(affected_csvs)
+            if csv_count >= 3 and not _is_superadmin:
+                return self._resp(403, {
+                    "error": "Deleting rule '{}' with {} CSV files "
+                             "requires a second admin's approval. "
+                             "Please submit via the dual-approval "
+                             "workflow.".format(rule_name, csv_count),
+                    "requires_dual_approval": True,
+                    "csv_count": csv_count,
+                })
+
+        # Call pipeline
+        result = delete_rule_pipeline(
+            rule_name, removal_type, comment, user, self.sessionKey)
+
+        if not result.get("success"):
+            return self._resp(404, {"error": result.get("error", "Delete failed")})
+
+        data = result.get("data", {})
+
+        # Auto-cancel pending approval requests
+        with _approval_queue_lock():
+            queue = _read_approval_queue()
+            _cancel_conflicting_requests(
+                queue, rule_name, "", "remove_rule", "",
+                lambda evt: self._index_audit(request, evt))
+
+        # Increment admin daily limit counter
+        if data.get("trashed"):
+            if is_admin(roles) and not is_superadmin(roles):
+                _increment_admin_daily_limit(user, "rule_deletion")
+
+        return self._resp(200, {
+            "success": True,
+            "message": result.get("message", ""),
+            "affected_csvs": data.get("affected_csvs", []),
+            "trashed": data.get("trashed", False),
+            "trash_id": data.get("trash_id", ""),
+        })
 
     def _action_submit_approval(self, request, payload, user, roles):
         """POST action wrapper for submit_approval."""
@@ -1590,12 +1730,17 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         return self._resp(200, {"success": purged})
 
     def _action_restore_from_trash(self, request, payload, user, roles):
-        """POST action wrapper for restore_from_trash (admin-only)."""
+        """POST action wrapper for restore_from_trash — delegates to pipeline."""
         item_id = payload.get("item_id", "")
-        success, error = restore_from_trash(item_id, payload.get("comment", ""))
-        if not success:
-            return self._resp(400, {"error": error})
-        return self._resp(200, {"success": True})
+        comment = payload.get("comment", "")
+        result = restore_from_trash_pipeline(
+            item_id, user, self.sessionKey, comment=comment)
+        if not result.get("success"):
+            return self._resp(400, {"error": result.get("error", "Restore failed")})
+        return self._resp(200, {
+            "success": True,
+            "data": result.get("data", {}),
+        })
 
     def _action_mark_notifications_read(self, request, payload, user, roles):
         """POST action wrapper for mark_notifications_read."""
@@ -1939,337 +2084,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 csv_filename, len(headers), row_note),
         })
 
-    # ------------------------------------------------------------------
-    # Remove detection rule (unlink or permanent delete)
-    # ------------------------------------------------------------------
-
-    def _remove_rule(self, request, payload, user):
-        rule_name = (payload.get("rule_name") or "").strip()
-        removal_type = payload.get("removal_type", "")
-        comment = (payload.get("comment") or "").strip()[:500]
-
-        if not rule_name:
-            return self._resp(400, {"error": "rule_name is required"})
-        if removal_type not in ("unlink", "permanent"):
-            return self._resp(400, {
-                "error": "removal_type must be 'unlink' or 'permanent'"})
-        if not comment:
-            return self._resp(400, {"error": "A reason is required"})
-
-        # Admin daily limit for rule deletion
-        if removal_type == "permanent":
-            roles = get_roles(request)
-            if is_admin(roles) and \
-               not is_superadmin(roles):
-                allowed, current, maximum = _check_admin_daily_limit(
-                    user, "rule_deletion")
-                if not allowed:
-                    return self._resp(429, {
-                        "error": _daily_limit_error_msg(
-                            "rule_deletion", 1, current, maximum,
-                            contact="your super-admin"),
-                        "limit_type": "admin_rule_deletion",
-                        "current": current,
-                        "maximum": maximum,
-                        "disabled": maximum == 0,
-                    })
-
-        mapping = self._read_mapping()
-        affected_entries = [e for e in mapping
-                           if e.get("rule_name") == rule_name]
-        affected_csvs = [e["csv_file"] for e in affected_entries]
-
-        # ── Dual-admin check for rules with 3+ CSVs ──────────────────
-        # Skip if this is a replay from the dual-approval queue
-        _from_dual = payload.get("_from_dual_approval", False)
-        if removal_type == "permanent" and not _from_dual:
-            roles = get_roles(request) if not hasattr(self, '_remove_rule_roles') else roles
-            is_superadmin = bool(get_roles(request).intersection(
-                SUPERADMIN_ROLES))
-            csv_count = len(affected_csvs)
-
-            # Dual-admin required if rule has 3+ CSVs
-            if csv_count >= 3 and not is_superadmin:
-                return self._resp(403, {
-                    "error": "Deleting rule '{}' with {} CSV files "
-                             "requires a second admin's approval. "
-                             "Please submit via the dual-approval "
-                             "workflow.".format(rule_name, csv_count),
-                    "requires_dual_approval": True,
-                    "csv_count": csv_count,
-                })
-
-        if not affected_csvs:
-            # Check if it's a registered rule without CSVs
-            with _detection_rules_modify():
-                registered = read_rules_registry()
-                if rule_name in registered:
-                    registered.remove(rule_name)
-                    write_rules_registry(registered)
-                evt = build_audit_event(
-                    action="dr_removed",
-                    analyst=user,
-                    detection_rule=rule_name,
-                    csv_file="",
-                    comment=comment,
-                    removal_type=removal_type,
-                    csv_count=0,
-                    csv_files="",
-                )
-                self._index_audit(request, evt)
-                # Auto-cancel pending requests for this rule
-                with _approval_queue_lock():
-                    queue = _read_approval_queue()
-                    _cancel_conflicting_requests(
-                        queue, rule_name, "", "remove_rule", "",
-                        lambda evt: self._index_audit(request, evt))
-                return self._resp(200, {
-                    "success": True,
-                    "message": "Rule '{}' removed (had no CSV files)".format(
-                        rule_name),
-                })
-            return self._resp(404, {
-                "error": "Rule '{}' not found in mapping or registry".format(
-                    rule_name)})
-
-        # Remove matching rows from rule_csv_map.csv
-        new_mapping = [e for e in mapping
-                       if e.get("rule_name") != rule_name]
-        with open(MAPPING_FILE, "w", newline="", encoding="utf-8") as fh:
-            writer = csv.DictWriter(
-                fh, fieldnames=["rule_name", "csv_file", "app_context"],
-                extrasaction="ignore")
-            writer.writeheader()
-            writer.writerows(new_mapping)
-
-        # Also remove from detection rules registry if present
-        with _detection_rules_modify():
-            registered = read_rules_registry()
-            if rule_name in registered:
-                registered.remove(rule_name)
-                write_rules_registry(registered)
-
-        trashed = False
-        trash_id = ""
-        if removal_type == "permanent":
-            # Soft delete: move rule + all CSVs to trash as a bundle
-            associated = [{"csv_file": e["csv_file"],
-                           "app_context": e.get("app_context", "")}
-                          for e in affected_entries]
-            try:
-                trash_id = move_to_trash(
-                    "rule", rule_name, user, comment,
-                    associated_csvs=associated)
-                trashed = True
-            except Exception as exc:
-                _logger.error("Failed to move rule to trash: %s", exc)
-                # Fallback: hard delete individual CSVs
-                for entry in affected_entries:
-                    csv_name = entry["csv_file"]
-                    app_ctx = entry.get("app_context", "")
-                    csv_path = build_csv_path(csv_name, app_ctx)
-                    if csv_path and os.path.isfile(csv_path):
-                        try:
-                            os.remove(csv_path)
-                        except OSError:
-                            pass
-
-        evt = build_audit_event(
-            action="dr_removed",
-            analyst=user,
-            detection_rule=rule_name,
-            csv_file="",
-            comment=comment,
-            removal_type="trashed" if trashed else removal_type,
-            csv_count=len(affected_csvs),
-            csv_files=", ".join(affected_csvs),
-            trash_id=trash_id,
-        )
-        self._index_audit(request, evt)
-
-        # Auto-cancel pending approval requests for this rule
-        with _approval_queue_lock():
-            queue = _read_approval_queue()
-            _cancel_conflicting_requests(
-                queue, rule_name, "", "remove_rule", "",
-                lambda evt: self._index_audit(request, evt))
-
-        if trashed:
-            verb = "moved to trash"
-        elif removal_type == "permanent":
-            verb = "deleted"
-        else:
-            verb = "unlinked"
-
-        msg = "Rule '{}' {} ({} CSV file{})".format(
-            rule_name, verb, len(affected_csvs),
-            "s" if len(affected_csvs) != 1 else "")
-        if trashed:
-            config = _read_trash_config()
-            days = config.get("retention_days",
-                              DEFAULT_TRASH_RETENTION_DAYS)
-            msg += ". Recoverable for {} days.".format(days)
-
-        # Increment admin daily limit counter for rule deletion
-        if trashed:
-            roles_check = get_roles(request)
-            if roles_check.intersection(ADMIN_ROLES) and \
-               not roles_check.intersection(SUPERADMIN_ROLES):
-                _increment_admin_daily_limit(user, "rule_deletion")
-
-        return self._resp(200, {
-            "success": True,
-            "message": msg,
-            "affected_csvs": affected_csvs,
-            "trashed": trashed,
-            "trash_id": trash_id,
-        })
-
-    # ------------------------------------------------------------------
-    # Remove CSV file (unlink or permanent delete)
-    # ------------------------------------------------------------------
-    def _remove_csv(self, request, payload, user):
-        csv_file = (payload.get("csv_file") or "").strip()
-        rule_name = (payload.get("rule_name") or "").strip()
-        removal_type = payload.get("removal_type", "")
-        comment = (payload.get("comment") or "").strip()[:500]
-
-        if not csv_file:
-            return self._resp(400, {"error": "csv_file is required"})
-        if not is_safe_filename(csv_file):
-            return self._resp(400, {"error": "Invalid CSV filename"})
-        if removal_type not in ("unlink", "permanent"):
-            return self._resp(400, {
-                "error": "removal_type must be 'unlink' or 'permanent'"})
-        if not comment:
-            return self._resp(400, {"error": "A reason is required"})
-
-        # Admin daily limit for CSV deletion (soft delete)
-        if removal_type == "permanent":
-            roles = get_roles(request)
-            if is_admin(roles) and \
-               not is_superadmin(roles):
-                allowed, current, maximum = _check_admin_daily_limit(
-                    user, "csv_deletion")
-                if not allowed:
-                    return self._resp(429, {
-                        "error": _daily_limit_error_msg(
-                            "csv_deletion", 1, current, maximum,
-                            contact="your super-admin"),
-                        "limit_type": "admin_csv_deletion",
-                        "current": current,
-                        "maximum": maximum,
-                        "disabled": maximum == 0,
-                    })
-
-        mapping = self._read_mapping()
-
-        # Find the specific entry (capture app_context for cross-app support)
-        found_entry = None
-        for e in mapping:
-            if e.get("csv_file") == csv_file:
-                if not rule_name:
-                    rule_name = e.get("rule_name", "")
-                found_entry = e
-                break
-
-        if not found_entry:
-            return self._resp(404, {
-                "error": "CSV '{}' not found in mapping".format(csv_file)})
-
-        app_context = found_entry.get("app_context", "")
-
-        # Check if this is the last CSV for the rule
-        rule_csvs = [e["csv_file"] for e in mapping
-                     if e.get("rule_name") == rule_name]
-        rule_also_removed = (len(rule_csvs) == 1)
-
-        # Remove the CSV entry from mapping
-        new_mapping = [e for e in mapping
-                       if not (e.get("csv_file") == csv_file
-                               and e.get("rule_name") == rule_name)]
-        with open(MAPPING_FILE, "w", newline="", encoding="utf-8") as fh:
-            writer = csv.DictWriter(
-                fh, fieldnames=["rule_name", "csv_file", "app_context"],
-                extrasaction="ignore")
-            writer.writeheader()
-            writer.writerows(new_mapping)
-
-        trashed = False
-        trash_id = ""
-        if removal_type == "permanent":
-            # Soft delete: move to trash instead of permanent deletion.
-            # Files are recoverable until the retention period expires.
-            try:
-                trash_id = move_to_trash(
-                    "csv", csv_file, user, comment,
-                    app_context=app_context, rule_name=rule_name)
-                trashed = True
-            except Exception as exc:
-                _logger.error("Failed to move CSV to trash: %s", exc)
-                # Fall back — don't leave partial state
-                csv_path = build_csv_path(csv_file, app_context)
-                if csv_path and os.path.isfile(csv_path):
-                    try:
-                        os.remove(csv_path)
-                    except OSError:
-                        pass
-
-        evt = build_audit_event(
-            action="csv_removed",
-            analyst=user,
-            detection_rule=rule_name,
-            csv_file=csv_file,
-            app_context=app_context,
-            comment=comment,
-            removal_type="trashed" if trashed else removal_type,
-            rule_also_removed=rule_also_removed,
-            file_deleted=trashed,
-            trash_id=trash_id,
-        )
-        self._index_audit(request, evt)
-
-        # Auto-cancel pending requests for this CSV (or rule if last CSV)
-        with _approval_queue_lock():
-            queue = _read_approval_queue()
-            if rule_also_removed:
-                _cancel_conflicting_requests(
-                    queue, rule_name, "", "remove_rule", "",
-                    lambda evt: self._index_audit(request, evt))
-            else:
-                _cancel_conflicting_requests(
-                    queue, rule_name, csv_file, "remove_csv", "",
-                    lambda evt: self._index_audit(request, evt))
-
-        if trashed:
-            verb = "moved to trash"
-        elif removal_type == "permanent":
-            verb = "deleted"
-        else:
-            verb = "unlinked"
-        msg = "CSV '{}' {}".format(csv_file, verb)
-        if rule_also_removed:
-            msg += " (last CSV — rule '{}' also removed)".format(rule_name)
-        if trashed:
-            config = _read_trash_config()
-            days = config.get("retention_days",
-                              DEFAULT_TRASH_RETENTION_DAYS)
-            msg += ". Recoverable for {} days.".format(days)
-
-        # Increment admin daily limit counter for CSV deletion
-        if trashed:
-            roles = get_roles(request)
-            if is_admin(roles) and \
-               not is_superadmin(roles):
-                _increment_admin_daily_limit(user, "csv_deletion")
-
-        return self._resp(200, {
-            "success": True,
-            "message": msg,
-            "rule_also_removed": rule_also_removed,
-            "trashed": trashed,
-            "trash_id": trash_id,
-        })
+    # _remove_rule and _remove_csv extracted to delete_rule_pipeline
+    # and delete_csv_pipeline in wl_rules.py (Plan 04-07)
 
     def _save_csv(self, request, payload, user, _from_approval=False):
         csv_file = payload.get("csv_file", "")
@@ -3596,8 +3412,16 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     admin_user, meta.get("rule_name", "")),
                 "_from_dual_approval": True,
             }
-            exec_result = self._remove_rule(
-                request, exec_payload, target["analyst"])
+            pipeline_result = delete_rule_pipeline(
+                exec_payload["rule_name"],
+                exec_payload["removal_type"],
+                exec_payload["comment"],
+                target["analyst"],
+                self.sessionKey)
+            exec_result = self._resp(
+                200 if pipeline_result.get("success") else 400,
+                pipeline_result if pipeline_result.get("success")
+                else {"error": pipeline_result.get("error", "Delete failed")})
 
         elif action_type == "admin_delete_csv":
             exec_payload = {
@@ -3608,8 +3432,17 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     admin_user, meta.get("csv_file", "")),
                 "_from_dual_approval": True,
             }
-            exec_result = self._remove_csv(
-                request, exec_payload, target["analyst"])
+            pipeline_result = delete_csv_pipeline(
+                exec_payload["csv_file"],
+                exec_payload["removal_type"],
+                exec_payload["comment"],
+                target["analyst"],
+                self.sessionKey,
+                rule_name=exec_payload.get("rule_name", ""))
+            exec_result = self._resp(
+                200 if pipeline_result.get("success") else 400,
+                pipeline_result if pipeline_result.get("success")
+                else {"error": pipeline_result.get("error", "Delete failed")})
 
         elif action_type == "admin_purge_trash":
             purge_comment = "Dual-approved purge by {}".format(admin_user)

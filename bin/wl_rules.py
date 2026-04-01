@@ -16,13 +16,16 @@ import os
 import csv
 import logging
 from threading import Lock
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 
 # Import sys.path setup from wl_handler pattern
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
-from wl_constants import OWN_LOOKUPS, DETECTION_RULES_FILE, MAPPING_FILE, MAX_DETECTION_RULES
+from wl_constants import (
+    OWN_LOOKUPS, DETECTION_RULES_FILE, MAPPING_FILE, MAX_DETECTION_RULES,
+    DEFAULT_TRASH_RETENTION_DAYS,
+)
 
 
 _logger = logging.getLogger("wl_rules")
@@ -35,6 +38,8 @@ __all__ = [
     'get_rule_csv_file',
     'get_rule_for_csv',
     'create_rule_pipeline',
+    'delete_rule_pipeline',
+    'delete_csv_pipeline',
 ]
 
 
@@ -210,4 +215,324 @@ def create_rule_pipeline(detection_rule: str) -> Dict:
         "success": True,
         "detection_rule": detection_rule,
         "message": "Detection rule '{}' registered".format(detection_rule),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Deletion Pipelines (Layer 3 orchestration)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _read_mapping_rows() -> List[Dict]:
+    """Read rule_csv_map.csv as list of row dicts (rule_name, csv_file, app_context)."""
+    if not os.path.isfile(MAPPING_FILE):
+        return []
+    try:
+        with open(MAPPING_FILE, "r", newline="", encoding="utf-8-sig") as fh:
+            return list(csv.DictReader(fh))
+    except (csv.Error, OSError, UnicodeDecodeError):
+        return []
+
+
+def _write_mapping_rows(rows: List[Dict]) -> None:
+    """Write rule_csv_map.csv atomically."""
+    with open(MAPPING_FILE, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(
+            fh, fieldnames=["rule_name", "csv_file", "app_context"],
+            extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def delete_rule_pipeline(
+    rule_name: str,
+    removal_type: str,
+    comment: str,
+    analyst: str,
+    session_key: str,
+) -> Dict[str, Any]:
+    """
+    Delete a detection rule: remove from mapping and registry, soft-delete CSVs.
+
+    Handles the core business logic of rule deletion:
+    1. Reads mapping to find affected CSVs
+    2. Removes rule entries from mapping file
+    3. Removes rule from registry
+    4. If permanent: moves rule + CSVs to trash via wl_trash
+    5. Posts audit event
+
+    The handler retains responsibility for:
+    - Input validation (rule_name, removal_type, comment)
+    - RBAC and admin daily limit checks
+    - Dual-admin gate (3+ CSVs)
+    - Approval queue cancellation
+    - Incrementing admin daily limit counter
+
+    Args:
+        rule_name: Detection rule name to delete.
+        removal_type: "unlink" (remove mapping only) or "permanent" (soft-delete files).
+        comment: Reason for deletion.
+        analyst: Username performing the action.
+        session_key: Splunk session key for audit posting.
+
+    Returns:
+        Dict with keys:
+        - success: bool
+        - message: str — Human-readable status
+        - error: str — Error description if success=False
+        - data: dict — {affected_csvs, trashed, trash_id, rule_also_removed}
+    """
+    from wl_audit import build_audit_event, post_audit_event
+    from wl_trash import move_to_trash, read_trash_config
+    from wl_validation import build_csv_path
+
+    mapping = _read_mapping_rows()
+    affected_entries = [e for e in mapping if e.get("rule_name") == rule_name]
+    affected_csvs = [e["csv_file"] for e in affected_entries]
+
+    # Case 1: Rule has no CSVs — just remove from registry
+    if not affected_csvs:
+        with _detection_rules_lock:
+            registered = read_rules_registry()
+            if rule_name not in registered:
+                return {
+                    "success": False,
+                    "message": "",
+                    "error": "Rule '{}' not found in mapping or registry".format(rule_name),
+                    "data": {},
+                }
+            registered.remove(rule_name)
+            write_rules_registry(registered)
+
+        evt = build_audit_event(
+            action="dr_removed",
+            analyst=analyst,
+            detection_rule=rule_name,
+            csv_file="",
+            comment=comment,
+            removal_type=removal_type,
+            csv_count=0,
+            csv_files="",
+        )
+        post_audit_event(session_key, evt)
+
+        return {
+            "success": True,
+            "message": "Rule '{}' removed (had no CSV files)".format(rule_name),
+            "error": "",
+            "data": {"affected_csvs": [], "trashed": False, "trash_id": ""},
+        }
+
+    # Case 2: Rule has CSVs — remove from mapping and registry
+    new_mapping = [e for e in mapping if e.get("rule_name") != rule_name]
+    _write_mapping_rows(new_mapping)
+
+    with _detection_rules_lock:
+        registered = read_rules_registry()
+        if rule_name in registered:
+            registered.remove(rule_name)
+            write_rules_registry(registered)
+
+    trashed = False
+    trash_id = ""
+    if removal_type == "permanent":
+        associated = [{"csv_file": e["csv_file"],
+                       "app_context": e.get("app_context", "")}
+                      for e in affected_entries]
+        try:
+            trash_id = move_to_trash(
+                "rule", rule_name, analyst, comment,
+                associated_csvs=associated)
+            trashed = True
+        except Exception as exc:
+            _logger.error("Failed to move rule to trash: %s", exc)
+            for entry in affected_entries:
+                csv_name = entry["csv_file"]
+                app_ctx = entry.get("app_context", "")
+                csv_path = build_csv_path(csv_name, app_ctx)
+                if csv_path and os.path.isfile(csv_path):
+                    try:
+                        os.remove(csv_path)
+                    except OSError:
+                        pass
+
+    evt = build_audit_event(
+        action="dr_removed",
+        analyst=analyst,
+        detection_rule=rule_name,
+        csv_file="",
+        comment=comment,
+        removal_type="trashed" if trashed else removal_type,
+        csv_count=len(affected_csvs),
+        csv_files=", ".join(affected_csvs),
+        trash_id=trash_id,
+    )
+    post_audit_event(session_key, evt)
+
+    if trashed:
+        verb = "moved to trash"
+    elif removal_type == "permanent":
+        verb = "deleted"
+    else:
+        verb = "unlinked"
+
+    msg = "Rule '{}' {} ({} CSV file{})".format(
+        rule_name, verb, len(affected_csvs),
+        "s" if len(affected_csvs) != 1 else "")
+    if trashed:
+        config = read_trash_config()
+        days = config.get("retention_days", DEFAULT_TRASH_RETENTION_DAYS)
+        msg += ". Recoverable for {} days.".format(days)
+
+    return {
+        "success": True,
+        "message": msg,
+        "error": "",
+        "data": {
+            "affected_csvs": affected_csvs,
+            "trashed": trashed,
+            "trash_id": trash_id,
+        },
+    }
+
+
+def delete_csv_pipeline(
+    csv_file: str,
+    removal_type: str,
+    comment: str,
+    analyst: str,
+    session_key: str,
+    rule_name: str = "",
+) -> Dict[str, Any]:
+    """
+    Delete a CSV file: remove from mapping, soft-delete file if permanent.
+
+    Handles the core business logic of CSV deletion:
+    1. Finds the CSV entry in mapping (resolves rule_name if not provided)
+    2. Checks if this is the last CSV for its rule
+    3. Removes from mapping file
+    4. If permanent: moves CSV to trash via wl_trash
+    5. Posts audit event
+
+    The handler retains responsibility for:
+    - Input validation (csv_file, removal_type, comment)
+    - RBAC and admin daily limit checks
+    - Approval queue cancellation
+    - Incrementing admin daily limit counter
+
+    Args:
+        csv_file: CSV filename to delete.
+        removal_type: "unlink" (remove mapping only) or "permanent" (soft-delete file).
+        comment: Reason for deletion.
+        analyst: Username performing the action.
+        session_key: Splunk session key for audit posting.
+        rule_name: Detection rule name (resolved from mapping if empty).
+
+    Returns:
+        Dict with keys:
+        - success: bool
+        - message: str — Human-readable status
+        - error: str — Error description if success=False
+        - data: dict — {rule_also_removed, trashed, trash_id, app_context}
+    """
+    from wl_audit import build_audit_event, post_audit_event
+    from wl_trash import move_to_trash, read_trash_config
+    from wl_validation import build_csv_path
+
+    mapping = _read_mapping_rows()
+
+    # Find the specific entry
+    found_entry = None
+    for e in mapping:
+        if e.get("csv_file") == csv_file:
+            if not rule_name:
+                rule_name = e.get("rule_name", "")
+            found_entry = e
+            break
+
+    if not found_entry:
+        return {
+            "success": False,
+            "message": "",
+            "error": "CSV '{}' not found in mapping".format(csv_file),
+            "data": {},
+        }
+
+    app_context = found_entry.get("app_context", "")
+
+    # Check if this is the last CSV for the rule
+    rule_csvs = [e["csv_file"] for e in mapping
+                 if e.get("rule_name") == rule_name]
+    rule_also_removed = (len(rule_csvs) == 1)
+
+    # Remove the CSV entry from mapping
+    new_mapping = [e for e in mapping
+                   if not (e.get("csv_file") == csv_file
+                           and e.get("rule_name") == rule_name)]
+    _write_mapping_rows(new_mapping)
+
+    # If last CSV for rule, also remove rule from registry
+    if rule_also_removed:
+        with _detection_rules_lock:
+            registered = read_rules_registry()
+            if rule_name in registered:
+                registered.remove(rule_name)
+                write_rules_registry(registered)
+
+    trashed = False
+    trash_id = ""
+    if removal_type == "permanent":
+        try:
+            trash_id = move_to_trash(
+                "csv", csv_file, analyst, comment,
+                app_context=app_context, detection_rule=rule_name)
+            trashed = True
+        except Exception as exc:
+            _logger.error("Failed to move CSV to trash: %s", exc)
+            csv_path = build_csv_path(csv_file, app_context)
+            if csv_path and os.path.isfile(csv_path):
+                try:
+                    os.remove(csv_path)
+                except OSError:
+                    pass
+
+    evt = build_audit_event(
+        action="csv_removed",
+        analyst=analyst,
+        detection_rule=rule_name,
+        csv_file=csv_file,
+        app_context=app_context,
+        comment=comment,
+        removal_type="trashed" if trashed else removal_type,
+        rule_also_removed=rule_also_removed,
+        file_deleted=trashed,
+        trash_id=trash_id,
+    )
+    post_audit_event(session_key, evt)
+
+    if trashed:
+        verb = "moved to trash"
+    elif removal_type == "permanent":
+        verb = "deleted"
+    else:
+        verb = "unlinked"
+    msg = "CSV '{}' {}".format(csv_file, verb)
+    if rule_also_removed:
+        msg += " (last CSV — rule '{}' also removed)".format(rule_name)
+    if trashed:
+        config = read_trash_config()
+        days = config.get("retention_days", DEFAULT_TRASH_RETENTION_DAYS)
+        msg += ". Recoverable for {} days.".format(days)
+
+    return {
+        "success": True,
+        "message": msg,
+        "error": "",
+        "data": {
+            "rule_also_removed": rule_also_removed,
+            "trashed": trashed,
+            "trash_id": trash_id,
+            "app_context": app_context,
+            "rule_name": rule_name,
+            "affected_csvs": [csv_file],
+        },
     }
