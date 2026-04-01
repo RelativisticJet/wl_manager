@@ -2531,45 +2531,6 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # ── Acquire file-level lock for the read-modify-write cycle ───
         # (On Windows, falls through to optimistic-lock-only mode.)
-        return self._save_csv_locked(
-            path, csv_file, app_context, detection_rule,
-            expected_mtime, new_headers, new_rows,
-            analyst_comment, removal_reasons, bulk_removal,
-            column_removal_reasons, row_reorder, column_reorder,
-            column_renames, explicit_row_add_reason, user, request,
-            payload, _from_approval,
-        )
-
-    def _save_csv_locked(
-        self, path, csv_file, app_context, detection_rule,
-        expected_mtime, new_headers, new_rows,
-        analyst_comment, removal_reasons, bulk_removal,
-        column_removal_reasons, row_reorder, column_reorder,
-        column_renames, explicit_row_add_reason, user, request,
-        payload=None, _from_approval=False,
-    ):
-        """Inner save logic wrapped in a file lock."""
-        # Note: File locking is now handled internally by snapshot_version()
-        # in wl_versions module. For the outer save operation, we use optimistic
-        # locking via expected_mtime instead of exclusive file locks.
-        return self._save_csv_inner(
-                path, csv_file, app_context, detection_rule,
-                expected_mtime, new_headers, new_rows,
-                analyst_comment, removal_reasons, bulk_removal,
-                column_removal_reasons, row_reorder, column_reorder,
-                column_renames, explicit_row_add_reason, user, request,
-                payload, _from_approval,
-            )
-
-    def _save_csv_inner(
-        self, path, csv_file, app_context, detection_rule,
-        expected_mtime, new_headers, new_rows,
-        analyst_comment, removal_reasons, bulk_removal,
-        column_removal_reasons, row_reorder, column_reorder,
-        column_renames, explicit_row_add_reason, user, request,
-        payload=None, _from_approval=False,
-    ):
-        """Save CSV after approval gates and limit checks."""
         # ── Optimistic locking — reject if file changed since load ───
         if expected_mtime is not None:
             try:
