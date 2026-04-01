@@ -9,6 +9,7 @@ import sys
 import os
 import json
 import shutil
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -321,10 +322,19 @@ def get_versions_list(csv_path: str) -> Tuple[List[Dict], str]:
     for entry in versions:
         filename = entry.get("filename", "")
         # Extract timestamp from filename: "DR102_whitelist_20260331_203045.csv"
-        # Split on last underscore before .csv to get timestamp
-        parts = filename.rsplit("_", 1)
-        if len(parts) == 2 and parts[1].endswith(".csv"):
-            version_id = parts[1][:-4]  # Remove .csv
+        # Timestamp format is: _YYYYMMDD_HHMMSS (or _YYYYMMDD_HHMMSS_mmm for collisions)
+        # Remove .csv extension first
+        if filename.endswith(".csv"):
+            name_without_ext = filename[:-4]
+        else:
+            name_without_ext = filename
+
+        # Extract the rightmost timestamp part (after the last underscore that starts a timestamp)
+        # Timestamp always starts with 8 digits (YYYYMMDD) followed by underscore and 6 digits (HHMMSS)
+        # Could also have _mmm suffix for milliseconds
+        match = re.search(r'_(\d{8}_\d{6}(?:_\d+)?)$', name_without_ext)
+        if match:
+            version_id = match.group(1)
         else:
             version_id = ""
 

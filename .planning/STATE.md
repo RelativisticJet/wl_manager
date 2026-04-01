@@ -38,8 +38,8 @@ Phase 04 — backend-integration
 
 ## Current Position
 
-Phase: 04 (backend-integration) — COMPLETE ✓
-Plan: 4 of 4 — COMPLETE ✓ (Gap Closure Phase Finalized)
+Phase: 04 (backend-integration) — IN PROGRESS
+Plan: 4 of 5 — Gap closure 04-04 partial (pipelines created, handler not refactored); 04-05 pending
 
 ## Roadmap Overview
 

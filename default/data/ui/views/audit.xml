@@ -59,7 +59,7 @@
       <choice value="csv_imported">CSV Imported</choice>
       <choice value="csv_created">CSV Created</choice>
       <choice value="dr_created">Detection Rule Created</choice>
-      <choice value="rule_removed">Rule Removed</choice>
+      <choice value="dr_removed">Detection Rule Deleted</choice>
       <choice value="csv_removed">CSV Removed</choice>
       <choice value="request_submitted">Request Submitted</choice>
       <choice value="request_approved">Request Approved</choice>
@@ -309,6 +309,22 @@
       </single>
     </panel>
     <panel>
+      <title>CSV Deleted</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="csv_removed"
+            | stats count as total_csv_removed
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+    <panel>
       <title>Detection Rule Created</title>
       <single>
         <search>
@@ -318,6 +334,22 @@
               analyst=$analyst_filter$ detection_rule=$rule_filter$
             | where action="dr_created"
             | stats count as total_dr_created
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+    <panel>
+      <title>Detection Rule Deleted</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="dr_removed"
+            | stats count as total_dr_removed
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
@@ -420,7 +452,7 @@
             index=wl_audit sourcetype=wl_audit
               action=$action_filter$*
               analyst=$analyst_filter$ detection_rule=$rule_filter$
-            | where NOT match(action, "^request_|^audit_exported$|^csv_exported$|^csv_imported$|^csv_created$|^dr_created$|^rule_removed$|^csv_removed$|^trash_")
+            | where NOT match(action, "^request_|^audit_exported$|^csv_exported$|^csv_imported$|^csv_created$|^dr_created$|^dr_removed$|^csv_removed$|^trash_")
             | stats values(value{}) as value values(*) as * by action csv_file analyst timestamp
             | sort -timestamp
             | eval timestamp=if(match(timestamp, "^\d+\.?\d*$"), strftime(timestamp, "%d-%m-%Y %H:%M:%S GMT%:::z"), timestamp)
@@ -498,7 +530,7 @@
             index=wl_audit sourcetype=wl_audit
               action=$action_filter$*
               analyst=$analyst_filter$ detection_rule=$rule_filter$
-            | where match(action, "^request_|^audit_exported$|^csv_exported$|^csv_imported$|^csv_created$|^dr_created$|^rule_removed$|^csv_removed$|^trash_")
+            | where match(action, "^request_|^audit_exported$|^csv_exported$|^csv_imported$|^csv_created$|^dr_created$|^dr_removed$|^csv_removed$|^trash_")
             | eval csv_file=if(isnull(csv_file) OR csv_file="", "N/A", csv_file)
             | stats values(*) as * by action csv_file analyst timestamp
             | sort -timestamp
@@ -510,7 +542,7 @@
                 action=="csv_imported",          "imported CSV",
                 action=="csv_created",           "created CSV",
                 action=="dr_created",            "created detection rule",
-                action=="rule_removed",          "removed rule",
+                action=="dr_removed",          "removed rule",
                 action=="csv_removed",           "removed CSV",
                 action=="request_submitted",    "submitted request",
                 action=="request_approved",     "approved request",
@@ -534,7 +566,7 @@
                   "User ".analyst." created CSV ".csv_file." with ".column_count." column(s) for detection rule ".detection_rule." at ".timestamp,
                 action=="dr_created",
                   "User ".analyst." created new detection rule ".detection_rule." at ".timestamp,
-                action=="rule_removed",
+                action=="dr_removed",
                   "User ".analyst." ".case(removal_type=="trashed","moved to trash",removal_type=="permanent","permanently deleted",1==1,"unlinked")." rule ".detection_rule." (".csv_count." CSV file(s): ".csv_files.") — ".comment." at ".timestamp,
                 action=="csv_removed",
                   "User ".analyst." ".case(removal_type=="trashed","moved to trash",removal_type=="permanent","permanently deleted",1==1,"unlinked")." CSV ".csv_file." from rule ".detection_rule.if(rule_also_removed=="true"," (last CSV — rule also removed)","")." — ".comment." at ".timestamp,

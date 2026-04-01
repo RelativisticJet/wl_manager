@@ -14,7 +14,7 @@
 - [x] **Phase 1: Backend Foundation** - Extract dependency-free backend modules (constants, validation, RBAC, presence)
 - [x] **Phase 2: Backend Core Domain** - Extract data persistence layer (CSV, versions, audit, rules, trash) + gap closure
 - [x] **Phase 3: Backend Orchestration** - Extract orchestration modules (file locking, approval queue, daily limits, notifications)
-- [x] **Phase 4: Backend Integration** - Refactor wl_handler.py as thin REST router (4 plans executed, pipeline abstraction established)
+- [ ] **Phase 4: Backend Integration** - Refactor wl_handler.py as thin REST router
 - [ ] **Phase 5: Frontend Architecture** - Extract frontend modules and implement state manager
 - [ ] **Phase 6: Admin Panel** - Modularize control_panel.js and associated feature modules
 - [ ] **Phase 7: Test Coverage** - Unit, integration, E2E, concurrency, and security test suites
@@ -203,7 +203,7 @@
   - Status: 4/4 tasks completed, Docker smoke tests verified, wl_notify.py created, backward compatibility validated
   - Depends on: 04-02 (simple POST pattern established)
 
-- [x] **04-04-PLAN.md** — Extract handler business logic to domain pipelines (Gap Closure, Wave 1) — COMPLETED
+- [ ] **04-04-PLAN.md** — Extract handler business logic to domain pipelines (Gap Closure, Wave 1)
   - Requirements: BMOD-01 (partial), TEST-02
   - Files: bin/wl_pipelines.py (NEW), bin/wl_csv.py, bin/wl_versions.py, bin/wl_rules.py, bin/wl_trash.py, bin/wl_handler.py, tests/integration/test_handler_complex_post.py
   - Tasks: 6 (extract save_csv_pipeline, create_csv_pipeline, revert_csv_pipeline, rule pipelines, reduce handler to 200-250 lines, create integration tests)

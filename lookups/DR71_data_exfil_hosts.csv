@@ -5,4 +5,3 @@ SRV-BACKUP01,198.51.100.10,443,10000000000,Offsite cloud backup - up to 10GB nig
 SRV-EMAIL01,209.85.220.41,587,1000000000,Mail relay to Google Workspace,,,
 SRV-PROXY01,0.0.0.0,443,50000000000,Web proxy - aggregate traffic is high by design,,,
 SRV-SIEM01,52.45.100.22,9997,8000000000,Splunk forwarder to cloud SIEM instance,,,
-SRV-MIGRATION01,10.200.1.5,445,20000000000,Data center migration - large SMB transfers,2026-03-31 06:00,,

@@ -72,7 +72,7 @@ require([
     var IMPORT_PREVIEW_ROWS = 10;
     var IMPORT_MAX_ERRORS = 10;
     var IMPORT_MAX_WARN_EXAMPLES = 5;
-    var SAFE_COLNAME_RE = /^(?=.*[a-zA-Z0-9])[a-zA-Z0-9_\-. ()\/:#@&+]+$/;
+    var SAFE_COLNAME_RE = /^(?=.*[a-zA-Z0-9])[a-zA-Z0-9_\-.()\/:&#@+]+$/;
     var EXPIRE_COLUMN_NAMES_LIST = ["expires", "expire", "expiration", "expiration_date",
                                     "expiry", "termination", "termination_date"];
     var VALID_EXPIRE_RE = /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?( UTC)?$/;
@@ -160,6 +160,15 @@ require([
 
         // First row = headers
         var headers = rows[0].map(function (h) { return h.trim(); });
+        for (var hi = 0; hi < headers.length; hi++) {
+            if (/\s/.test(headers[hi])) {
+                errors.push("Column '" + headers[hi].substring(0, 30) +
+                    "' contains spaces. Column names cannot have spaces — use underscores instead.");
+            }
+        }
+        if (errors.length) {
+            return { headers: headers, rows: [], errors: errors };
+        }
         var dataRows = rows.slice(1);
 
         // Convert data rows from arrays to dicts, validate field counts
@@ -217,13 +226,17 @@ require([
                 errors.push("Column header at position " + (ci + 1) + " is empty.");
                 continue;
             }
+            if (/\s/.test(h)) {
+                errors.push("Column '" + _.escape(h.substring(0, 30)) +
+                    "' contains spaces. Use underscores instead (e.g. 'src_ip').");
+            }
             if (h.charAt(0) === "_") {
                 errors.push("Column '" + _.escape(h.substring(0, 20)) + "' starts with underscore (reserved).");
             }
             if (!SAFE_COLNAME_RE.test(h)) {
                 errors.push("Column '" + _.escape(h.substring(0, 20)) +
                     "' contains invalid characters. Must contain at least one letter or number. " +
-                    "Only letters, numbers, spaces, and _-.()/:#@&+ allowed.");
+                    "Only letters, numbers, and _-.()/:#@&+ allowed.");
             }
             if (h.length > 64) {
                 errors.push("Column '" + _.escape(h.substring(0, 20)) + "...' is too long (" +
@@ -527,7 +540,7 @@ require([
             if (xhr.status === 409 && resp.current_mtime) {
                 loadedMtime = resp.current_mtime;
             }
-        } catch (e) { /* ignore */ }
+        } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
         // Escape server error to prevent XSS
         var safeErr = _.escape(err);
         if (xhr.status === 409) {
@@ -573,11 +586,26 @@ require([
     });
 
     function formatDailyLimitMsg(dl) {
-        var label = _.escape(String(dl.limit_type || "")).replace(/_/g, " ");
+        var LIMIT_LABELS = {
+            "row_removal": "Row removal",
+            "row_addition": "Row addition",
+            "row_edit": "Row editing",
+            "bulk_row_removal": "Bulk row removal",
+            "bulk_row_edit": "Bulk row editing",
+            "column_removal": "Column removal",
+            "revert": "CSV revert"
+        };
+        var raw = String(dl.limit_type || "");
+        var label = _.escape(LIMIT_LABELS[raw] || raw.replace(/_/g, " "));
+        // When the limit is set to 0, the action is disabled entirely
+        if (dl.disabled || dl.maximum === 0) {
+            return label + " has been disabled by your administrator. " +
+                "This action is not permitted.";
+        }
         var count = dl.action_count || "?";
         var over = dl.exceeded_by || (dl.current + count - dl.maximum);
-        return "Daily limit exceeded for " + label + ". " +
-            "This action affects " + count + " rows, exceeding your daily limit by " +
+        return "Daily limit exceeded for " + label.toLowerCase() + ". " +
+            "This action affects " + count + " row(s), exceeding your daily limit by " +
             over + " (" + dl.current + "/" + dl.maximum + " used). " +
             "Contact your administrator.";
     }
@@ -1161,7 +1189,7 @@ require([
                 var errMsg = "Failed to remove";
                 try {
                     errMsg = JSON.parse(xhr.responseText).error || errMsg;
-                } catch (e) { /* ignore */ }
+                } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
                 showMsg(_.escape(errMsg), "error");
             });
         });
@@ -1252,7 +1280,7 @@ require([
                     try {
                         var r = JSON.parse(xhr.responseText);
                         if (r.error) { errMsg = r.error; }
-                    } catch (e) { /* ignore */ }
+                    } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
                     $err.text(errMsg).show();
                     $modal.find("#wl-new-rule-ok").removeClass("disabled").text("Next");
                 });
@@ -1293,6 +1321,7 @@ require([
                     '<textarea id="wl-approval-reason-text" class="wl-input" ' +
                         'style="width:100%;height:80px;resize:vertical;font-size:13px" ' +
                         'placeholder="Reason for this request (required)" maxlength="500"></textarea>' +
+                    '<div class="wl-char-counter" data-for="wl-approval-reason-text">0 / 500</div>' +
                     '<div id="wl-approval-reason-error" class="wl-msg-error" style="display:none;margin-top:6px"></div>' +
                     '<div class="wl-modal-actions" style="margin-top:12px">' +
                         '<span class="btn btn-primary" id="wl-approval-reason-ok">Submit Request</span> ' +
@@ -1590,16 +1619,21 @@ require([
                     }
                     seen[lc] = true;
                 }
-                // Check for underscore-prefixed headers, invalid chars, and length
-                var safeColNameRe = /^(?=.*[a-zA-Z0-9])[a-zA-Z0-9_\-. ()\/:#@&+]+$/;
+                // Check for spaces, underscore-prefix, invalid chars, and length
+                var safeColNameRe = /^(?=.*[a-zA-Z0-9])[a-zA-Z0-9_\-.()\/:&#@+]+$/;
                 for (var j = 0; j < headers.length; j++) {
+                    if (/\s/.test(headers[j])) {
+                        $err.text("Column '" + _.escape(headers[j].substring(0, 30)) +
+                            "' cannot contain spaces. Use underscores instead (e.g. 'src_ip').").show();
+                        return;
+                    }
                     if (headers[j].charAt(0) === "_") {
                         $err.text('Column names starting with "_" are reserved.').show();
                         return;
                     }
                     if (!safeColNameRe.test(headers[j])) {
                         $err.text("Column '" + _.escape(headers[j].substring(0, 20)) +
-                            "' is invalid. Must contain at least one letter or number. Only letters, numbers, spaces, and _-.()/:#@&+ are allowed.").show();
+                            "' is invalid. Must contain at least one letter or number. Only letters, numbers, and _-.()/:#@&+ are allowed.").show();
                         return;
                     }
                     if (headers[j].length > 64) {
@@ -2756,8 +2790,9 @@ require([
                 // Validate before replacing the input — revert to oldName on failure
                 var validationError = null;
                 if (newName && newName !== oldName) {
-                    if (newName.charAt(0) === "_") { validationError = "Column name cannot start with _"; }
-                    else if (!/^(?=.*[a-zA-Z0-9])[a-zA-Z0-9_\-. ()\/:#@&+]+$/.test(newName)) { validationError = "Column name must contain at least one letter or number. Only letters, numbers, spaces, and _-.()/:#@&+ are allowed."; }
+                    if (/\s/.test(newName)) { validationError = "Column name cannot contain spaces. Use underscores instead."; }
+                    else if (newName.charAt(0) === "_") { validationError = "Column name cannot start with _"; }
+                    else if (!/^(?=.*[a-zA-Z0-9])[a-zA-Z0-9_\-.()\/:&#@+]+$/.test(newName)) { validationError = "Column name must contain at least one letter or number. Only letters, numbers, and _-.()/:#@&+ are allowed."; }
                     else if (currentHeaders.indexOf(newName) !== -1) { validationError = "Column '" + _.escape(newName) + "' already exists"; }
                 }
                 if (validationError) { newName = null; } // revert to oldName
@@ -3045,14 +3080,19 @@ require([
                 $err.text("Column name cannot be empty.").show();
                 return;
             }
+            if (/\s/.test(name)) {
+                $inp.addClass("wl-input-error");
+                $err.text("Column name cannot contain spaces. Use underscores instead (e.g. 'src_ip').").show();
+                return;
+            }
             if (name.charAt(0) === "_") {
                 $inp.addClass("wl-input-error");
                 $err.text('Column names starting with "_" are reserved for internal use.').show();
                 return;
             }
-            if (!/^(?=.*[a-zA-Z0-9])[a-zA-Z0-9_\-. ()\/:#@&+]+$/.test(name)) {
+            if (!/^(?=.*[a-zA-Z0-9])[a-zA-Z0-9_\-.()\/:&#@+]+$/.test(name)) {
                 $inp.addClass("wl-input-error");
-                $err.text("Column name must contain at least one letter or number. Only letters, numbers, spaces, and _-.()/:#@&+ are allowed.").show();
+                $err.text("Column name must contain at least one letter or number. Only letters, numbers, and _-.()/:#@&+ are allowed.").show();
                 return;
             }
             if (currentHeaders.indexOf(name) !== -1) {
@@ -3371,7 +3411,7 @@ require([
         })
         .fail(function (xhr) {
             var err = "Failed to submit approval request.";
-            try { err = JSON.parse(xhr.responseText).error || err; } catch (e) {}
+            try { err = JSON.parse(xhr.responseText).error || err; } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
             showMsg(_.escape(err), "error");
         });
     }
@@ -3416,7 +3456,7 @@ require([
         })
         .fail(function (xhr) {
             var err = "Failed to submit import approval.";
-            try { err = JSON.parse(xhr.responseText).error || err; } catch (e) {}
+            try { err = JSON.parse(xhr.responseText).error || err; } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
             showMsg(_.escape(err), "error");
         });
     }
@@ -3470,7 +3510,7 @@ require([
         })
         .fail(function (xhr) {
             var err = "Failed to submit bulk edit approval.";
-            try { err = JSON.parse(xhr.responseText).error || err; } catch (e) {}
+            try { err = JSON.parse(xhr.responseText).error || err; } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
             showMsg(_.escape(err), "error");
         });
     }
@@ -3518,7 +3558,7 @@ require([
         })
         .fail(function (xhr) {
             var err = "Failed to submit edit approval.";
-            try { err = JSON.parse(xhr.responseText).error || err; } catch (e) {}
+            try { err = JSON.parse(xhr.responseText).error || err; } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
             showMsg(_.escape(err), "error");
         });
     }
@@ -3806,7 +3846,7 @@ require([
                 }
             }).fail(function (xhr) {
                 var err = "Failed to cancel request.";
-                try { err = JSON.parse(xhr.responseText).error || err; } catch (e) {}
+                try { err = JSON.parse(xhr.responseText).error || err; } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
                 showMsg(_.escape(err), "error");
                 $btn.text("Cancel Request").css("pointer-events", "auto");
             });
@@ -3951,7 +3991,7 @@ require([
                 }
             }).fail(function (xhr) {
                 var err = "Failed to process approval.";
-                try { err = JSON.parse(xhr.responseText).error || err; } catch (e) {}
+                try { err = JSON.parse(xhr.responseText).error || err; } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
                 showMsg(_.escape(err), "error");
                 $btn.text("Approve").css("pointer-events", "auto");
             });
@@ -4016,7 +4056,7 @@ require([
                 }
             }).fail(function (xhr) {
                 var err = "Failed to reject request.";
-                try { err = JSON.parse(xhr.responseText).error || err; } catch (e) {}
+                try { err = JSON.parse(xhr.responseText).error || err; } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
                 showMsg(_.escape(err), "error");
                 $btn.text("Reject").css("pointer-events", "auto");
             });
@@ -4290,6 +4330,11 @@ require([
             if (data.file_mtime && data.file_mtime !== loadedMtime) {
                 stopChangeMonitoring();
                 showExternalChangeModal();
+            }
+        })
+        .fail(function (xhr) {
+            if (xhr.status === 404) {
+                handleCsvRemoved(selectedCsv);
             }
         });
     }
@@ -5075,12 +5120,12 @@ require([
                     .fail(function (xhr2) {
                         var err2 = "Failed to submit approval request.";
                         try { err2 = JSON.parse(xhr2.responseText).error || err2; }
-                        catch (e2) { /* ignore */ }
+                        catch (e2) { console.warn("wl_manager: failed to parse error response", e2); }
                         showMsg(_.escape(err2), "error");
                     });
                     return;
                 }
-            } catch (e) { /* ignore */ }
+            } catch (e) { console.warn("wl_manager: failed to parse revert response", e); }
             handleSaveError(xhr, "Failed to revert.");
         });
     }
@@ -5147,8 +5192,12 @@ require([
                 });
         })
         .fail(function (xhr) {
+            if (xhr.status === 404) {
+                handleCsvRemoved(csvFile);
+                return;
+            }
             var err = "Failed to load CSV.";
-            try { err = JSON.parse(xhr.responseText).error || err; } catch (e) { /* ignore */ }
+            try { err = JSON.parse(xhr.responseText).error || err; } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
             showMsg(_.escape(err), "error");
             $table.empty();
         });
@@ -5182,6 +5231,11 @@ require([
                 loadVersions(selectedCsv, selectedApp);
                 if (data.file_mtime) { loadedMtime = data.file_mtime; }
                 startChangeMonitoring();
+            }
+        })
+        .fail(function (xhr) {
+            if (xhr.status === 404) {
+                handleCsvRemoved(selectedCsv);
             }
         })
         .always(function () {
@@ -6481,6 +6535,10 @@ require([
             renderPresenceBar(data.active_users || []);
         })
         .fail(function (xhr) {
+            if (xhr.status === 404) {
+                handleCsvRemoved(selectedCsv);
+                return;
+            }
             try {
                 var data = JSON.parse(xhr.responseText);
                 if (data.presence_full) {
@@ -6517,6 +6575,45 @@ require([
             if ($(e.target).hasClass("wl-modal-overlay")) { dismiss(); }
         });
         $(document).off("keydown.wlpresence").on("keydown.wlpresence", function (e) {
+            if (e.key === "Escape" || e.keyCode === 27) { dismiss(); }
+        });
+    }
+
+    function handleCsvRemoved(csvName) {
+        stopChangeMonitoring();
+        stopPresenceMonitoring();
+        $(".wl-modal-overlay").remove();
+        var displayName = csvName || selectedCsv || "This CSV";
+        var $modal = $(
+            '<div class="wl-modal-overlay">' +
+            '<div class="wl-modal">' +
+                '<div class="wl-modal-header">CSV Removed</div>' +
+                '<div class="wl-modal-body">' +
+                    '<p style="margin:0">' +
+                        '<strong>' + _.escape(displayName) + '</strong> has been removed ' +
+                        'by an administrator and is no longer available.' +
+                    '</p>' +
+                    '<p style="margin:8px 0 0;font-size:13px;color:var(--wl-muted-text,#999)">' +
+                        'If this was unexpected, contact your admin. ' +
+                        'Removed files can be restored from the Trash in the Control Panel.' +
+                    '</p>' +
+                '</div>' +
+                '<div class="wl-modal-actions">' +
+                    '<span class="btn btn-primary" id="wl-csv-removed-ok">OK</span>' +
+                '</div>' +
+            '</div></div>'
+        );
+        $("body").append($modal);
+        function dismiss() {
+            $modal.remove();
+            $(document).off("keydown.wlcsvremoved");
+            $ruleClear.trigger("click");
+        }
+        $modal.on("click", "#wl-csv-removed-ok", dismiss);
+        $modal.on("click", function (e) {
+            if ($(e.target).hasClass("wl-modal-overlay")) { dismiss(); }
+        });
+        $(document).off("keydown.wlcsvremoved").on("keydown.wlcsvremoved", function (e) {
             if (e.key === "Escape" || e.keyCode === 27) { dismiss(); }
         });
     }

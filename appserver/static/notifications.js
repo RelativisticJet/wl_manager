@@ -16,11 +16,6 @@ require([
     // Detect admin via server-verified API call (same pattern as
     // whitelist_manager.js).  DOM-based checks are fragile — the nav
     // may not have rendered yet or could be manipulated.
-    var isAdmin = false;
-    restPost({ action: "get_approval_queue" }).done(function () {
-        isAdmin = true;
-    });
-
     // Global hook: other modules can register callbacks via
     // window.__wlNotifCallbacks.push(function(notifications) { ... })
     // Called on every poll with the full notification list.
@@ -49,6 +44,22 @@ require([
             dataType: "json",
         });
     }
+
+    // Detect admin via server-verified API call.
+    // MUST be after BASE_URL and restPost are defined.
+    var isAdmin = false;
+    var adminCheckDone = false;
+    function detectAdmin() {
+        restPost({ action: "get_approval_queue" })
+        .done(function () {
+            isAdmin = true;
+            adminCheckDone = true;
+        })
+        .fail(function () {
+            adminCheckDone = true;
+        });
+    }
+    detectAdmin();
 
     // ── Time formatting ──────────────────────────────────────────
     function timeAgo(ts) {
@@ -162,7 +173,14 @@ require([
                 "/app/wl_manager/control_panel") + "?tab=queue";
             var wmBase = Splunk.util.make_url("/app/wl_manager/whitelist_manager");
 
-            if (isAdmin) {
+            // Fallback admin detection: if async check hasn't completed,
+            // check if Control Panel nav link exists (only rendered for admins)
+            var effectiveAdmin = isAdmin;
+            if (!adminCheckDone) {
+                effectiveAdmin = $('a[href*="control_panel"]').length > 0;
+            }
+
+            if (effectiveAdmin) {
                 // Admins: always go to Control Panel for actionable items
                 // (new requests, cancellations, pending reviews)
                 if (notifType === "new_request" || notifType === "cancelled") {

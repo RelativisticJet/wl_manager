@@ -1,8 +1,8 @@
-user,src_country,Comment,Expires
-c.rodriguez,US,Carlos Rodriguez - commutes between NYC and Miami offices weekly,2026-12-31
-d.kim,KR,David Kim - based in Seoul but uses US VPN for corp access,2026-06-30
-svc_o365,GB,Office 365 service routes through UK datacenter,
-e.muller,DE,Eva Muller - Berlin and Frankfurt office split schedule,2026-09-15
-f.tanaka,JP,Fumiko Tanaka - Tokyo HQ and Osaka branch travel,2026-08-01
-p.anderson,AU,Paul Anderson - Sydney remote worker using Singapore VPN exit node,2027-01-31
-m.dubois,FR,Marie Dubois - Paris and Lyon offices bi-weekly,2026-11-30
+user,src_country,Comment,Expires,_added_by,_added_at
+c.rodriguez,US,Carlos Rodriguez - commutes between NYC and Miami offices weekly,2026-12-31,,
+d.kim,KRTES,David Kim - based in Seoul but uses US VPN for corp access,2026-06-30,,
+svc,GB,Office 365 service routes through UK datacenter,,,
+e.muller,DE,Eva Muller - Berlin and Frankfurt office split schedule,2026-09-15,,
+f.ta,JP,Fumiko Tanaka - Tokyo HQ and Osaka branch travel,2026-08-01,,
+p.anderson,,Paul Anderson - Sydney remote worker using Singapore VPN exit node,2027-01-31,,
+m.dubois,FR TEST,Marie Dubois - Paris and Lyon offices bi-weekly,2026-11-30,,

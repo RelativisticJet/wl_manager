@@ -9,7 +9,6 @@ DR71_data_exfiltration,DR71_data_exfil_users.csv,wl_manager
 DR88_lateral_movement,DR88_whitelist.csv,wl_manager
 DR102_priv_escalation,DR102_whitelist.csv,wl_manager
 DR130_privilege_escalation,DR130_priv_escalation.csv,wl_manager
-DR200_dns_tunneling,DR200_dns_tunneling.csv,wl_manager
 DR310_impossible_travel,DR310_impossible_travel.csv,wl_manager
 DR415_suspicious_process,DR415_suspicious_process.csv,wl_manager
 DR520_anomalous_logon_time,DR520_anomalous_logon_time.csv,wl_manager
@@ -20,3 +19,9 @@ DR630_email_exfiltration,DR630_email_exfiltration.csv,wl_manager
 DR640_service_account_logon,DR640_service_account_logon.csv,wl_manager
 DR650_firewall_bypass,DR650_firewall_bypass.csv,wl_manager
 DR999_stress_test,DR999_stress_test.csv,wl_manager
+DR_STRESS_2000x100,DR_STRESS_2000x100.csv,wl_manager
+DR_VERSION_TEST,DR_VERSION_TEST.csv,wl_manager
+DR_TEST_4,DR_TEST_4.csv,search
+DR_E2E_ADMIN,DR_E2E_ADMIN.csv,wl_manager
+DR_BROWSER_TEST,DR_BROWSER_TEST.csv,wl_manager
+DR_TRASH_TEST,DR_TRASH_TEST.csv,wl_manager
