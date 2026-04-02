@@ -364,7 +364,50 @@
 5. E2E browser tests pass: load CSV, save changes, request approval, admin approves, revert to previous version (using Playwright or Puppeteer)
 6. Mock Splunk SDK fixtures created for offline unit testing (no container required for unit tests)
 
-**Plans:** TBD
+**Plans:** 5 plans in 3 waves
+
+- [x] **07-01-PLAN.md** — Unit test baseline and infrastructure (Wave 1) — CREATED
+  - Requirements: TEST-01, TEST-06
+  - Files: tests/pytest.ini (markers), tests/conftest.py, tests/unit/conftest.py (consolidation), tests/unit/test_limits.py (fix 10 failing), requirements-dev.txt (pytest-cov, freezegun, hypothesis, pytest-timeout)
+  - Tasks: 5 (fix test_limits.py failures, consolidate conftest files, register pytest markers, update requirements-dev.txt, verify ≥80% coverage)
+  - Depends on: none (Wave 1 foundation)
+
+- [x] **07-02-PLAN.md** — Integration tests and concurrency (Wave 2) — CREATED
+  - Requirements: TEST-02, TEST-04
+  - Files: tests/integration/test_get_actions.py, test_simple_post_actions.py (extended), test_complex_post_actions.py (concurrency), test_docker_smoke.py (new concurrency)
+  - Tasks: 5 (extend GET action tests, extend simple POST, add concurrency scenarios 4x, Docker smoke tests with 5+ threads)
+  - Depends on: 07-01 (unit baseline complete)
+
+- [x] **07-03-PLAN.md** — Security tests with OWASP payloads and RBAC matrix (Wave 2) — CREATED
+  - Requirements: TEST-03
+  - Files: tests/security/__init__.py, conftest.py, fixtures/, test_xss.py, test_injection.py, test_rbac_bypass.py
+  - Tasks: 6 (create security fixtures with OWASP payloads, XSS tests, injection tests, RBAC bypass matrix 70-80 tests, regression tests, verify security)
+  - Depends on: 07-01 (unit baseline)
+
+- [x] **07-04-PLAN.md** — E2E browser tests with Playwright (Wave 3) — CREATED
+  - Requirements: TEST-05
+  - Files: tests/e2e/__init__.py, conftest.py, page_objects.py, test_crud_workflow.py, test_approval_workflow.py, test_revert_workflow.py, test_admin_panel_workflow.py, test_stress_and_theme.py
+  - Tasks: 6 (create page object model, CRUD workflow tests, approval workflow tests, revert/admin panel tests, stress + theme tests, run full E2E suite)
+  - Depends on: 07-01, 07-02 (unit + integration stable)
+
+- [x] **07-05-PLAN.md** — QUnit frontend module tests (Wave 3) — CREATED
+  - Requirements: TEST-05
+  - Files: tests/qunit/test_wl_rest.js, test_wl_table.js, test_wl_modals.js, test_wl_state.js, fixtures/, appserver/static/test_runner.xml
+  - Tasks: 6 (create test infrastructure and test_runner.xml, wl_rest tests 30+, wl_table tests 40+, wl_modals tests 35+, wl_state tests 40+, run full suite)
+  - Depends on: 07-01, 07-04 (E2E foundations ready)
+
+**Wave Structure:**
+- **Wave 1 (Foundation):** 07-01 (unit baseline, test infrastructure, conftest consolidation, marker registration, requirements-dev.txt)
+- **Wave 2 (Parallel - Integration & Security):** 07-02 (integration tests, concurrency scenarios, Docker smoke), 07-03 (security tests, OWASP payloads, RBAC matrix, regressions)
+- **Wave 3 (Parallel - E2E & QUnit):** 07-04 (E2E Playwright workflows), 07-05 (QUnit frontend module tests) — depends on 07-01 and 07-02
+
+**Total Test Coverage:**
+- Unit: 389+ tests, ≥80% coverage per module (16 backend modules)
+- Integration: 50+ tests (all 15+ handler actions, concurrency scenarios)
+- Security: 70-80 tests (XSS, injection, RBAC bypass matrix, regressions)
+- E2E: 30+ workflows (CRUD, approval, revert, admin, stress, theme)
+- QUnit: 145+ tests (wl_rest 30+, wl_table 40+, wl_modals 35+, wl_state 40+)
+- **Grand Total: 534+ tests**
 
 ---
 
@@ -397,7 +440,7 @@
 | 4. Backend Integration | 5 plans | Complete ✓ | — | — |
 | 5. Frontend Architecture | 4 plans | Complete ✓ | — | 2026-04-02 |
 | 6. Admin Panel | 5 plans | Complete ✓ | 2026-04-02 | 2026-04-02 (all) |
-| 7. Test Coverage & Validation | TBD | Not started | — | — |
+| 7. Test Coverage & Validation | 5 plans | Planned ✓ | — | — |
 | 8. Splunkbase Readiness | TBD | Not started | — | — |
 
 ---
@@ -415,4 +458,5 @@
 - **Phase 3 complete:** 3 plans executed (03-01, 03-02, 03-03), 4 orchestration modules extracted (wl_filelock, wl_limits, wl_approval, wl_notify), 382+ tests passing, approval queue with conflict resolution and notifications fully integrated
 - **Phase 4 complete:** 5 plans executed (04-01 through 04-05), wl_replay.py Layer 5 module created, handler refactored as thin REST router, all 15+ actions tested against live Docker container, backward compatibility validated
 - **Phase 5 complete:** 4 plans executed (05-01 through 05-04), 11 frontend AMD modules extracted (4 foundation + 3 independent + 4 coupled), state manager implemented, whitelist_manager.js rewritten as thin orchestrator, comprehensive QUnit tests with module loading and state transitions, SUMMARY.md and test_runner.xml dashboard created. Requirements FMOD-01/02/03/04/05/08 and TEST-05 fully satisfied.
-- **Phase 6 planning complete:** 3 plans created (06-01 foundation, 06-02 simple modules, 06-03 complex modules), 5 admin panel modules to be extracted (wl_cp_queue, wl_cp_limits, wl_cp_usage, wl_cp_trash, wl_cp_admin_limits). control_panel.js refactored from 2,025 lines to ~150-200 lines entry point with AMD imports, access control gate, tab routing with history.replaceState, shared modal helpers via dependency injection, and browser visibility handler. Notifications system with Queue tab badge and toast alerts. Requirements FMOD-06 and FMOD-07 fully mapped across 3 plans with 2 execution waves (1 foundation + 2 feature extraction parallel).
+- **Phase 6 complete:** 5 plans executed (06-01 through 06-05), 5 admin panel modules extracted (wl_cp_queue, wl_cp_limits, wl_cp_usage, wl_cp_trash, wl_cp_admin_limits), modal helpers extracted to wl_cp_modals.js, control_panel.js reduced from 2,025 lines to 247 lines entry point. Notifications system with Queue tab badge and toast alerts. Requirements FMOD-06 and FMOD-07 fully satisfied.
+- **Phase 7 planning complete:** 5 plans created (07-01 through 07-05) with comprehensive test pyramid: Wave 1 unit baseline (389+ tests, ≥80% coverage), Wave 2 integration + security in parallel (50+ integration, 70-80 security tests with OWASP payloads + RBAC matrix), Wave 3 E2E + QUnit in parallel (30+ Playwright workflows, 145+ QUnit tests). Grand total: 534+ tests validating all edge cases, concurrency scenarios, security attacks, and end-to-end workflows. All 6 requirement IDs (TEST-01 through TEST-06) fully mapped across 5 plans.
