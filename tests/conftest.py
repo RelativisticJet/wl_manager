@@ -83,24 +83,31 @@ def docker_service():
     }
 
 
-@pytest.fixture
+@pytest.fixture(scope="function")
 def tmp_lookups(tmp_path):
     """
     Temporary lookups directory for CSV file I/O tests.
 
+    Scope: function (new temp dir per test)
+
     Returns the path to a temporary directory that mimics the wl_manager/lookups/ layout.
+    Used by: wl_csv tests, wl_versions tests, wl_rules tests
     """
     lookups_dir = tmp_path / "lookups"
     lookups_dir.mkdir()
     return lookups_dir
 
 
-@pytest.fixture
+@pytest.fixture(scope="function")
 def mock_splunk_home(monkeypatch, tmp_path):
     """
     Mock SPLUNK_HOME environment variable for tests.
 
+    Scope: function (new environment per test)
+
     Returns the path and patches os.environ["SPLUNK_HOME"] to point to it.
+    Creates the directory structure: SPLUNK_HOME/etc/apps/wl_manager/lookups
+    Used by: integration tests, file path resolution tests
     """
     mock_home = tmp_path / "splunk_home"
     mock_home.mkdir()
