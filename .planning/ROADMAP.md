@@ -426,9 +426,37 @@
 4. Backward compatibility verified: existing audit events parse correctly in audit.xml, version manifests load, approval queues process as before
 5. Code maintainability metrics published: all modules with CC <15, average function <100 lines, ≥80% test coverage per module
 
-**Plans:** TBD
+**Plans:** 5 plans in 2 waves
 
----
+- [ ] **08-01-PLAN.md** — AppInspect compliance validation (scripts, Python audit, JS audit, conf files, validate.sh, app.manifest) — READY
+  - Requirements: PUBL-01
+  - Files: scripts/verify_appinspect.sh, Makefile, default/app.manifest, docs/ validation docs
+  - Tasks: 6 (verify script, Python audit, JS audit, conf audit, validate.sh, manifest)
+
+- [ ] **08-02-PLAN.md** — Security architecture documentation (executive summary, threat model, RBAC matrix, mitigated threats) — READY
+  - Requirements: PUBL-02
+  - Files: docs/SECURITY_ARCHITECTURE.md, SECURITY.md
+  - Tasks: 2 (security doc creation, SECURITY.md link update)
+
+- [ ] **08-03-PLAN.md** — OpenAPI 3.0 specification (extract action signatures, create spec, README guide) — READY
+  - Requirements: PUBL-03
+  - Files: docs/api/openapi.yaml, docs/api/README.md
+  - Tasks: 2 (extract + create OpenAPI spec, create API README)
+
+- [ ] **08-04-PLAN.md** — Code metrics collection (radon + escomplex, metrics script, CODE_METRICS.md, Makefile targets) — READY
+  - Requirements: PUBL-05
+  - Files: scripts/metrics_collector.py, CODE_METRICS.md, docs/CODE_METRICS.md, Makefile
+  - Tasks: 3 (create metrics script, generate CODE_METRICS reports, add Makefile targets)
+
+- [ ] **08-05-PLAN.md** — Backward compatibility verification (audit events, version manifests, approval queue, upgrade path, documentation) — READY
+  - Requirements: PUBL-04
+  - Files: tests/integration/test_backward_compat_*.py, scripts/test_upgrade_path.sh, docs/BACKWARD_COMPAT.md
+  - Tasks: 5 (audit compat test, version manifest test, approval queue test, upgrade path script, backward compat doc)
+  - Depends on: 08-01, 08-02, 08-03, 08-04
+
+**Wave Structure:**
+- **Wave 1:** 08-01 (AppInspect), 08-02 (Security), 08-03 (OpenAPI), 08-04 (Metrics) — all independent, can execute in parallel
+- **Wave 2:** 08-05 (Backward compat) — depends on Wave 1 outputs for testing against finalized app structure
 
 ## Progress Tracking
 
@@ -441,7 +469,7 @@
 | 5. Frontend Architecture | 4 plans | Complete ✓ | — | 2026-04-02 |
 | 6. Admin Panel | 5 plans | Complete ✓ | 2026-04-02 | 2026-04-02 (all) |
 | 7. Test Coverage & Validation | 4/6 | In Progress|  | 2026-04-02 (Plan 01, 03) |
-| 8. Splunkbase Readiness | TBD | Not started | — | — |
+| 8. Splunkbase Readiness | 5 plans | Planned ✓ | — | 2026-04-02 (planning) |
 
 ---
 
