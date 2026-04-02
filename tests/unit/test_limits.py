@@ -461,3 +461,127 @@ def test_error_msg_remaining():
     """Test: shows remaining count when under limit."""
     msg = wl_limits.get_limit_error_msg("jsmith", "row_removal", 3, 10)
     assert "7" in msg  # 10 - 3 = 7 remaining
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Error Handling & Edge Cases
+# ═══════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+def test_read_daily_limits_file_not_found():
+    """Test: _read_daily_limits returns {} when file not found."""
+    with patch('wl_limits._get_limits_dir', return_value="/nonexistent"):
+        result = wl_limits._read_daily_limits()
+        assert result == {}
+
+
+@pytest.mark.unit
+def test_read_daily_limits_json_corruption():
+    """Test: _read_daily_limits returns {} on JSON corruption."""
+    with patch('wl_limits._get_limits_dir', return_value="/tmp"):
+        with patch('builtins.open', mock_open(read_data="{ invalid json")):
+            result = wl_limits._read_daily_limits()
+            assert result == {}
+
+
+@pytest.mark.unit
+def test_read_limit_config_file_not_found():
+    """Test: _read_limit_config returns DEFAULT_LIMITS when file not found."""
+    with patch('wl_limits._get_limits_dir', return_value="/nonexistent"):
+        result = wl_limits._read_limit_config()
+        assert "row_removal" in result
+        assert result["row_removal"] > 0
+
+
+@pytest.mark.unit
+def test_read_limit_config_json_corruption():
+    """Test: _read_limit_config returns DEFAULT_LIMITS on corruption."""
+    with patch('wl_limits._get_limits_dir', return_value="/tmp"):
+        with patch('builtins.open', mock_open(read_data="{ bad json")):
+            result = wl_limits._read_limit_config()
+            assert "row_removal" in result
+
+
+@pytest.mark.unit
+def test_read_limit_config_missing_keys():
+    """Test: _read_limit_config fills missing keys from DEFAULT_LIMITS."""
+    partial_config = {"row_removal": 5}  # Missing other keys
+    with patch('wl_limits._get_limits_dir', return_value="/tmp"):
+        with patch('builtins.open', mock_open(read_data=json.dumps(partial_config))):
+            result = wl_limits._read_limit_config()
+            # Should have all keys from DEFAULT_LIMITS
+            assert "bulk_row_removal" in result
+
+
+@pytest.mark.unit
+def test_get_counter_period_key_daily():
+    """Test: _get_counter_period_key returns YYYY-MM-DD format."""
+    with patch('wl_limits.datetime') as mock_dt:
+        mock_dt.now.return_value.strftime.return_value = "2026-04-01"
+        key = wl_limits._get_counter_period_key()
+        assert key == "2026-04-01"
+
+
+@pytest.mark.unit
+def test_write_daily_limits_success():
+    """Test: _write_daily_limits writes atomically."""
+    test_data = {"2026-04-01": {"jsmith": {"row_removal": 5}}}
+    with patch('wl_limits._get_limits_dir', return_value="/tmp"):
+        with patch('builtins.open', mock_open()):
+            with patch('wl_limits.file_lock'):
+                with patch('os.replace'):
+                    result = wl_limits._write_daily_limits(test_data)
+                    assert result is True
+
+
+@pytest.mark.unit
+def test_write_daily_limits_os_error():
+    """Test: _write_daily_limits returns False on OSError."""
+    test_data = {"2026-04-01": {"jsmith": {"row_removal": 5}}}
+    with patch('wl_limits._get_limits_dir', return_value="/tmp"):
+        with patch('builtins.open', side_effect=OSError("Write failed")):
+            result = wl_limits._write_daily_limits(test_data)
+            assert result is False
+
+
+@pytest.mark.unit
+def test_should_reset_now_valid_time():
+    """Test: _should_reset_now checks time boundary correctly."""
+    with patch('wl_limits.datetime') as mock_dt:
+        # Mock current time as 01:00 UTC
+        mock_now = datetime(2026, 4, 1, 1, 0, 0, tzinfo=timezone.utc)
+        mock_dt.now.return_value = mock_now
+        mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        # Should return True if reset_time is before current time
+        result = wl_limits._should_reset_now("00:00", "daily")
+        assert result is True
+
+
+@pytest.mark.unit
+def test_should_reset_now_invalid_format():
+    """Test: _should_reset_now returns False on invalid time format."""
+    result = wl_limits._should_reset_now("invalid", "daily")
+    assert result is False
+
+
+@pytest.mark.unit
+def test_get_limit_status_with_zero_limit():
+    """Test: get_limit_status shows 0 remaining when max=0."""
+    config = {"row_removal": 0}
+    with patch('wl_limits._read_daily_limits', return_value={}):
+        with patch('wl_limits._read_limit_config', return_value=config):
+            with patch('wl_limits._get_counter_period_key', return_value='2026-04-01'):
+                status = wl_limits.get_limit_status("jsmith")
+                assert status["row_removal"]["remaining"] == 0
+
+
+@pytest.mark.unit
+def test_get_limit_status_with_unlimited():
+    """Test: get_limit_status shows -1 remaining when max=-1."""
+    config = {"row_removal": -1}
+    with patch('wl_limits._read_daily_limits', return_value={}):
+        with patch('wl_limits._read_limit_config', return_value=config):
+            with patch('wl_limits._get_counter_period_key', return_value='2026-04-01'):
+                status = wl_limits.get_limit_status("jsmith")
+                assert status["row_removal"]["remaining"] == -1
