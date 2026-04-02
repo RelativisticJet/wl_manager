@@ -122,41 +122,42 @@ def test_approval_conflict_auto_cancel(temp_queue_dir, mock_limits):
 
 def test_approval_expiration(temp_queue_dir):
     """Test expiration: old requests expire automatically."""
-    now = int(time.time())
-
-    # Create queue with old pending request
-    queue = [
-        {
-            "request_id": "req-1",
-            "status": "pending",
-            "timestamp": now - (30 * 24 * 3600),  # 30 days old
-            "analyst": "jsmith",
-            "action_type": "save_csv",
-            "payload": {},
-            "reason": "Old request",
-            "csv_file": "DR123.csv",
-            "detection_rule": "Rule1",
-        },
-        {
-            "request_id": "req-2",
-            "status": "pending",
-            "timestamp": now - 1000,  # Recent
-            "analyst": "jdoe",
-            "action_type": "save_csv",
-            "payload": {},
-            "reason": "Recent request",
-            "csv_file": "DR456.csv",
-            "detection_rule": "Rule2",
-        },
-    ]
-
-    # Expire old entries
+    # Freeze time first, then calculate timestamps within that context
     with freeze_time("2026-04-01 12:00:00", tz_offset=0):
+        now = int(time.time())
+
+        # Create queue with old pending request
+        queue = [
+            {
+                "request_id": "req-1",
+                "status": "pending",
+                "timestamp": now - (30 * 24 * 3600),  # 30 days old
+                "analyst": "jsmith",
+                "action_type": "save_csv",
+                "payload": {},
+                "reason": "Old request",
+                "csv_file": "DR123.csv",
+                "detection_rule": "Rule1",
+            },
+            {
+                "request_id": "req-2",
+                "status": "pending",
+                "timestamp": now - 1000,  # Recent
+                "analyst": "jdoe",
+                "action_type": "save_csv",
+                "payload": {},
+                "reason": "Recent request",
+                "csv_file": "DR456.csv",
+                "detection_rule": "Rule2",
+            },
+        ]
+
+        # Expire old entries
         result = expire_pending_approvals(queue)
 
-    # Only recent entry should remain
-    assert len(result) == 1
-    assert result[0]["request_id"] == "req-2"
+        # Only recent entry should remain
+        assert len(result) == 1
+        assert result[0]["request_id"] == "req-2"
 
 
 @freeze_time("2026-04-01 12:00:00", tz_offset=0)
