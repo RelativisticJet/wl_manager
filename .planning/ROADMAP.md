@@ -303,20 +303,20 @@
 
 **Plans:** 3 plans in 2 execution waves
 
-- [ ] **06-01-PLAN.md** — Refactor control_panel.js entry point (Wave 1) — CREATED
+- [x] **06-01-PLAN.md** — Refactor control_panel.js entry point (Wave 1) — COMPLETED
   - Requirements: FMOD-06, FMOD-07
   - Files: appserver/static/control_panel.js (~150-200 lines), default/app.conf (build bump)
   - Tasks: 2 (refactor entry point, bump build)
   - Depends on: none (Wave 1 foundation)
-  - Status: Plan created with detailed action specifications, verification criteria, and acceptance criteria
+  - Status: COMPLETED — 2/2 tasks, entry point refactored with AMD structure, access control gate, tab routing, modal helpers
 
-- [ ] **06-02-PLAN.md** — Extract simple modules (Wave 2a) — CREATED
+- [x] **06-02-PLAN.md** — Extract simple modules (Wave 2a) — COMPLETED
   - Requirements: FMOD-06, FMOD-07
-  - Modules: wl_cp_trash.js (~180 lines), wl_cp_admin_limits.js (~135 lines), wl_cp_usage.js (~190 lines)
-  - Files: 3 modules, updated entry point, default/app.conf (build 487 → 488)
+  - Modules: wl_cp_trash.js (339 lines), wl_cp_admin_limits.js (221 lines), wl_cp_usage.js (341 lines)
+  - Files: 3 modules, updated entry point, default/app.conf (build 488 → 489)
   - Tasks: 5 (create wl_cp_trash, create wl_cp_admin_limits, create wl_cp_usage, update entry point, bump build and commit)
   - Depends on: 06-01 (entry point infrastructure ready)
-  - Status: Plan created with comprehensive task specifications
+  - Status: COMPLETED — 5/5 tasks, 901 lines of feature code extracted, all modules wired with context injection and tab routing
 
 - [ ] **06-03-PLAN.md** — Extract complex modules and finalize (Wave 2b) — CREATED
   - Requirements: FMOD-06, FMOD-07
@@ -381,7 +381,7 @@
 | 3. Backend Orchestration | 3 plans | Complete ✓ | — | 2026-04-01 |
 | 4. Backend Integration | 5 plans | Complete ✓ | — | — |
 | 5. Frontend Architecture | 4 plans | Complete ✓ | — | 2026-04-02 |
-| 6. Admin Panel | 3 plans | Planned ✓ | — | — |
+| 6. Admin Panel | 3 plans | 2/3 complete ✓ | 2026-04-02 | 2026-04-02 (06-01, 06-02) |
 | 7. Test Coverage & Validation | TBD | Not started | — | — |
 | 8. Splunkbase Readiness | TBD | Not started | — | — |
 
