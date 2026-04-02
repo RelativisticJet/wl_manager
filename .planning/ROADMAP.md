@@ -229,7 +229,7 @@
 
 ### Phase 5: Frontend Architecture
 
-**Goal:** Extract frontend into 12 AMD modules with a centralized state manager, establishing modular component architecture and eliminating REST helper duplication.
+**Goal:** Extract frontend into 11 AMD modules with a centralized state manager, establishing modular component architecture and eliminating REST helper duplication.
 
 **Depends on:** Phase 4 (backend must be stable)
 
@@ -237,40 +237,49 @@
 
 **Success Criteria** (what must be TRUE when phase completes):
 1. User can load the whitelist manager dashboard and use all features (table, search, modals, versions, approvals) with zero functional change
-2. 12 new frontend AMD modules exist in `appserver/static/modules/` and are required by whitelist_manager.js entry point
+2. 11 new frontend AMD modules exist in `appserver/static/modules/` and are required by whitelist_manager.js entry point
 3. wl_rest.js shared REST helpers are used by whitelist_manager.js, control_panel.js, and notifications.js (no more 6x duplication)
 4. wl_state.js singleton manages all shared state (currentRows, originalRows, selectedRows, etc.); all state mutations flow through it
 5. whitelist_manager.js is rewritten as thin entry point (~100 lines) that requires feature modules
 6. QUnit tests verify state manager transitions, module interactions, and AMD module loading order (including slow network scenarios)
 
-**Plans:** 4 plans in 4 waves
+**Plans:** 4 plans in 3 execution waves
 
-- [x] **05-01-PLAN.md** — Extract foundation modules and rewrite entry point (Wave 1) — CREATED
-  - Requirements: FMOD-01, FMOD-02, FMOD-03, FMOD-04, FMOD-08, TEST-05
-  - Files: appserver/static/modules/wl_constants.js, wl_state.js, wl_rest.js, wl_ui.js, whitelist_manager.js, notifications.js, tests/qunit/test_state_manager.js, test_rest_helpers.js, default/data/ui/views/test_runner.xml
-  - Tasks: 8 (create wl_constants, create wl_state, create wl_rest, create wl_ui, QUnit infrastructure, rewrite whitelist_manager.js, rewrite notifications.js, Docker deployment)
-  - Status: Planned, 8 detailed tasks created with verification criteria and acceptance criteria
+- [x] **05-01-PLAN.md** — Extract foundation modules (Wave 1) — CREATED
+  - Requirements: FMOD-01, FMOD-02, FMOD-03, FMOD-04, FMOD-08
+  - Modules: wl_constants.js, wl_state.js, wl_rest.js, wl_ui.js
+  - Files: 4 foundation modules (appserver/static/modules/wl_*.js), 2 test files (tests/qunit/test_*.js), notifications.js refactored
+  - Tasks: 6 (create wl_constants, create wl_state, create wl_rest, create wl_ui, QUnit infrastructure, refactor notifications.js)
+  - Status: Planned, 6 detailed tasks created with verification criteria and acceptance criteria
+  - Depends on: none (Wave 1 foundation)
 
-- [ ] **05-02-PLAN.md** — Extract independent feature modules (Wave 2)
-  - Requirements: FMOD-05, TEST-05
+- [ ] **05-02-PLAN.md** — Extract independent feature modules (Wave 1 parallel) — CREATED
+  - Requirements: FMOD-05
   - Modules: wl_search.js, wl_presence.js, wl_csv_io.js
+  - Files: 3 independent feature modules, updated entry point, app.conf
+  - Tasks: 5 (create wl_search, create wl_presence, create wl_csv_io, update entry point, bump build and commit)
   - Depends on: 05-01 (foundation modules available)
 
-- [ ] **05-03-PLAN.md** — Extract coupled feature modules (Wave 3)
-  - Requirements: FMOD-05, TEST-05
+- [ ] **05-03-PLAN.md** — Extract coupled feature modules (Wave 2) — CREATED
+  - Requirements: FMOD-05
   - Modules: wl_table.js, wl_modals.js, wl_versions.js, wl_approval_ui.js
+  - Files: 4 coupled feature modules, updated entry point, app.conf
+  - Tasks: 6 (create wl_table, create wl_modals, create wl_versions, create wl_approval_ui, update entry point, bump build and commit)
   - Depends on: 05-02 (all foundation + independent features ready)
 
-- [ ] **05-04-PLAN.md** — Finalize orchestrator and comprehensive testing (Wave 4)
+- [ ] **05-04-PLAN.md** — Finalize orchestrator and comprehensive testing (Wave 3) — CREATED
   - Requirements: TEST-05
-  - Tasks: Finalize entry point orchestration, wire all cross-module events, create additional QUnit tests for state transitions, test loading order, verify all requirement IDs addressed
-  - Depends on: 05-03 (all feature modules extracted)
+  - Modules: wl_orchestrator.js, revised whitelist_manager.js (~100 lines), 2 QUnit test files
+  - Files: wl_orchestrator.js, whitelist_manager.js rewrite, test_module_loading.js, test_state_transitions.js, test_runner.xml dashboard, SUMMARY.md
+  - Tasks: 6 (create wl_orchestrator, slim entry point to 100 lines, create 2 QUnit test files, create test_runner dashboard, checkpoint verification, verify requirements and create SUMMARY)
+  - Depends on: 05-01, 05-02, 05-03 (all feature modules extracted)
+  - Autonomous: false (includes checkpoint:human-verify gate)
 
 **Wave Structure:**
-- **Wave 1:** 05-01 (foundation: wl_constants, wl_state, wl_rest, wl_ui + entry point rewrite + notifications rewrite + test infrastructure)
-- **Wave 2:** 05-02 (independent features: wl_search, wl_presence, wl_csv_io)
-- **Wave 3:** 05-03 (coupled features: wl_table, wl_modals, wl_versions, wl_approval_ui)
-- **Wave 4:** 05-04 (finalize entry point, comprehensive testing, requirement closure)
+- **Wave 1 (Foundation):** 05-01 (wl_constants, wl_state, wl_rest, wl_ui, test infrastructure, notifications refactor)
+- **Wave 1 (Parallel - Independent Features):** 05-02 (wl_search, wl_presence, wl_csv_io, entry point update) — depends on 05-01
+- **Wave 2 (Coupled Features):** 05-03 (wl_table, wl_modals, wl_versions, wl_approval_ui, entry point update) — depends on 05-02
+- **Wave 3 (Finalization & Testing):** 05-04 (wl_orchestrator, slim entry point to 100 lines, comprehensive QUnit tests, requirement verification, SUMMARY) — depends on 05-01, 05-02, 05-03
 
 ---
 
@@ -340,7 +349,7 @@
 | 2. Backend Core Domain | 6 plans | Complete ✓ | — | — |
 | 3. Backend Orchestration | 3 plans | Complete ✓ | — | 2026-04-01 |
 | 4. Backend Integration | 5 plans | Complete ✓ | — | — |
-| 5. Frontend Architecture | 4 plans | Planning ✓ | — | — |
+| 5. Frontend Architecture | 4 plans | Revision ✓ | — | — |
 | 6. Admin Panel | TBD | Not started | — | — |
 | 7. Test Coverage & Validation | TBD | Not started | — | — |
 | 8. Splunkbase Readiness | TBD | Not started | — | — |
@@ -359,4 +368,4 @@
 - **Phase 2 gap closure:** Plans 02-05 and 02-06 executed to refactor oversized functions (compute_diff 207→4 funcs, move_to_trash 139→3 funcs, restore_from_trash 187→dispatcher+helpers) to satisfy BMOD-13 requirement
 - **Phase 3 complete:** 3 plans executed (03-01, 03-02, 03-03), 4 orchestration modules extracted (wl_filelock, wl_limits, wl_approval, wl_notify), 382+ tests passing, approval queue with conflict resolution and notifications fully integrated
 - **Phase 4 complete:** 5 plans executed (04-01 through 04-05), wl_replay.py Layer 5 module created, handler refactored as thin REST router, all 15+ actions tested against live Docker container, backward compatibility validated
-- **Phase 5 planning complete:** 4-wave frontend architecture plan created (05-01 foundation modules + entry point rewrite, 05-02 independent features, 05-03 coupled features, 05-04 finalization), 11-12 frontend AMD modules to be extracted with centralized state manager, REST helper consolidation, thin entry point, QUnit testing infrastructure established
+- **Phase 5 revision complete:** 4-plan frontend architecture structure finalized (05-01 foundation, 05-02 independent features, 05-03 coupled features, 05-04 finalization). 11 frontend AMD modules to be extracted: 4 foundation (wl_constants, wl_state, wl_rest, wl_ui), 3 independent (wl_search, wl_presence, wl_csv_io), 4 coupled (wl_table, wl_modals, wl_versions, wl_approval_ui). Entry point rewritten as thin orchestrator (~100 lines). Comprehensive QUnit testing with module loading and state transition coverage. Requirements FMOD-01/02/03/04/05/08 and TEST-05 fully mapped across 4 plans with 3 execution waves.
