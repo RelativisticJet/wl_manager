@@ -22,8 +22,12 @@ require([
     "underscore",
     "splunkjs/mvc",
     "splunkjs/mvc/utils",
-    "splunkjs/mvc/simplexml/ready!"
-], function ($, _, mvc, utils) {
+    "splunkjs/mvc/simplexml/ready!",
+    // Wave 2 Feature Modules (independent features)
+    "modules/wl_search",
+    "modules/wl_presence",
+    "modules/wl_csv_io"
+], function ($, _, mvc, utils, Search, Presence, CsvIO) {
     "use strict";
 
     // ══════════════════════════════════════════════════════════════════
@@ -2464,15 +2468,19 @@ require([
             showMsg("Changes discarded.", "info");
         });
 
-        // Export CSV
+        // Export CSV (delegated to Wave 2 module)
         $table.off("click.wl", "#btn-export").on("click.wl", "#btn-export", function () {
-            exportCsv();
+            CsvIO.exportCSV();
         });
 
-        // Import CSV
+        // Import CSV (delegated to Wave 2 module)
         $table.off("change.wl", "#btn-import").on("change.wl", "#btn-import", function (e) {
             var file = e.target.files[0];
-            if (file) { importCsv(file); }
+            if (file) {
+                // Note: importCSV() now handles file picker internally in the module
+                // For now, keep legacy direct call but future refactoring will use CsvIO.importCSV()
+                importCsv(file);
+            }
             $(this).val("");  // reset so same file can be re-selected
         });
 
@@ -6712,6 +6720,41 @@ require([
         origUpdateRemoveSelectedBtn();
         updateBulkEditBtn();
     };
+
+    // ══════════════════════════════════════════════════════════════════
+    // Wave 2 Feature Modules Initialization
+    // ══════════════════════════════════════════════════════════════════
+
+    // Initialize independent feature modules in order
+    Search.init();      // Search/filter functionality
+    Presence.init();    // User presence tracking
+    CsvIO.init();       // CSV import/export operations
+
+    // Start presence polling to detect other users editing
+    Presence.start();
+
+    // Wire CSV import completion event handler
+    $(document).on('wl:csvImported', function(event, data) {
+        showMsg('Successfully imported ' + data.rowCount + ' rows from ' + data.filename, 'success');
+        refreshTable();
+    });
+
+    // Wire CSV export completion event handler
+    $(document).on('wl:csvExported', function(event, data) {
+        // Export already shows success message in module
+    });
+
+    // ══════════════════════════════════════════════════════════════════
+    // Wave 3 Feature Modules (wl_table, wl_modals, etc.) — PLACEHOLDER
+    // ══════════════════════════════════════════════════════════════════
+    // Wave 3 modules will extract table rendering, modal dialogs, and other coupled features.
+    // These will be added as dependencies in 05-03 (Wave 3) plan execution.
+
+    // ══════════════════════════════════════════════════════════════════
+    // Wave 4 Finalization (Entry Point Refactoring) — PLACEHOLDER
+    // ══════════════════════════════════════════════════════════════════
+    // Wave 4 will simplify this entry point to <100 lines by removing all event handlers
+    // and delegating to feature modules. Core logic will move to domain modules.
 
     // ══════════════════════════════════════════════════════════════════
     // Initialization
