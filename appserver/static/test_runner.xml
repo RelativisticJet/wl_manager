@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<dashboard version="1.1">
+  <label>QUnit Test Runner</label>
+  <description>Runs QUnit tests for wl_rest.js and wl_table.js modules</description>
+
+  <row>
+    <panel>
+      <title>QUnit Test Results</title>
+      <html>
+        <![CDATA[
+          <!-- QUnit CSS -->
+          <link rel="stylesheet" href="https://code.jquery.com/qunit/qunit-2.20.1.css" />
+
+          <!-- QUnit Container -->
+          <div id="qunit"></div>
+          <div id="qunit-fixture"></div>
+
+          <!-- jQuery (provided by Splunk) -->
+          <script src="https://code.jquery.com/jquery-1.12.4.min.js"></script>
+
+          <!-- QUnit JS -->
+          <script src="https://code.jquery.com/qunit/qunit-2.20.1.js"></script>
+
+          <!-- Load main module (contains wl_rest and wl_table) -->
+          <!-- Note: In real Splunk dashboard context, modules are loaded via require.js -->
+          <!-- For QUnit, we provide minimal mocks and then load test files -->
+
+          <!-- Mock Splunk environment if needed -->
+          <script>
+            window.__qunitRunning = true;
+            if (typeof Splunk === 'undefined') {
+              window.Splunk = {
+                util: {
+                  make_url: function(url) { return url; }
+                }
+              };
+            }
+          </script>
+
+          <!-- Load test files in order -->
+          <!-- Note: These will be expanded to include actual test implementations -->
+          <script src="../../appserver/static/modules/wl_constants.js"></script>
+          <script src="../../appserver/static/modules/wl_state.js"></script>
+          <script src="../../tests/qunit/fixtures/sample_response.json"></script>
+          <script src="../../tests/qunit/test_wl_rest.js"></script>
+          <script src="../../tests/qunit/test_wl_table.js"></script>
+
+          <!-- Summary display -->
+          <script>
+            document.addEventListener('DOMContentLoaded', function() {
+              setTimeout(function() {
+                var summary = document.getElementById('qunit-tests');
+                var details = 'Test infrastructure loaded. Check QUnit output above.';
+                console.log(details);
+              }, 1000);
+            });
+          </script>
+        ]]>
+      </html>
+    </panel>
+  </row>
+</dashboard>
