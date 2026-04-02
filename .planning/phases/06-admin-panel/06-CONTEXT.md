@@ -36,7 +36,7 @@ Modularize `control_panel.js` (2,025 lines) into 5 AMD feature modules, rewritin
 - **wl_ui.js for theme detection** — CP entry point imports wl_ui.js and calls `UI.detectTheme()` during init. Eliminates duplicated dark theme detection IIFE
 - **wl_constants.js for shared constants** — Action type strings, CSS class patterns imported from shared constants. CP-specific constants (PAGE_SIZE, USAGE_PER_PAGE) stay module-local
 - **User detection stays in CP entry point** — `cpCurrentUser` and `cpIsSuperAdmin` are CP-specific, read-only after init (~15 lines). No reuse needed
-- **Modal helpers stay in entry point** — `showCpAlert`, `showCpConfirm`, `showCpPrompt` use CP-specific DOM IDs and event namespaces. Passed to modules via init context object
+- **~~Modal helpers stay in entry point~~** — OVERRIDDEN (gap closure 06-05): Extract to `wl_cp_modals.js` as shared AMD module. Original reasoning (CP-specific DOM IDs) doesn't prevent extraction — module accepts namespace param. Required to meet FMOD-06 line count target and phase goal of "reusable modal helper infrastructure"
 - **Info tooltips stay in wl_cp_limits.js** — Only limits uses them. YAGNI for sharing
 - **`extractRequestReason()` stays in wl_cp_queue.js** — Queue-domain-specific data extraction helper
 
