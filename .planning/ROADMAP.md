@@ -287,20 +287,49 @@
 
 ### Phase 6: Admin Panel
 
-**Goal:** Modularize control_panel.js into 4 feature modules, completing frontend architecture.
+**Goal:** Modularize control_panel.js into 5 feature modules with dependency injection pattern, completing frontend architecture and establishing reusable modal helper infrastructure.
 
 **Depends on:** Phase 5
 
 **Requirements:** FMOD-06, FMOD-07
 
 **Success Criteria** (what must be TRUE when phase completes):
-1. Admin user can access Control Panel and manage approval queue, daily limits, trash, and settings with zero functional change
-2. 4 new admin panel modules exist: wl_cp_queue.js, wl_cp_limits.js, wl_cp_trash.js, wl_cp_settings.js
-3. control_panel.js is rewritten as thin entry point (~100 lines) that requires admin feature modules
-4. All modules use shared wl_rest.js helpers (no duplicated REST logic)
-5. QUnit tests verify approval queue display, limit enforcement UI, trash restore/purge, and settings persistence
+1. Admin user can access Control Panel and manage approval queue, daily limits, trash, and admin settings with zero functional change
+2. 5 new admin panel modules exist: wl_cp_queue.js, wl_cp_limits.js, wl_cp_usage.js, wl_cp_trash.js, wl_cp_admin_limits.js
+3. control_panel.js is rewritten as thin entry point (~150-200 lines) with AMD imports, access control gate, tab routing, shared modal helpers, and visibility handler
+4. All modules use shared wl_rest.js helpers (no duplicated REST logic); accept modal helpers via ctx object
+5. Tab routing with URL state management (history.replaceState) and browser visibility lifecycle (document.visibilitychange)
+6. Approval queue module fires notifications for new pending requests; admin receives badge + toast
 
-**Plans:** TBD
+**Plans:** 3 plans in 2 execution waves
+
+- [ ] **06-01-PLAN.md** — Refactor control_panel.js entry point (Wave 1) — CREATED
+  - Requirements: FMOD-06, FMOD-07
+  - Files: appserver/static/control_panel.js (~150-200 lines), default/app.conf (build bump)
+  - Tasks: 2 (refactor entry point, bump build)
+  - Depends on: none (Wave 1 foundation)
+  - Status: Plan created with detailed action specifications, verification criteria, and acceptance criteria
+
+- [ ] **06-02-PLAN.md** — Extract simple modules (Wave 2a) — CREATED
+  - Requirements: FMOD-06, FMOD-07
+  - Modules: wl_cp_trash.js (~180 lines), wl_cp_admin_limits.js (~135 lines), wl_cp_usage.js (~190 lines)
+  - Files: 3 modules, updated entry point, default/app.conf (build 487 → 488)
+  - Tasks: 5 (create wl_cp_trash, create wl_cp_admin_limits, create wl_cp_usage, update entry point, bump build and commit)
+  - Depends on: 06-01 (entry point infrastructure ready)
+  - Status: Plan created with comprehensive task specifications
+
+- [ ] **06-03-PLAN.md** — Extract complex modules and finalize (Wave 2b) — CREATED
+  - Requirements: FMOD-06, FMOD-07
+  - Modules: wl_cp_queue.js (~420 lines), wl_cp_limits.js (~725 lines)
+  - Files: 2 modules, entry point updates, notification enhancement (Queue tab badge + toast), CSS updates, default/app.conf (build 488 → 489)
+  - Tasks: 5 (create wl_cp_queue, create wl_cp_limits, add notification badge+toast, update CSS, bump build and finalize)
+  - Depends on: 06-02 (all other modules available)
+  - Status: Plan created with detailed specifications for complex modules and notification system
+
+**Wave Structure:**
+- **Wave 1:** 06-01 (refactor control_panel.js entry point, access control gate, tab routing, modal helpers, visibility handler) — foundation for modular features
+- **Wave 2a:** 06-02 (extract wl_cp_trash, wl_cp_admin_limits, wl_cp_usage modules) — simple features ready in parallel
+- **Wave 2b:** 06-03 (extract wl_cp_queue, wl_cp_limits modules, add notifications) — complex features, final wiring and finalization
 
 ---
 
@@ -352,7 +381,7 @@
 | 3. Backend Orchestration | 3 plans | Complete ✓ | — | 2026-04-01 |
 | 4. Backend Integration | 5 plans | Complete ✓ | — | — |
 | 5. Frontend Architecture | 4 plans | Complete ✓ | — | 2026-04-02 |
-| 6. Admin Panel | TBD | Not started | — | — |
+| 6. Admin Panel | 3 plans | Planned ✓ | — | — |
 | 7. Test Coverage & Validation | TBD | Not started | — | — |
 | 8. Splunkbase Readiness | TBD | Not started | — | — |
 
@@ -370,4 +399,5 @@
 - **Phase 2 gap closure:** Plans 02-05 and 02-06 executed to refactor oversized functions (compute_diff 207→4 funcs, move_to_trash 139→3 funcs, restore_from_trash 187→dispatcher+helpers) to satisfy BMOD-13 requirement
 - **Phase 3 complete:** 3 plans executed (03-01, 03-02, 03-03), 4 orchestration modules extracted (wl_filelock, wl_limits, wl_approval, wl_notify), 382+ tests passing, approval queue with conflict resolution and notifications fully integrated
 - **Phase 4 complete:** 5 plans executed (04-01 through 04-05), wl_replay.py Layer 5 module created, handler refactored as thin REST router, all 15+ actions tested against live Docker container, backward compatibility validated
-- **Phase 5 revision complete:** 4-plan frontend architecture structure finalized (05-01 foundation, 05-02 independent features, 05-03 coupled features, 05-04 finalization). 11 frontend AMD modules to be extracted: 4 foundation (wl_constants, wl_state, wl_rest, wl_ui), 3 independent (wl_search, wl_presence, wl_csv_io), 4 coupled (wl_table, wl_modals, wl_versions, wl_approval_ui). Entry point rewritten as thin orchestrator (~100 lines). Comprehensive QUnit testing with module loading and state transition coverage. Requirements FMOD-01/02/03/04/05/08 and TEST-05 fully mapped across 4 plans with 3 execution waves.
+- **Phase 5 complete:** 4 plans executed (05-01 through 05-04), 11 frontend AMD modules extracted (4 foundation + 3 independent + 4 coupled), state manager implemented, whitelist_manager.js rewritten as thin orchestrator, comprehensive QUnit tests with module loading and state transitions, SUMMARY.md and test_runner.xml dashboard created. Requirements FMOD-01/02/03/04/05/08 and TEST-05 fully satisfied.
+- **Phase 6 planning complete:** 3 plans created (06-01 foundation, 06-02 simple modules, 06-03 complex modules), 5 admin panel modules to be extracted (wl_cp_queue, wl_cp_limits, wl_cp_usage, wl_cp_trash, wl_cp_admin_limits). control_panel.js refactored from 2,025 lines to ~150-200 lines entry point with AMD imports, access control gate, tab routing with history.replaceState, shared modal helpers via dependency injection, and browser visibility handler. Notifications system with Queue tab badge and toast alerts. Requirements FMOD-06 and FMOD-07 fully mapped across 3 plans with 2 execution waves (1 foundation + 2 feature extraction parallel).
