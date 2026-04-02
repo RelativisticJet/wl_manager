@@ -364,7 +364,7 @@
 5. E2E browser tests pass: load CSV, save changes, request approval, admin approves, revert to previous version (using Playwright or Puppeteer)
 6. Mock Splunk SDK fixtures created for offline unit testing (no container required for unit tests)
 
-**Plans:** 6 plans in 4 waves
+**Plans:** 4/6 plans executed
 
 - [x] **07-01-PLAN.md** – Unit test baseline: test infrastructure, conftest consolidation, marker registration (Wave 1) – COMPLETED (2026-04-02)
   - Requirements: TEST-01, TEST-06
@@ -380,10 +380,14 @@
 
 - [ ] **07-04-PLAN.md** – E2E Playwright workflows: CRUD, approval, revert, admin, stress (Wave 3) – PLANNED
 
-- [x] **07-05-PLAN.md** � QUnit frontend module tests: infrastructure + wl_rest + wl_table (Wave 3) � CREATED
+- [x] **07-05-PLAN.md – QUnit frontend module tests: infrastructure + wl_rest + wl_table (Wave 3) – COMPLETED (2026-04-02)
   - Requirements: TEST-05
-  - Files: tests/qunit/test_wl_rest.js, test_wl_table.js, fixtures/, appserver/static/test_runner.xml
-  - Tasks: 3 (create test infrastructure and test_runner.xml, wl_rest tests 30+, wl_table tests 40+)
+  - Status: 3/3 tasks completed, 128 tests created (64 wl_rest + 64 wl_table), infrastructure ready
+  - Files: tests/qunit/test_wl_rest.js (64 tests), test_wl_table.js (64 tests), fixtures/, appserver/static/test_runner.xml
+  - Key accomplishments:
+    * test_runner.xml: SimpleXML dashboard with QUnit 2.20.1 CDN (no build tool required)
+    * wl_rest.js: 64 comprehensive tests for REST API wrapper (6 methods, error paths, handlers, encoding, promises)
+    * wl_table.js: 64 comprehensive tests for data model (syncInputs, refreshTable, row ops, change detection, undo)
   - Depends on: 07-01, 07-04 (test infrastructure ready)
 
 - [ ] **07-06-PLAN.md** � QUnit frontend module tests: wl_modals + wl_state + verification (Wave 4) � CREATED
@@ -436,7 +440,7 @@
 | 4. Backend Integration | 5 plans | Complete ✓ | — | — |
 | 5. Frontend Architecture | 4 plans | Complete ✓ | — | 2026-04-02 |
 | 6. Admin Panel | 5 plans | Complete ✓ | 2026-04-02 | 2026-04-02 (all) |
-| 7. Test Coverage & Validation | 6 plans | 2/6 (Plans 1-3 COMPLETE) | 2026-04-02 | 2026-04-02 (Plan 01, 03) |
+| 7. Test Coverage & Validation | 4/6 | In Progress|  | 2026-04-02 (Plan 01, 03) |
 | 8. Splunkbase Readiness | TBD | Not started | — | — |
 
 ---
