@@ -10,7 +10,7 @@ VERSION     := $(shell grep '^version' default/app.conf | head -1 | cut -d= -f2 
 SPL_FILE    := dist/$(APP_NAME)-$(VERSION).spl
 SPLUNK_PASS ?= Chang3d!
 
-.PHONY: help validate test package clean docker-up docker-down docker-logs docker-restart
+.PHONY: help validate test package clean docker-up docker-down docker-logs docker-restart metrics metrics-report
 
 help: ## Show this help message
 	@echo ""
@@ -72,6 +72,14 @@ docker-wait: ## Wait until Splunk is fully ready, then return
 
 test: ## Run integration tests against Docker Splunk
 	@bash scripts/test_integration.sh
+
+# ── Quality Metrics ───────────────────────────────────────────────────
+
+metrics: ## Enforce quality gates (CC<15, coverage>=80%, LOC<1000)
+	python3 scripts/metrics_collector.py --gate
+
+metrics-report: ## Generate CODE_METRICS.md without enforcing thresholds
+	python3 scripts/metrics_collector.py --report
 
 # ── Phase 4: Package ──────────────────────────────────────────────────
 

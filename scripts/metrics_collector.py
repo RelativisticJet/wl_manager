@@ -464,6 +464,8 @@ class MetricsCollector:
             docs_path.parent.mkdir(exist_ok=True)
             self.write_markdown_report(docs_path)
             print(f"  Wrote: docs/CODE_METRICS.md")
+            # Report generation always succeeds (no exit code check)
+            return 0
 
         if gate and exit_code != 0:
             sys.exit(1)
