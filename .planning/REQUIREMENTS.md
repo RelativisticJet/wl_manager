@@ -32,8 +32,8 @@ Requirements for the v3.0 modular rewrite. Each maps to roadmap phases.
 - [ ] **FMOD-03**: wl_rest.js provides shared REST helpers (restGet, restPost) used by all JS files
 - [ ] **FMOD-04**: wl_state.js implements singleton state manager for all shared application state
 - [ ] **FMOD-05**: Feature modules extracted: wl_table.js, wl_search.js, wl_modals.js, wl_versions.js, wl_approval_ui.js, wl_csv_io.js, wl_presence.js, wl_theme.js, wl_events.js
-- [ ] **FMOD-06**: control_panel.js rewritten as thin AMD entry point loading 4 feature modules
-- [ ] **FMOD-07**: Control panel modules extracted: wl_cp_queue.js, wl_cp_limits.js, wl_cp_trash.js, wl_cp_settings.js
+- [ ] **FMOD-06**: control_panel.js rewritten as thin AMD entry point (~150-200 lines) loading 5 feature modules
+- [ ] **FMOD-07**: Control panel modules extracted: wl_cp_queue.js, wl_cp_limits.js, wl_cp_usage.js, wl_cp_trash.js, wl_cp_admin_limits.js
 - [ ] **FMOD-08**: notifications.js refactored to use shared wl_rest.js instead of duplicated helpers
 
 ### Testing
