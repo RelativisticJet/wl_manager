@@ -1,0 +1,94 @@
+{
+  "payloads": [
+    {
+      "name": "script_tag",
+      "payload": "<script>alert('xss')</script>",
+      "context": "CSV cell content"
+    },
+    {
+      "name": "event_handler",
+      "payload": "<img src=x onerror='alert(1)'>",
+      "context": "CSV cell content"
+    },
+    {
+      "name": "svg_javascript",
+      "payload": "<svg onload='alert(1)'>",
+      "context": "CSV cell content"
+    },
+    {
+      "name": "javascript_url",
+      "payload": "<a href='javascript:alert(1)'>click</a>",
+      "context": "CSV cell content"
+    },
+    {
+      "name": "data_uri",
+      "payload": "<img src='data:text/html,<script>alert(1)</script>'>",
+      "context": "CSV cell content"
+    },
+    {
+      "name": "style_expression",
+      "payload": "<style>body{background: url('javascript:alert(1)')}</style>",
+      "context": "CSV cell content"
+    },
+    {
+      "name": "iframe",
+      "payload": "<iframe src='javascript:alert(1)'></iframe>",
+      "context": "CSV cell content"
+    },
+    {
+      "name": "base64_encoded",
+      "payload": "PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+      "context": "CSV cell (base64)"
+    },
+    {
+      "name": "onclick_event",
+      "payload": "<div onclick='alert(1)'>click</div>",
+      "context": "CSV cell content"
+    },
+    {
+      "name": "onmouseover_event",
+      "payload": "<span onmouseover='alert(1)'>hover</span>",
+      "context": "CSV cell content"
+    },
+    {
+      "name": "form_action_javascript",
+      "payload": "<form action='javascript:alert(1)'></form>",
+      "context": "CSV cell content"
+    },
+    {
+      "name": "object_data_uri",
+      "payload": "<object data='data:text/html,<script>alert(1)</script>'></object>",
+      "context": "CSV cell content"
+    },
+    {
+      "name": "embed_src_javascript",
+      "payload": "<embed src='javascript:alert(1)'>",
+      "context": "CSV cell content"
+    },
+    {
+      "name": "body_onload",
+      "payload": "<body onload='alert(1)'>",
+      "context": "CSV cell content"
+    },
+    {
+      "name": "input_autofocus_onfocus",
+      "payload": "<input autofocus onfocus='alert(1)'>",
+      "context": "CSV cell content"
+    },
+    {
+      "name": "marquee_onstart",
+      "payload": "<marquee onstart='alert(1)'>",
+      "context": "CSV cell content"
+    },
+    {
+      "name": "details_ontoggle",
+      "payload": "<details ontoggle='alert(1)'>",
+      "context": "CSV cell content"
+    },
+    {
+      "name": "video_onload",
+      "payload": "<video src=x onload='alert(1)'>",
+      "context": "CSV cell content"
+    }
+  ]
+}

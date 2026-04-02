@@ -1,0 +1,89 @@
+{
+  "matrix": [
+    {
+      "role": "viewer",
+      "actions": {
+        "get_csv": true,
+        "get_mapping": true,
+        "get_versions": true,
+        "save_csv": false,
+        "revert_csv": false,
+        "add_rule": false,
+        "delete_rule": false,
+        "submit_approval": false,
+        "process_approval": false,
+        "approve_csv_edit": false,
+        "reject_approval": false,
+        "list_rules": true
+      }
+    },
+    {
+      "role": "editor",
+      "actions": {
+        "get_csv": true,
+        "get_mapping": true,
+        "get_versions": true,
+        "save_csv": true,
+        "revert_csv": true,
+        "add_rule": true,
+        "delete_rule": true,
+        "submit_approval": true,
+        "process_approval": false,
+        "approve_csv_edit": false,
+        "reject_approval": false,
+        "list_rules": true
+      }
+    },
+    {
+      "role": "admin",
+      "actions": {
+        "get_csv": true,
+        "get_mapping": true,
+        "get_versions": true,
+        "save_csv": true,
+        "revert_csv": true,
+        "add_rule": true,
+        "delete_rule": true,
+        "submit_approval": true,
+        "process_approval": true,
+        "approve_csv_edit": true,
+        "reject_approval": true,
+        "list_rules": true
+      }
+    },
+    {
+      "role": "power",
+      "actions": {
+        "get_csv": true,
+        "get_mapping": true,
+        "get_versions": true,
+        "save_csv": true,
+        "revert_csv": true,
+        "add_rule": true,
+        "delete_rule": true,
+        "submit_approval": true,
+        "process_approval": true,
+        "approve_csv_edit": true,
+        "reject_approval": true,
+        "list_rules": true
+      }
+    },
+    {
+      "role": "sc_admin",
+      "actions": {
+        "get_csv": true,
+        "get_mapping": true,
+        "get_versions": true,
+        "save_csv": true,
+        "revert_csv": true,
+        "add_rule": true,
+        "delete_rule": true,
+        "submit_approval": true,
+        "process_approval": true,
+        "approve_csv_edit": true,
+        "reject_approval": true,
+        "list_rules": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,104 @@
+{
+  "payloads": [
+    {
+      "name": "sql_drop",
+      "payload": "'; DROP TABLE users; --",
+      "context": "CSV cell (shows sanitization requirement)"
+    },
+    {
+      "name": "command_injection_pipe",
+      "payload": "normal | cat /etc/passwd",
+      "context": "CSV cell or parameter"
+    },
+    {
+      "name": "command_injection_semicolon",
+      "payload": "normal; rm -rf /",
+      "context": "CSV cell or parameter"
+    },
+    {
+      "name": "backtick",
+      "payload": "`whoami`",
+      "context": "CSV cell or parameter"
+    },
+    {
+      "name": "dollar_expansion",
+      "payload": "$(whoami)",
+      "context": "CSV cell or parameter"
+    },
+    {
+      "name": "newline_injection",
+      "payload": "test\nmalicious_header: injected",
+      "context": "CSV header"
+    },
+    {
+      "name": "sql_union",
+      "payload": "' UNION SELECT * FROM admin_users --",
+      "context": "CSV cell (SQL injection variant)"
+    },
+    {
+      "name": "sql_comment_bypass",
+      "payload": "admin'/**/or/**/1=1",
+      "context": "CSV cell (SQL comment bypass)"
+    },
+    {
+      "name": "command_ampersand",
+      "payload": "normal & cat /etc/passwd",
+      "context": "CSV cell (command chaining)"
+    },
+    {
+      "name": "command_or",
+      "payload": "normal || cat /etc/passwd",
+      "context": "CSV cell (OR command chaining)"
+    },
+    {
+      "name": "command_and",
+      "payload": "normal && cat /etc/passwd",
+      "context": "CSV cell (AND command chaining)"
+    },
+    {
+      "name": "newline_header_carriage_return",
+      "payload": "test\r\nX-Forwarded-For: 127.0.0.1",
+      "context": "CSV cell (CRLF injection)"
+    },
+    {
+      "name": "environment_variable",
+      "payload": "${IFS}cat${IFS}/etc/passwd",
+      "context": "CSV cell (IFS variable expansion)"
+    },
+    {
+      "name": "process_substitution",
+      "payload": "<(cat /etc/passwd)",
+      "context": "CSV cell (process substitution)"
+    },
+    {
+      "name": "heredoc",
+      "payload": "<<EOF\nmalicious\nEOF",
+      "context": "CSV cell (heredoc injection)"
+    },
+    {
+      "name": "glob_expansion",
+      "payload": "test* | grep admin",
+      "context": "CSV cell (glob expansion)"
+    },
+    {
+      "name": "history_expansion",
+      "payload": "normal ! whoami",
+      "context": "CSV cell (history expansion)"
+    },
+    {
+      "name": "brace_expansion",
+      "payload": "{cat,/etc/passwd}",
+      "context": "CSV cell (brace expansion)"
+    },
+    {
+      "name": "parameter_expansion",
+      "payload": "${var:0:10}",
+      "context": "CSV cell (parameter expansion)"
+    },
+    {
+      "name": "arithmetic_expansion",
+      "payload": "$((1+1))",
+      "context": "CSV cell (arithmetic expansion)"
+    }
+  ]
+}
