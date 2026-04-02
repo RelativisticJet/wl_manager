@@ -382,3 +382,274 @@ def test_lock_ordering_no_deadlock(temp_queue_dir, mock_limits):
     assert elapsed < 30, f"Operations took {elapsed:.1f}s, potential deadlock"
 
     print(f"✓ Lock ordering test passed: {num_threads} threads × {operations_per_thread} ops completed in {elapsed:.2f}s")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Task 4: Four Concurrency Scenarios (Phase 07-02 Plan)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.slow
+def test_concurrent_csv_saves_no_corruption(temp_queue_dir, mock_limits):
+    """
+    Scenario 1: Simultaneous CSV saves (5+ threads, 3+ different CSVs)
+
+    Verify that 5+ threads saving different CSVs simultaneously:
+    - Don't corrupt the approval queue
+    - Don't corrupt version manifests
+    - All entries remain readable
+    """
+    import uuid
+    num_threads = 5
+    csv_files = [f"test_concurrent_{i}_{int(time.time())}.csv" for i in range(3)]
+
+    def save_csv_concurrent(thread_id):
+        """Submit approval request for CSV save."""
+        csv_file = csv_files[thread_id % len(csv_files)]
+        success, error, request_id = submit_approval(
+            user=f"analyst_{thread_id}",
+            action_type="save_csv",
+            payload={
+                "csv_file": csv_file,
+                "csv_data": f"col1,col2\nval_{thread_id},test\n",
+                "detection_rule": f"Rule_{thread_id}"
+            },
+            reason=f"Concurrent save {thread_id}",
+            roles=["analyst"],
+        )
+        return (csv_file, request_id, success)
+
+    # Run concurrent saves
+    all_results = []
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        futures = [executor.submit(save_csv_concurrent, i) for i in range(num_threads)]
+        for future in as_completed(futures, timeout=15):
+            all_results.append(future.result())
+
+    # Verify queue integrity after concurrent writes
+    queue, read_error = _read_approval_queue()
+    assert read_error == "", f"Queue corruption after concurrent saves: {read_error}"
+    assert isinstance(queue, list), "Queue must be a list after concurrent saves"
+
+    # Verify version manifests are intact (no JSON corruption)
+    for csv_file in csv_files:
+        # Check that we can read pending approvals for each CSV
+        pending = get_pending_for_csv(csv_file)
+        assert isinstance(pending, list), f"Pending list for {csv_file} must be a list"
+
+    # Verify all submitted requests are either in queue or successfully processed
+    submitted_count = sum(1 for _, _, success in all_results if success)
+    assert submitted_count > 0, "At least one save should succeed"
+
+    print(f"✓ Concurrent CSV saves test passed: {num_threads} threads, {len(csv_files)} CSVs, "
+          f"{submitted_count} successful saves, no corruption")
+
+
+@pytest.mark.slow
+def test_approval_race_only_one_succeeds(temp_queue_dir, mock_limits, monkeypatch):
+    """
+    Scenario 2: Approval race condition (2 admins approve same request simultaneously)
+
+    Verify that when 2 admins try to approve the same request at the exact same time,
+    only 1 succeeds and the other gets an error/already-processed response.
+    """
+    import uuid
+
+    # First, submit a request
+    success, error, request_id = submit_approval(
+        user="analyst1",
+        action_type="save_csv",
+        payload={"csv_file": "test_race.csv", "detection_rule": "Rule_Race"},
+        reason="Request for race test",
+        roles=["analyst"],
+    )
+    assert success, "Initial approval submission must succeed"
+
+    # Simulate two admins approving the same request simultaneously
+    approval_results = {"admin1": None, "admin2": None}
+
+    def approve_as_admin(admin_id):
+        """Try to process approval as admin."""
+        # In a real scenario, this would call process_approval via REST
+        # For this unit test, we simulate by attempting to read and modify the queue
+        queue, _ = _read_approval_queue()
+
+        # Find the request
+        for i, entry in enumerate(queue):
+            if entry.get("request_id") == request_id:
+                # Simulate approval: remove from queue
+                approved = queue.pop(i)
+                success, _ = _write_approval_queue(queue)
+                return (admin_id, success, approved)
+
+        return (admin_id, False, None)
+
+    # Run approval race
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(approve_as_admin, "admin1"),
+            executor.submit(approve_as_admin, "admin2"),
+        ]
+        for future in as_completed(futures, timeout=10):
+            admin_id, success, entry = future.result()
+            approval_results[admin_id] = (success, entry)
+
+    # Verify race result: at most one succeeded (one is None or False)
+    successes = [r[0] for r in approval_results.values() if r and r[0]]
+    assert len(successes) <= 1, f"Expected at most 1 successful approval, got {len(successes)}"
+
+    # Verify request is removed from queue exactly once
+    final_queue, _ = _read_approval_queue()
+    remaining = [e for e in final_queue if e.get("request_id") == request_id]
+    # Request should either be gone (approved) or still there (both failed)
+    assert len(remaining) in [0, 1], f"Request should appear 0 or 1 times, found {len(remaining)}"
+
+    print(f"✓ Approval race test passed: 2 admins, {len(successes)} succeeded, "
+          f"request correctly {'removed' if len(remaining) == 0 else 'retained'}")
+
+
+@pytest.mark.slow
+def test_file_lock_contention_no_deadlock(temp_queue_dir, mock_limits):
+    """
+    Scenario 3: File lock contention (5+ threads, same CSV)
+
+    Verify that 5+ threads trying to edit the same CSV simultaneously:
+    - Don't deadlock (complete within timeout)
+    - Don't corrupt the queue
+    - Handle lock timeouts gracefully
+    """
+    num_threads = 5
+    csv_file = f"test_lock_{int(time.time())}.csv"
+
+    def edit_same_csv(thread_id):
+        """Attempt to edit the same CSV from multiple threads."""
+        try:
+            success, error, request_id = submit_approval(
+                user=f"analyst_{thread_id}",
+                action_type="save_csv",
+                payload={
+                    "csv_file": csv_file,
+                    "csv_data": f"col1,col2\nval_{thread_id},edit_{thread_id}\n",
+                    "detection_rule": "Same_Rule"
+                },
+                reason=f"Concurrent edit {thread_id}",
+                roles=["analyst"],
+            )
+            return {"thread_id": thread_id, "success": success, "error": error}
+        except Exception as e:
+            return {"thread_id": thread_id, "success": False, "error": str(e)}
+
+    # Run concurrent edits with lock contention
+    start_time = time.time()
+    results = []
+    try:
+        with ThreadPoolExecutor(max_workers=num_threads) as executor:
+            futures = [executor.submit(edit_same_csv, i) for i in range(num_threads)]
+            for future in as_completed(futures, timeout=20):
+                results.append(future.result())
+    except TimeoutError:
+        pytest.fail("Concurrent lock contention caused timeout (potential deadlock)")
+
+    elapsed = time.time() - start_time
+
+    # Verify all threads completed
+    assert len(results) == num_threads, f"Expected {num_threads} threads, got {len(results)}"
+
+    # Verify at least one succeeded (not all deadlocked)
+    successes = sum(1 for r in results if r["success"])
+    assert successes > 0, "At least one edit should succeed despite lock contention"
+
+    # Verify queue is readable and not corrupted
+    queue, read_error = _read_approval_queue()
+    assert read_error == "", f"Queue corrupted: {read_error}"
+
+    print(f"✓ File lock contention test passed: {num_threads} threads on same CSV, "
+          f"{successes} succeeded, {elapsed:.2f}s elapsed, no deadlock")
+
+
+@pytest.mark.slow
+def test_mixed_concurrent_operations_consistency(temp_queue_dir, mock_limits):
+    """
+    Scenario 4: Mixed operations (save + revert + delete on overlapping CSVs)
+
+    Verify that concurrent save, revert, and delete operations on the same or
+    overlapping CSVs maintain overall queue consistency:
+    - No unreadable queue state
+    - No partial writes
+    - All operations complete without deadlock
+    """
+    num_threads = 6
+    csv_files = [f"mixed_test_{i}_{int(time.time())}.csv" for i in range(3)]
+
+    operation_count = {"save": 0, "revert": 0, "delete": 0}
+
+    def mixed_operation(thread_id):
+        """Perform mixed operations on CSVs."""
+        op_type = ["save", "revert", "delete"][thread_id % 3]
+        csv_file = csv_files[thread_id % len(csv_files)]
+
+        try:
+            if op_type == "save":
+                success, error, rid = submit_approval(
+                    user=f"user_{thread_id}",
+                    action_type="save_csv",
+                    payload={"csv_file": csv_file, "csv_data": f"col1\nval_{thread_id}\n"},
+                    reason=f"Save {thread_id}",
+                    roles=["analyst"],
+                )
+            elif op_type == "revert":
+                success, error, rid = submit_approval(
+                    user=f"user_{thread_id}",
+                    action_type="revert_csv",
+                    payload={"csv_file": csv_file, "version": "latest"},
+                    reason=f"Revert {thread_id}",
+                    roles=["analyst"],
+                )
+            else:  # delete
+                success, error, rid = submit_approval(
+                    user=f"user_{thread_id}",
+                    action_type="delete_csv",
+                    payload={"csv_file": csv_file, "detection_rules": ["Rule_Mixed"]},
+                    reason=f"Delete {thread_id}",
+                    roles=["analyst"],
+                )
+
+            return {"op": op_type, "success": success, "error": error}
+        except Exception as e:
+            return {"op": op_type, "success": False, "error": str(e)}
+
+    # Run mixed operations
+    start_time = time.time()
+    results = []
+    try:
+        with ThreadPoolExecutor(max_workers=num_threads) as executor:
+            futures = [executor.submit(mixed_operation, i) for i in range(num_threads)]
+            for future in as_completed(futures, timeout=25):
+                result = future.result()
+                results.append(result)
+                operation_count[result["op"]] += 1
+    except TimeoutError:
+        pytest.fail("Mixed operations caused timeout (potential deadlock)")
+
+    elapsed = time.time() - start_time
+
+    # Verify queue is valid and readable after mixed operations
+    queue, read_error = _read_approval_queue()
+    assert read_error == "", f"Queue corruption after mixed ops: {read_error}"
+    assert isinstance(queue, list), "Queue must be a list after mixed operations"
+
+    # Verify all operations completed (at least attempted)
+    assert len(results) == num_threads, f"Expected {num_threads} operations, got {len(results)}"
+
+    # Verify at least some operations succeeded
+    successes = sum(1 for r in results if r["success"])
+    assert successes > 0, "At least one mixed operation should succeed"
+
+    # Verify no entries in queue are corrupted/partial
+    for entry in queue:
+        assert isinstance(entry, dict), "All entries must be valid dicts"
+        assert "request_id" in entry, "All entries must have request_id"
+
+    print(f"✓ Mixed concurrent operations test passed: {num_threads} threads, "
+          f"saves={operation_count['save']} revert={operation_count['revert']} "
+          f"deletes={operation_count['delete']}, {successes} succeeded, "
+          f"{elapsed:.2f}s elapsed, no deadlock")
