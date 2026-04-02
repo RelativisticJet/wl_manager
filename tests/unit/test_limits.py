@@ -46,6 +46,17 @@ def mock_daily_limits():
 
 
 @pytest.fixture
+def mock_counter_period():
+    """
+    Mock _get_counter_period_key() to return "2026-04-01".
+
+    This ensures tests use pre-populated mock_daily_limits data rather than today's date.
+    """
+    with patch('wl_limits._get_counter_period_key', return_value='2026-04-01'):
+        yield
+
+
+@pytest.fixture
 def mock_limit_config():
     """Mock limit_config.json content."""
     return {
@@ -87,7 +98,7 @@ def mock_limit_config():
 # ═══════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.unit
-def test_analyst_limit_allowed_under_max(mock_daily_limits, mock_limit_config):
+def test_analyst_limit_allowed_under_max(mock_daily_limits, mock_limit_config, mock_counter_period):
     """Test: action allowed when current + action_count <= max."""
     with patch('wl_limits._read_daily_limits', return_value=mock_daily_limits):
         with patch('wl_limits._read_limit_config', return_value=mock_limit_config):
@@ -100,7 +111,7 @@ def test_analyst_limit_allowed_under_max(mock_daily_limits, mock_limit_config):
 
 
 @pytest.mark.unit
-def test_analyst_limit_allowed_at_boundary(mock_daily_limits, mock_limit_config):
+def test_analyst_limit_allowed_at_boundary(mock_daily_limits, mock_limit_config, mock_counter_period):
     """Test: action allowed when current + action_count == max."""
     with patch('wl_limits._read_daily_limits', return_value=mock_daily_limits):
         with patch('wl_limits._read_limit_config', return_value=mock_limit_config):
@@ -113,7 +124,7 @@ def test_analyst_limit_allowed_at_boundary(mock_daily_limits, mock_limit_config)
 
 
 @pytest.mark.unit
-def test_analyst_limit_denied_over_max(mock_daily_limits, mock_limit_config):
+def test_analyst_limit_denied_over_max(mock_daily_limits, mock_limit_config, mock_counter_period):
     """Test: action denied when current + action_count > max."""
     with patch('wl_limits._read_daily_limits', return_value=mock_daily_limits):
         with patch('wl_limits._read_limit_config', return_value=mock_limit_config):
@@ -165,7 +176,7 @@ def test_analyst_limit_admin_exempt(mock_daily_limits, mock_limit_config):
 
 
 @pytest.mark.unit
-def test_analyst_limit_multiple_action_count(mock_daily_limits, mock_limit_config):
+def test_analyst_limit_multiple_action_count(mock_daily_limits, mock_limit_config, mock_counter_period):
     """Test: multiple actions counted correctly."""
     with patch('wl_limits._read_daily_limits', return_value=mock_daily_limits):
         with patch('wl_limits._read_limit_config', return_value=mock_limit_config):
@@ -249,7 +260,7 @@ def test_limit_status_all_action_types(mock_daily_limits, mock_limit_config):
 
 
 @pytest.mark.unit
-def test_limit_status_current_count(mock_daily_limits, mock_limit_config):
+def test_limit_status_current_count(mock_daily_limits, mock_limit_config, mock_counter_period):
     """Test: current values match daily_limits.json."""
     with patch('wl_limits._read_daily_limits', return_value=mock_daily_limits):
         with patch('wl_limits._read_limit_config', return_value=mock_limit_config):
@@ -259,7 +270,7 @@ def test_limit_status_current_count(mock_daily_limits, mock_limit_config):
 
 
 @pytest.mark.unit
-def test_limit_status_remaining_calculation(mock_daily_limits, mock_limit_config):
+def test_limit_status_remaining_calculation(mock_daily_limits, mock_limit_config, mock_counter_period):
     """Test: remaining = max - current."""
     with patch('wl_limits._read_daily_limits', return_value=mock_daily_limits):
         with patch('wl_limits._read_limit_config', return_value=mock_limit_config):
@@ -372,7 +383,7 @@ def test_set_limit_config_fail_closed_on_error(mock_limit_config):
 # ═══════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.unit
-def test_reset_all_analysts(mock_daily_limits):
+def test_reset_all_analysts(mock_daily_limits, mock_counter_period):
     """Test: analyst=RESET_ALL_USERS resets all entries."""
     with patch('wl_limits._read_daily_limits', return_value=mock_daily_limits):
         with patch('wl_limits._write_daily_limits', return_value=True):
@@ -383,7 +394,7 @@ def test_reset_all_analysts(mock_daily_limits):
 
 
 @pytest.mark.unit
-def test_reset_single_analyst(mock_daily_limits):
+def test_reset_single_analyst(mock_daily_limits, mock_counter_period):
     """Test: analyst='jsmith' resets only jsmith entry."""
     with patch('wl_limits._read_daily_limits', return_value=mock_daily_limits):
         with patch('wl_limits._write_daily_limits', return_value=True):
@@ -403,7 +414,7 @@ def test_reset_nonexistent_analyst(mock_daily_limits):
 
 
 @pytest.mark.unit
-def test_reset_returns_summary(mock_daily_limits):
+def test_reset_returns_summary(mock_daily_limits, mock_counter_period):
     """Test: reset returns summary of reset counts."""
     with patch('wl_limits._read_daily_limits', return_value=mock_daily_limits):
         with patch('wl_limits._write_daily_limits', return_value=True):
@@ -413,7 +424,7 @@ def test_reset_returns_summary(mock_daily_limits):
 
 
 @pytest.mark.unit
-def test_reset_all_vs_single_analyst(mock_daily_limits):
+def test_reset_all_vs_single_analyst(mock_daily_limits, mock_counter_period):
     """Test: RESET_ALL_USERS behavior different from single user."""
     with patch('wl_limits._read_daily_limits', return_value=mock_daily_limits.copy()):
         with patch('wl_limits._write_daily_limits', return_value=True):
