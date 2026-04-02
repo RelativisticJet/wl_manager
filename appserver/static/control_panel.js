@@ -17,8 +17,13 @@ require([
     "splunkjs/mvc",
     "modules/wl_rest",
     "modules/wl_ui",
-    "modules/wl_constants"
-], function ($, _, mvc, REST, UI, Constants) {
+    "modules/wl_constants",
+    "modules/wl_cp_queue",
+    "modules/wl_cp_limits",
+    "modules/wl_cp_trash",
+    "modules/wl_cp_admin_limits",
+    "modules/wl_cp_usage"
+], function ($, _, mvc, REST, UI, Constants, QueueModule, LimitsModule, TrashModule, AdminLimitsModule, UsageModule) {
     "use strict";
 
     var cpCurrentUser = "", cpIsSuperAdmin = false, cpIsAdmin = false;
@@ -163,20 +168,44 @@ require([
             activeTab = tabName;
             history.replaceState(null, "", "?tab=" + tabName);
 
-            // Stop polling on all modules
-            if (window.QueueModule && typeof window.QueueModule.stopPolling === "function") {
-                window.QueueModule.stopPolling();
+            // Stop polling on all modules with polling
+            if (QueueModule && typeof QueueModule.stopPolling === "function") {
+                QueueModule.stopPolling();
             }
             if (window.UsageModule && typeof window.UsageModule.stopPolling === "function") {
                 window.UsageModule.stopPolling();
             }
 
             // Load and start polling for active tab
-            var mod = tabName === "queue" ? window.QueueModule : (tabName === "usage" ? window.UsageModule : null);
-            if (mod && typeof mod.load === "function") {
-                mod.load().then(function () {
-                    if (typeof mod.startPolling === "function") mod.startPolling();
-                });
+            if (tabName === "queue") {
+                if (QueueModule && typeof QueueModule.load === "function") {
+                    QueueModule.load().done(function() {
+                        updateQueueBadge();
+                        if (typeof QueueModule.startPolling === "function") {
+                            QueueModule.startPolling();
+                        }
+                    });
+                }
+            } else if (tabName === "limits") {
+                if (LimitsModule && typeof LimitsModule.load === "function") {
+                    LimitsModule.load();
+                }
+            } else if (tabName === "usage") {
+                if (window.UsageModule && typeof window.UsageModule.load === "function") {
+                    window.UsageModule.load().then(function () {
+                        if (typeof window.UsageModule.startPolling === "function") {
+                            window.UsageModule.startPolling();
+                        }
+                    });
+                }
+            } else if (tabName === "trash") {
+                if (window.TrashModule && typeof window.TrashModule.load === "function") {
+                    window.TrashModule.load();
+                }
+            } else if (tabName === "admin") {
+                if (window.AdminLimitsModule && typeof window.AdminLimitsModule.load === "function") {
+                    window.AdminLimitsModule.load();
+                }
             }
         }
 
@@ -203,18 +232,79 @@ require([
         // Browser Visibility
         $(document).off("visibilitychange.cpvis").on("visibilitychange.cpvis", function () {
             if (document.hidden) {
-                if (window.QueueModule && typeof window.QueueModule.stopPolling === "function") {
-                    window.QueueModule.stopPolling();
+                // Stop polling when page hidden
+                if (QueueModule && typeof QueueModule.stopPolling === "function") {
+                    QueueModule.stopPolling();
                 }
                 if (window.UsageModule && typeof window.UsageModule.stopPolling === "function") {
                     window.UsageModule.stopPolling();
                 }
             } else {
-                var mod = activeTab === "queue" ? window.QueueModule : (activeTab === "usage" ? window.UsageModule : null);
-                if (mod && typeof mod.startPolling === "function") {
-                    mod.startPolling();
+                // Resume polling when page visible
+                if (activeTab === "queue" && QueueModule && typeof QueueModule.startPolling === "function") {
+                    QueueModule.startPolling();
+                }
+                if (activeTab === "usage" && window.UsageModule && typeof window.UsageModule.startPolling === "function") {
+                    window.UsageModule.startPolling();
                 }
             }
+        });
+
+        // Notification System
+        var lastPendingCount = 0;
+
+        function showNewRequestsToast(count) {
+            var message = count + " new pending request" + (count === 1 ? "" : "s");
+            var $toast = $('<div class="wl-cp-toast">').html(
+                '<span>' + message + '</span>' +
+                '<button class="wl-cp-toast-dismiss" style="background:none;border:none;color:#ccc;font-size:18px;' +
+                'cursor:pointer;padding:0;line-height:1;margin-left:16px">&times;</button>'
+            ).css({
+                position: "fixed", bottom: "20px", right: "20px",
+                "background-color": "#1a1c20", color: "#ffffff",
+                padding: "12px 16px", "border-radius": "4px",
+                display: "flex", "justify-content": "space-between",
+                "align-items": "center", gap: "16px",
+                "z-index": 1001, "font-size": "14px", "line-height": "1.4",
+                "box-shadow": "0 2px 8px rgba(0,0,0,0.15)"
+            });
+
+            $("body").append($toast);
+
+            $toast.find(".wl-cp-toast-dismiss").on("click", function(e) {
+                e.stopPropagation();
+                $toast.fadeOut(300, function() { $toast.remove(); });
+            });
+
+            $toast.on("click", function() {
+                showTab("queue");
+                $toast.fadeOut(300, function() { $toast.remove(); });
+            });
+
+            setTimeout(function() {
+                $toast.fadeOut(300, function() { $toast.remove(); });
+            }, 5000);
+        }
+
+        function updateQueueBadge() {
+            var count = QueueModule.getPendingCount();
+            var $queueBtn = $("[data-tab='queue']");
+            if (count > 0) {
+                $queueBtn.text("Queue (" + count + ")");
+            } else {
+                $queueBtn.text("Queue");
+            }
+        }
+
+        // Listen for new pending requests from Queue module
+        $(document).off("wl:newPendingRequests").on("wl:newPendingRequests", function(e, data) {
+            var newCount = data.newCount;
+            if (newCount > lastPendingCount) {
+                var diff = newCount - lastPendingCount;
+                showNewRequestsToast(diff);
+            }
+            lastPendingCount = newCount;
+            updateQueueBadge();
         });
 
         // Module Context
@@ -226,6 +316,23 @@ require([
             isSuperAdmin: cpIsSuperAdmin,
             isAdmin: cpIsAdmin
         };
+
+        // Initialize all modules
+        window.QueueModule = QueueModule;
+        window.LimitsModule = LimitsModule;
+        window.TrashModule = TrashModule;
+        window.AdminLimitsModule = AdminLimitsModule;
+        window.UsageModule = UsageModule;
+
+        try {
+            QueueModule.init(window.__cpContext);
+            LimitsModule.init(window.__cpContext);
+            TrashModule.init(window.__cpContext);
+            AdminLimitsModule.init(window.__cpContext);
+            UsageModule.init(window.__cpContext);
+        } catch (e) {
+            console.error("Module initialization failed:", e);
+        }
 
         $("#wl-cp-loading").hide();
         $("#wl-cp-content").show();
