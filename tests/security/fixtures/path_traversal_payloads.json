@@ -1,0 +1,79 @@
+{
+  "payloads": [
+    {
+      "name": "relative_parent_unix",
+      "payload": "../../../etc/passwd",
+      "context": "csv_file parameter"
+    },
+    {
+      "name": "relative_parent_windows",
+      "payload": "..\\..\\windows\\system32",
+      "context": "csv_file parameter"
+    },
+    {
+      "name": "absolute_path_unix",
+      "payload": "/etc/passwd",
+      "context": "csv_file parameter"
+    },
+    {
+      "name": "encoded_dot_dot",
+      "payload": "%2e%2e%2f%2e%2e%2fetc%2fpasswd",
+      "context": "csv_file parameter (URL encoded)"
+    },
+    {
+      "name": "unicode_encoding",
+      "payload": "..\\u005c..\\u005cwndows\\u005csystem32",
+      "context": "csv_file parameter (unicode)"
+    },
+    {
+      "name": "null_byte",
+      "payload": "test.csv%00.txt",
+      "context": "csv_file parameter (null byte truncation)"
+    },
+    {
+      "name": "dot_dot_slash_repeated",
+      "payload": "../../../../../../etc/shadow",
+      "context": "csv_file parameter (excessive traversal)"
+    },
+    {
+      "name": "backslash_windows",
+      "payload": "..\\..\\..\\boot.ini",
+      "context": "csv_file parameter (Windows)"
+    },
+    {
+      "name": "mixed_separators",
+      "payload": "../..\\../etc/passwd",
+      "context": "csv_file parameter (mixed separators)"
+    },
+    {
+      "name": "double_slash",
+      "payload": "//etc//passwd",
+      "context": "csv_file parameter (double slash)"
+    },
+    {
+      "name": "backslash_slash_encoded",
+      "payload": "%5c%2e%2e%5c%2e%2e",
+      "context": "csv_file parameter (backslash encoded)"
+    },
+    {
+      "name": "directory_escape",
+      "payload": "../lookups/../../../etc/passwd",
+      "context": "csv_file parameter (escape from lookups)"
+    },
+    {
+      "name": "unicode_slash",
+      "payload": "..%c0%afetc%c0%afpasswd",
+      "context": "csv_file parameter (unicode slash)"
+    },
+    {
+      "name": "double_dot_encoding",
+      "payload": "%2e%2e/etc/passwd",
+      "context": "csv_file parameter (partial encoding)"
+    },
+    {
+      "name": "absolute_windows",
+      "payload": "C:\\Windows\\System32",
+      "context": "csv_file parameter (absolute Windows path)"
+    }
+  ]
+}
