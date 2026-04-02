@@ -18,12 +18,13 @@ require([
     "modules/wl_rest",
     "modules/wl_ui",
     "modules/wl_constants",
+    "modules/wl_cp_modals",
     "modules/wl_cp_queue",
     "modules/wl_cp_limits",
     "modules/wl_cp_trash",
     "modules/wl_cp_admin_limits",
     "modules/wl_cp_usage"
-], function ($, _, mvc, REST, UI, Constants, QueueModule, LimitsModule, TrashModule, AdminLimitsModule, UsageModule) {
+], function ($, _, mvc, REST, UI, Constants, Modals, QueueModule, LimitsModule, TrashModule, AdminLimitsModule, UsageModule) {
     "use strict";
 
     var cpCurrentUser = "", cpIsSuperAdmin = false, cpIsAdmin = false;
@@ -59,100 +60,6 @@ require([
         // Theme
         if (UI.detectTheme() === "dark") {
             $(document.body).addClass("wl-dark");
-        }
-
-        // Modal Helper Factory
-        function createOverlay() {
-            return $("<div>").css({
-                position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
-                "background-color": "rgba(0,0,0,0.5)", display: "flex",
-                "align-items": "center", "justify-content": "center", "z-index": 10000
-            }).addClass("wl-modal-overlay");
-        }
-
-        function createModal(isDark) {
-            return $("<div>").addClass("wl-cp-modal").css({
-                "background-color": isDark ? "#2c2e31" : "#fff",
-                "color": isDark ? "#e0e0e0" : "#333",
-                border: "1px solid " + (isDark ? "#444" : "#ddd"),
-                "border-radius": "8px", "box-shadow": "0 4px 20px rgba(0,0,0,0.3)",
-                padding: "20px", "max-width": "500px", "min-width": "300px"
-            });
-        }
-
-        function showCpAlert(title, message) {
-            return new Promise(function (resolve) {
-                var isDark = $("body").hasClass("wl-dark");
-                var $overlay = createOverlay();
-                var $modal = createModal(isDark)
-                    .append($("<h2>").css("margin-top", "0").text(title))
-                    .append($("<p>").text(message))
-                    .append($("<span>").addClass("btn btn-primary").css("cursor", "pointer")
-                        .text("OK").on("click", function () {
-                            $overlay.fadeOut(200, function () { $overlay.remove(); });
-                            resolve();
-                        }));
-                $overlay.append($modal).appendTo("body");
-            });
-        }
-
-        function showCpConfirm(title, message, opts) {
-            opts = opts || {};
-            return new Promise(function (resolve) {
-                var isDark = $("body").hasClass("wl-dark");
-                var $overlay = createOverlay();
-                var $modal = createModal(isDark)
-                    .append($("<h2>").css("margin-top", "0").text(title))
-                    .append($("<p>").text(message))
-                    .append(
-                        $("<div>").css({ "margin-top": "15px", display: "flex", gap: "8px" })
-                            .append($("<span>").addClass("btn").css("cursor", "pointer")
-                                .text(opts.cancelLabel || "Cancel").on("click", function () {
-                                    $overlay.fadeOut(200, function () { $overlay.remove(); });
-                                    resolve(false);
-                                }))
-                            .append($("<span>").addClass("btn btn-primary").css("cursor", "pointer")
-                                .text(opts.okLabel || "OK").on("click", function () {
-                                    $overlay.fadeOut(200, function () { $overlay.remove(); });
-                                    resolve(true);
-                                }))
-                    );
-                $overlay.append($modal).appendTo("body");
-            });
-        }
-
-        function showCpPrompt(title, message, placeholder) {
-            return new Promise(function (resolve) {
-                var isDark = $("body").hasClass("wl-dark");
-                var $input = $("<input>").attr("type", "text").attr("placeholder", placeholder || "")
-                    .css({
-                        width: "100%", padding: "8px", margin: "10px 0 15px 0",
-                        "background-color": isDark ? "#1a1c20" : "#f5f5f5",
-                        "color": isDark ? "#e0e0e0" : "#333",
-                        border: "1px solid " + (isDark ? "#444" : "#ddd"),
-                        "border-radius": "4px", "box-sizing": "border-box"
-                    });
-                var $overlay = createOverlay();
-                var $modal = createModal(isDark)
-                    .append($("<h2>").css("margin-top", "0").text(title))
-                    .append($("<p>").text(message))
-                    .append($input)
-                    .append(
-                        $("<div>").css({ display: "flex", gap: "8px" })
-                            .append($("<span>").addClass("btn").css("cursor", "pointer")
-                                .text("Cancel").on("click", function () {
-                                    $overlay.fadeOut(200, function () { $overlay.remove(); });
-                                    resolve(null);
-                                }))
-                            .append($("<span>").addClass("btn btn-primary").css("cursor", "pointer")
-                                .text("OK").on("click", function () {
-                                    $overlay.fadeOut(200, function () { $overlay.remove(); });
-                                    resolve($input.val());
-                                }))
-                    );
-                $overlay.append($modal).appendTo("body");
-                $input.focus();
-            });
         }
 
         // Tab Routing
@@ -309,9 +216,9 @@ require([
 
         // Module Context
         window.__cpContext = {
-            showAlert: showCpAlert,
-            showConfirm: showCpConfirm,
-            showPrompt: showCpPrompt,
+            showAlert: Modals.showCpAlert,
+            showConfirm: Modals.showCpConfirm,
+            showPrompt: Modals.showCpPrompt,
             currentUser: cpCurrentUser,
             isSuperAdmin: cpIsSuperAdmin,
             isAdmin: cpIsAdmin
