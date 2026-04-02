@@ -1,0 +1,30 @@
+{
+  "headers_basic": ["user", "src_ip", "comment"],
+  "rows_basic": [
+    {"user": "jsmith", "src_ip": "10.1.2.3", "comment": "Test account"},
+    {"user": "mwilson", "src_ip": "10.1.2.4", "comment": "Admin"},
+    {"user": "kwong", "src_ip": "10.1.2.5", "comment": "Service account"}
+  ],
+  "headers_with_expires": ["user", "src_ip", "comment", "Expires"],
+  "rows_with_expires": [
+    {"user": "jsmith", "src_ip": "10.1.2.3", "comment": "Test", "Expires": "2026-04-10"},
+    {"user": "mwilson", "src_ip": "10.1.2.4", "comment": "Admin", "Expires": "2025-01-01"},
+    {"user": "kwong", "src_ip": "10.1.2.5", "comment": "Service", "Expires": "2026-12-31"}
+  ],
+  "headers_wide": ["col1", "col2", "col3", "col4", "col5", "col6", "col7", "col8", "col9", "col10"],
+  "rows_wide": [
+    {"col1": "a", "col2": "b", "col3": "c", "col4": "d", "col5": "e", "col6": "f", "col7": "g", "col8": "h", "col9": "i", "col10": "j"}
+  ],
+  "headers_with_metadata": ["user", "src_ip", "_added_by", "_added_at"],
+  "rows_with_metadata": [
+    {"user": "jsmith", "src_ip": "10.1.2.3", "_added_by": "admin", "_added_at": "2026-04-02T10:00:00Z"}
+  ],
+  "headers_duplicates": ["user", "src_ip"],
+  "rows_duplicates": [
+    {"user": "jsmith", "src_ip": "10.1.2.3"},
+    {"user": "jsmith", "src_ip": "10.1.2.3"},
+    {"user": "mwilson", "src_ip": "10.1.2.4"}
+  ],
+  "empty_headers": [],
+  "empty_rows": []
+}

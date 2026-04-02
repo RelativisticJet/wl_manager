@@ -1,0 +1,58 @@
+{
+  "get_csv_success": {
+    "headers": ["user", "src_ip", "comment"],
+    "rows": [
+      {"user": "jsmith", "src_ip": "10.1.2.3", "comment": "Test user"},
+      {"user": "mwilson", "src_ip": "10.1.2.4", "comment": "Admin account"}
+    ],
+    "mtime": "2026-04-02T10:30:00Z"
+  },
+  "get_mapping_success": {
+    "rules": {
+      "Malware Detection": "DR_malware.csv",
+      "Brute Force Attempts": "DR_bruteforce.csv",
+      "Lateral Movement": "DR_lateral.csv"
+    }
+  },
+  "get_versions_success": {
+    "versions": [
+      {
+        "timestamp": "2026-04-02T10:30:00Z",
+        "row_count": 42,
+        "analyst": "admin"
+      },
+      {
+        "timestamp": "2026-04-02T09:15:00Z",
+        "row_count": 40,
+        "analyst": "analyst1"
+      },
+      {
+        "timestamp": "2026-04-01T16:45:00Z",
+        "row_count": 38,
+        "analyst": "analyst2"
+      }
+    ]
+  },
+  "save_csv_success": {
+    "message": "CSV saved successfully",
+    "new_version": "2026-04-02T14:30:00Z",
+    "mtime": "2026-04-02T14:30:00Z"
+  },
+  "revert_csv_success": {
+    "message": "CSV reverted successfully",
+    "reverted_to": "2026-04-02T09:15:00Z",
+    "new_version": "2026-04-02T14:35:00Z"
+  },
+  "error_403": {
+    "message": "Permission denied. User must have wl_editor or admin role."
+  },
+  "error_404": {
+    "message": "CSV file not found."
+  },
+  "error_409": {
+    "message": "CSV has been modified by another user. Please reload and try again."
+  },
+  "error_500": {
+    "message": "Internal server error. Please contact the administrator."
+  }
+}
