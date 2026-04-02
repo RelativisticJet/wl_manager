@@ -301,7 +301,7 @@
 5. Tab routing with URL state management (history.replaceState) and browser visibility lifecycle (document.visibilitychange)
 6. Approval queue module fires notifications for new pending requests; admin receives badge + toast
 
-**Plans:** 3 plans in 2 execution waves
+**Plans:** 3/4 plans executed
 
 - [x] **06-01-PLAN.md** — Refactor control_panel.js entry point (Wave 1) — COMPLETED
   - Requirements: FMOD-06, FMOD-07
@@ -377,7 +377,7 @@
 | Phase | Plans | Status | Started | Completed |
 |-------|-------|--------|---------|-----------|
 | 1. Backend Foundation | 4 plans | Complete ✓ | — | — |
-| 2. Backend Core Domain | 6 plans | Complete ✓ | — | — |
+| 2. Backend Core Domain | 6 plans | 3/4 | In Progress|  |
 | 3. Backend Orchestration | 3 plans | Complete ✓ | — | 2026-04-01 |
 | 4. Backend Integration | 5 plans | Complete ✓ | — | — |
 | 5. Frontend Architecture | 4 plans | Complete ✓ | — | 2026-04-02 |
