@@ -44,12 +44,13 @@ created: 2026-04-02
 | 08-02-02 | 02 | 1 | PUBL-02 | manual | Review for STRIDE/DREAD tables | ❌ W0 | ⬜ pending |
 | 08-03-01 | 03 | 1 | PUBL-03 | manual | Hand-author docs/api/openapi.yaml | ❌ W0 | ⬜ pending |
 | 08-03-02 | 03 | 1 | PUBL-03 | manual | Review for examples per action | ❌ W0 | ⬜ pending |
-| 08-04-01 | 04 | 2 | PUBL-04 | integration | `pytest tests/integration/test_backward_compat_audit.py -v` | ❌ W0 | ⬜ pending |
-| 08-04-02 | 04 | 2 | PUBL-04 | integration | `pytest tests/integration/test_backward_compat_versions.py -v` | ❌ W0 | ⬜ pending |
-| 08-04-03 | 04 | 2 | PUBL-04 | integration | `pytest tests/integration/test_backward_compat_approval.py -v` | ❌ W0 | ⬜ pending |
-| 08-04-04 | 04 | 2 | PUBL-04 | integration | `bash scripts/test_upgrade_path.sh` | ❌ W0 | ⬜ pending |
-| 08-05-01 | 05 | 2 | PUBL-05 | unit | `radon cc bin/ -a --fail-under F:15` | ❌ W0 | ⬜ pending |
-| 08-05-02 | 05 | 2 | PUBL-05 | unit | `escomplex appserver/static/**/*.js` | ❌ W0 | ⬜ pending |
+| 08-04-01 | 04 | 1 | PUBL-05 | unit | `python scripts/metrics_collector.py --gate` | ❌ W0 | ⬜ pending |
+| 08-04-02 | 04 | 1 | PUBL-05 | unit | `radon cc bin/ -a --fail-under F:15` | ❌ W0 | ⬜ pending |
+| 08-04-03 | 04 | 1 | PUBL-05 | unit | `escomplex appserver/static/**/*.js` | ❌ W0 | ⬜ pending |
+| 08-05-01 | 05 | 2 | PUBL-04 | integration | `pytest tests/integration/test_backward_compat_audit.py -v` | ❌ W0 | ⬜ pending |
+| 08-05-02 | 05 | 2 | PUBL-04 | integration | `pytest tests/integration/test_backward_compat_versions.py -v` | ❌ W0 | ⬜ pending |
+| 08-05-03 | 05 | 2 | PUBL-04 | integration | `pytest tests/integration/test_backward_compat_approval.py -v` | ❌ W0 | ⬜ pending |
+| 08-05-04 | 05 | 2 | PUBL-04 | integration | `bash scripts/test_upgrade_path.sh` | ❌ W0 | ⬜ pending |
 | 08-05-03 | 05 | 2 | PUBL-05 | unit | `pytest tests/ --cov=bin --cov-fail-under=80` | ✅ (Phase 7) | ⬜ pending |
 | 08-05-04 | 05 | 2 | PUBL-05 | unit | `python scripts/metrics_collector.py --gate` | ❌ W0 | ⬜ pending |
 
