@@ -206,7 +206,33 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════
-section "8. Forbidden files (AppInspect rules)"
+section "8. AppInspect pre-flight checks"
+# ══════════════════════════════════════════════════════════════════════
+
+# Check for bare except clauses (AppInspect: avoid bare except)
+if grep -rn "except:" "$APP_DIR/bin/"*.py 2>/dev/null; then
+    fail "Bare except clause found — use specific exception type instead"
+else
+    pass "No bare except clauses"
+fi
+
+# Check for direct print() statements in production code (not docstrings)
+# This is a simple heuristic: grep for print( but exclude docstrings and comments
+if grep -rn "print(" "$APP_DIR/bin/"*.py 2>/dev/null | grep -v "^\s*#" | grep -v '"""' | grep -v "'''" | grep -q .; then
+    warn "print() statement found — verify it's not in production code"
+else
+    pass "No production print() statements detected"
+fi
+
+# Check for module-level Splunk SDK imports (should be lazy-loaded)
+if grep -rn "^from splunk\|^import splunk" "$APP_DIR/bin/"*.py 2>/dev/null | grep -v "PersistentServerConnectionApplication" | grep -q .; then
+    warn "Module-level Splunk SDK import found (except PersistentServerConnectionApplication which is required)"
+else
+    pass "Splunk SDK imports are lazy-loaded (or only at required entry point)"
+fi
+
+# ══════════════════════════════════════════════════════════════════════
+section "9. Forbidden files (AppInspect rules)"
 # ══════════════════════════════════════════════════════════════════════
 
 # .pyc files should not be packaged

@@ -9,12 +9,12 @@
     },
     "author": [
       {
-        "name": "Security Engineering",
+        "name": "RelativisticJet",
         "email": null,
         "company": null
       }
     ],
-    "releaseDate": null,
+    "releaseDate": "2026-04-02",
     "description": "Manage detection-rule CSV whitelists with diff-based audit trail. Provides a web-based interface for viewing, editing, adding, and removing whitelist entries with full change tracking, expiration management, and role-based access control.",
     "classification": {
       "intendedAudience": "Security Operations",
@@ -25,9 +25,9 @@
     },
     "commonInformationModels": null,
     "license": {
-      "name": null,
+      "name": "MIT",
       "text": null,
-      "uri": null
+      "uri": "https://github.com/RelativisticJet/wl_manager/blob/main/LICENSE"
     }
   },
   "dependencies": null,
@@ -36,7 +36,7 @@
   "incompatibleApps": null,
   "platformRequirements": {
     "splunk": {
-      "Enterprise": ">=8.2"
+      "Enterprise": ">=9.0.0"
     }
   },
   "supportedDeployments": [
