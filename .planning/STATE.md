@@ -39,7 +39,7 @@ Phase 05 — frontend-architecture
 ## Current Position
 
 Phase: 05 (frontend-architecture) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 
 ## Roadmap Overview
 
@@ -441,6 +441,31 @@ Plan: 2 of 4
 - Build number incremented (484 → 485) for cache-busting
 - Requirement FMOD-05 fulfilled: "Wave 2: Independent Features"
 - Plan 05-02 COMPLETE: 5 tasks executed, single atomic commit (80f815b)
+
+**2026-04-02: Plan 05-03 Completion (Wave 2.5 Coupled Feature Modules)**
+
+- Extracted four tightly-coupled feature modules from monolith
+  - **wl_table.js** (652 lines): Core table rendering, inline cell editing, pagination (10/20/50 rows), column resize with drag handles, row/column reordering, undo support (50-edit history), change tracking
+    - Public API: init(), refreshTable(), syncInputs(), getSelectedRows(), undoLastEdit()
+    - Critical invariant: refreshTable() calls syncInputs() first to prevent data loss
+    - Module-local state: currentPage, ROWS_PER_PAGE, selectedIdxSet, resizeState, dragState, editHistory, colWidths
+  - **wl_modals.js** (305 lines): Modal dialogs for row operations (add, remove, edit, confirm)
+    - Public API: init(), showAddRowModal(callback), showRemoveModal(rowIndices, callback), showEditModal(rowIndex, callback), showConfirmModal(title, message, options)
+    - Enforces reason requirement for removal (5+ chars, max 500)
+    - Form validation and UI feedback via UI.showMsg()
+  - **wl_versions.js** (254 lines): Version history and revert functionality
+    - Public API: init(), loadVersions(), showVersionDropdown(), revertToVersion(versionId, reason), getVersionHistory()
+    - Dropdown displays "Current" (non-selectable) + last 5 versions in format: "24-02-2026 12:37:16 (42 rows, by admin)"
+    - Revert requires reason (5+ chars minimum), updates State with reverted data
+  - **wl_approval_ui.js** (205 lines): Approval request UI and queue status management
+    - Public API: init(), showApprovalNeeded(actionType, reason, options), updateApprovalStatus(), getQueueStatus(), formatDailyLimitMsg(limitData), showDailyLimitWarning(limitData)
+    - Polls server every 30 seconds for queue status, maintains pendingApprovalCount and adminPendingCount in State
+    - Formats daily limit enforcement messages for display
+- Entry point updated: whitelist_manager.js requires Wave 2.5 modules and initializes them in dependency order
+- Build number incremented (485 → 486) for cache-busting
+- All modules follow AMD pattern with State manager as SSOT, event-driven communication via jQuery custom events
+- Requirement FMOD-05 fulfilled: "Wave 2.5: Coupled Features"
+- Plan 05-03 COMPLETE: 6 tasks executed, single atomic commit (fb99e5c)
 
 ## 2026-04-02: Plan 05-01 Completion (Wave 1 Foundation Layer)
 
