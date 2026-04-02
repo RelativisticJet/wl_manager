@@ -54,7 +54,12 @@
                     "../../app/wl_manager/tests/qunit/test_state_manager.js",
                     "../../app/wl_manager/tests/qunit/test_rest_helpers.js",
                     "../../app/wl_manager/tests/qunit/test_module_loading.js",
-                    "../../app/wl_manager/tests/qunit/test_state_transitions.js"
+                    "../../app/wl_manager/tests/qunit/test_state_transitions.js",
+                    "../../app/wl_manager/appserver/static/tests/test_wl_cp_queue.js",
+                    "../../app/wl_manager/appserver/static/tests/test_wl_cp_limits.js",
+                    "../../app/wl_manager/appserver/static/tests/test_wl_cp_trash.js",
+                    "../../app/wl_manager/appserver/static/tests/test_wl_cp_usage.js",
+                    "../../app/wl_manager/appserver/static/tests/test_wl_cp_admin_limits.js"
                   ];
 
                   var filesLoaded = 0;
