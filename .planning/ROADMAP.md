@@ -253,12 +253,13 @@
   - Status: Planned, 6 detailed tasks created with verification criteria and acceptance criteria
   - Depends on: none (Wave 1 foundation)
 
-- [ ] **05-02-PLAN.md** — Extract independent feature modules (Wave 1 parallel) — CREATED
-  - Requirements: FMOD-05
-  - Modules: wl_search.js, wl_presence.js, wl_csv_io.js
-  - Files: 3 independent feature modules, updated entry point, app.conf
-  - Tasks: 5 (create wl_search, create wl_presence, create wl_csv_io, update entry point, bump build and commit)
-  - Depends on: 05-01 (foundation modules available)
+- [x] **05-02-PLAN.md** — Extract independent feature modules (Wave 1 parallel) — COMPLETE ✓
+  - Requirements: FMOD-05 ✓
+  - Modules: wl_search.js (177 lines), wl_presence.js (208 lines), wl_csv_io.js (462 lines)
+  - Files: 3 independent feature modules, updated entry point (require Wave 2 modules), app.conf (build 484 → 485)
+  - Tasks: 5/5 completed (create wl_search, create wl_presence, create wl_csv_io, update entry point, bump build and commit)
+  - Depends on: 05-01 (foundation modules available) ✓
+  - Status: COMPLETE — Commit 80f815b, SUMMARY.md created
 
 - [ ] **05-03-PLAN.md** — Extract coupled feature modules (Wave 2) — CREATED
   - Requirements: FMOD-05
