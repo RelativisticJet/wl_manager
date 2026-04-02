@@ -43,6 +43,7 @@ SOC analysts can safely edit detection-rule whitelists with confidence that ever
 - [x] Backend orchestration modules (approval queue, notifications, file locking, daily limits) — Phase 3 complete: 4 modules extracted (wl_approval, wl_notify, wl_filelock, wl_limits), 120 tests passing, all BMOD-13 compliant
 - [x] Modular frontend architecture (split JS into AMD modules via RequireJS) — Phase 5 complete: 11 AMD modules, entry point 98% reduction (6,868→168 lines)
 - [x] Shared REST helper module (eliminate 6x duplication across JS files) — Phase 5 complete: wl_rest.js unifies all REST calls
+- [x] Admin panel modularized (control_panel.js split into 6 AMD modules) — Phase 6 complete: 5 feature modules + shared modal factory, entry point 88% reduction (2,025→247 lines), 49 QUnit test stubs
 - [ ] Comprehensive integration test suite (all API actions)
 - [ ] Browser E2E tests for key workflows
 - [ ] Concurrency test coverage (concurrent writes, approval races)
