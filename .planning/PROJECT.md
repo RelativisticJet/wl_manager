@@ -44,10 +44,10 @@ SOC analysts can safely edit detection-rule whitelists with confidence that ever
 - [x] Modular frontend architecture (split JS into AMD modules via RequireJS) — Phase 5 complete: 11 AMD modules, entry point 98% reduction (6,868→168 lines)
 - [x] Shared REST helper module (eliminate 6x duplication across JS files) — Phase 5 complete: wl_rest.js unifies all REST calls
 - [x] Admin panel modularized (control_panel.js split into 6 AMD modules) — Phase 6 complete: 5 feature modules + shared modal factory, entry point 88% reduction (2,025→247 lines), 49 QUnit test stubs
-- [ ] Comprehensive integration test suite (all API actions)
-- [ ] Browser E2E tests for key workflows
-- [ ] Concurrency test coverage (concurrent writes, approval races)
-- [ ] Security test coverage (XSS validation, CSRF, input injection)
+- [x] Comprehensive integration test suite (all API actions) — Validated in Phase 7: 50+ integration tests, 15+ REST handlers, 4 concurrency scenarios
+- [x] Browser E2E tests for key workflows — Validated in Phase 7: 28 Playwright tests (CRUD, Approval, Revert, Admin, Stress/Theme)
+- [x] Concurrency test coverage (concurrent writes, approval races) — Validated in Phase 7: 4 scenarios with deadlock detection
+- [x] Security test coverage (XSS validation, CSRF, input injection) — Validated in Phase 7: 149 tests, OWASP payloads, RBAC matrix
 - [ ] AppInspect compliance for Splunkbase publication
 - [ ] Splunk ecosystem compatibility (jQuery + AMD, no external build tools)
 
