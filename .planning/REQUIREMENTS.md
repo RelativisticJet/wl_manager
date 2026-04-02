@@ -42,7 +42,7 @@ Requirements for the v3.0 modular rewrite. Each maps to roadmap phases.
 - [ ] **TEST-02**: Integration tests for all REST API action handlers against live container
 - [ ] **TEST-03**: Security tests for XSS validation, CSRF protection, and input injection
 - [ ] **TEST-04**: Concurrency tests for simultaneous saves, approval races, and file locking
-- [ ] **TEST-05**: Browser E2E tests for key workflows (load CSV, save, approve, revert)
+- [x] **TEST-05**: Browser E2E tests for key workflows (load CSV, save, approve, revert)
 - [ ] **TEST-06**: Mock Splunk SDK fixtures for offline unit testing
 
 ### AppInspect & Documentation
@@ -108,7 +108,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TEST-02 | Phase 4 | In Progress (GET/simple POST handlers tested; complex POST pending) |
 | TEST-03 | Phase 7 | Pending |
 | TEST-04 | Phase 3, Phase 7 | Pending |
-| TEST-05 | Phase 5, Phase 7 | Pending |
+| TEST-05 | Phase 5, Phase 7 | Complete |
 | TEST-06 | Phase 7 | Pending |
 | PUBL-01 | Phase 8 | Pending |
 | PUBL-02 | Phase 8 | Pending |
