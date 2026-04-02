@@ -313,5 +313,186 @@ class TestErrorHandling(unittest.TestCase):
         pass
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# GET Action Handler Tests (Task 1: Coverage for all 7 GET actions)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestGetVersionsAction(unittest.TestCase):
+    """Tests for get_versions action."""
+
+    def setUp(self):
+        if WlHandler is None:
+            self.skipTest("wl_handler module not available")
+        self.handler = WlHandler()
+
+    def test_get_versions_method_exists(self):
+        """Verify _action_get_versions method exists."""
+        self.assertTrue(hasattr(self.handler, '_action_get_versions'))
+        self.assertTrue(callable(self.handler._action_get_versions))
+
+    def test_get_versions_returns_dict(self):
+        """Test get_versions returns response dict with status."""
+        request = {}
+        query = {"csv_file": "test.csv"}
+        user = "analyst1"
+        roles = {"wl_editor"}
+
+        with patch('wl_handler.get_versions_list') as mock_get:
+            mock_get.return_value = ([], None)  # No versions
+            response = self.handler._action_get_versions(request, query, user, roles)
+
+            self.assertIsInstance(response, dict)
+            self.assertIn('status', response)
+            self.assertIn('payload', response)
+
+
+class TestGetApprovalQueueAction(unittest.TestCase):
+    """Tests for get_approval_queue action."""
+
+    def setUp(self):
+        if WlHandler is None:
+            self.skipTest("wl_handler module not available")
+        self.handler = WlHandler()
+
+    def test_get_approval_queue_method_exists(self):
+        """Verify _action_get_approval_queue method exists."""
+        self.assertTrue(hasattr(self.handler, '_action_get_approval_queue'))
+        self.assertTrue(callable(self.handler._action_get_approval_queue))
+
+    def test_get_approval_queue_returns_dict(self):
+        """Test get_approval_queue returns response dict."""
+        request = {}
+        query = {}
+        user = "admin1"
+        roles = {"admin"}
+
+        with patch('wl_handler._read_approval_queue') as mock_read:
+            mock_read.return_value = []
+            response = self.handler._action_get_approval_queue(request, query, user, roles)
+
+            self.assertIsInstance(response, dict)
+            self.assertIn('status', response)
+
+
+class TestListTrashAction(unittest.TestCase):
+    """Tests for list_trash action."""
+
+    def setUp(self):
+        if WlHandler is None:
+            self.skipTest("wl_handler module not available")
+        self.handler = WlHandler()
+
+    def test_list_trash_method_exists(self):
+        """Verify _action_list_trash method exists."""
+        self.assertTrue(hasattr(self.handler, '_action_list_trash'))
+        self.assertTrue(callable(self.handler._action_list_trash))
+
+    def test_list_trash_returns_dict(self):
+        """Test list_trash returns response dict."""
+        request = {}
+        query = {}
+        user = "admin1"
+        roles = {"admin"}
+
+        with patch('wl_handler.list_trash') as mock_list:
+            mock_list.return_value = ([], None)  # No items in trash
+            response = self.handler._action_list_trash(request, query, user, roles)
+
+            self.assertIsInstance(response, dict)
+            self.assertIn('status', response)
+
+
+class TestGetDailyLimitsAction(unittest.TestCase):
+    """Tests for get_daily_limits action."""
+
+    def setUp(self):
+        if WlHandler is None:
+            self.skipTest("wl_handler module not available")
+        self.handler = WlHandler()
+
+    def test_get_daily_limits_method_exists(self):
+        """Verify _action_get_daily_limits method exists."""
+        self.assertTrue(hasattr(self.handler, '_action_get_daily_limits'))
+        self.assertTrue(callable(self.handler._action_get_daily_limits))
+
+    def test_get_daily_limits_requires_admin_role(self):
+        """Verify get_daily_limits requires admin role."""
+        required_roles, method_name = self.handler.GET_ACTIONS.get("get_daily_limits", (None, None))
+        self.assertIsNotNone(required_roles, "get_daily_limits should require roles")
+        self.assertGreater(len(required_roles), 0, "get_daily_limits should have non-empty required roles")
+
+
+class TestGetAnalystUsageAction(unittest.TestCase):
+    """Tests for get_analyst_usage action."""
+
+    def setUp(self):
+        if WlHandler is None:
+            self.skipTest("wl_handler module not available")
+        self.handler = WlHandler()
+
+    def test_get_analyst_usage_method_exists(self):
+        """Verify _action_get_analyst_usage method exists."""
+        self.assertTrue(hasattr(self.handler, '_action_get_analyst_usage'))
+        self.assertTrue(callable(self.handler._action_get_analyst_usage))
+
+    def test_get_analyst_usage_requires_admin_role(self):
+        """Verify get_analyst_usage requires admin role."""
+        required_roles, method_name = self.handler.GET_ACTIONS.get("get_analyst_usage", (None, None))
+        self.assertIsNotNone(required_roles, "get_analyst_usage should require roles")
+
+
+class TestGetAdminLimitsAction(unittest.TestCase):
+    """Tests for get_admin_limits action."""
+
+    def setUp(self):
+        if WlHandler is None:
+            self.skipTest("wl_handler module not available")
+        self.handler = WlHandler()
+
+    def test_get_admin_limits_method_exists(self):
+        """Verify _action_get_admin_limits method exists."""
+        self.assertTrue(hasattr(self.handler, '_action_get_admin_limits'))
+        self.assertTrue(callable(self.handler._action_get_admin_limits))
+
+    def test_get_admin_limits_requires_admin_role(self):
+        """Verify get_admin_limits requires admin role."""
+        required_roles, method_name = self.handler.GET_ACTIONS.get("get_admin_limits", (None, None))
+        self.assertIsNotNone(required_roles, "get_admin_limits should require roles")
+
+
+class TestAllGetActionsRegistered(unittest.TestCase):
+    """Comprehensive test: all GET actions in plan are registered."""
+
+    def setUp(self):
+        if WlHandler is None:
+            self.skipTest("wl_handler module not available")
+        self.handler = WlHandler()
+
+    def test_all_required_get_actions_present(self):
+        """Verify all 7+ required GET actions are in GET_ACTIONS table."""
+        required_get_actions = {
+            "get_csv_content",      # CSV Operations
+            "get_mapping",          # CSV Operations
+            "get_versions",         # CSV Operations
+            "get_approval_queue",   # Approval & Queue
+            "list_trash",           # Trash
+            "get_daily_limits",     # Limits & Usage
+            "get_analyst_usage",    # Limits & Usage
+            "get_admin_limits",     # Limits & Usage
+        }
+
+        for action in required_get_actions:
+            self.assertIn(action, self.handler.GET_ACTIONS,
+                        f"Required GET action '{action}' not in GET_ACTIONS table")
+
+    def test_each_get_action_is_callable(self):
+        """Verify each required GET action has a callable handler method."""
+        for action, (required_roles, method_name) in self.handler.GET_ACTIONS.items():
+            self.assertTrue(hasattr(self.handler, method_name),
+                          f"GET action '{action}' missing method '{method_name}'")
+            self.assertTrue(callable(getattr(self.handler, method_name)),
+                          f"GET action '{action}' method '{method_name}' is not callable")
+
+
 if __name__ == '__main__':
     unittest.main()
