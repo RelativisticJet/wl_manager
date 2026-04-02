@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-04-02T00:35:55.307Z"
+last_updated: "2026-04-02T11:53:06.664Z"
 progress:
   total_phases: 8
   completed_phases: 5
-  total_plans: 25
+  total_plans: 29
   completed_plans: 25
 ---
 
@@ -25,7 +25,7 @@ progress:
 SOC analysts can safely edit detection-rule whitelists with full audit trail — and the codebase itself is maintainable, testable, and ready for Splunkbase publication.
 
 **Current Focus:**
-Phase 05 — frontend-architecture
+Phase 06 — admin-panel
 
 **Key Constraints:**
 
@@ -38,8 +38,8 @@ Phase 05 — frontend-architecture
 
 ## Current Position
 
-Phase: 05 (frontend-architecture) — COMPLETE ✓
-Plan: 4 of 4 — 05-04 COMPLETE
+Phase: 06 (admin-panel) — EXECUTING
+Plan: 2 of 4 (Plan 01 COMPLETE)
 
 ## Roadmap Overview
 
@@ -485,6 +485,35 @@ Plan: 4 of 4 — 05-04 COMPLETE
 - Requirements FMOD-01, FMOD-02, FMOD-03, FMOD-04, FMOD-08 fulfilled
 - Zero deviations from plan; all acceptance criteria met
 - Wave 1 foundation layer COMPLETE — ready for Wave 2 feature modules
+
+**2026-04-02: Plan 06-01 Completion (Control Panel Entry Point Refactoring)**
+
+- Restructured control_panel.js from 2,025-line monolith to 233-line AMD entry point
+  - Removed 1,792 lines of feature-specific code (approval queue, limits, usage, trash, admin limits)
+  - 88.5% size reduction; ready for Wave 2 modular extraction
+  - Replaced duplicated REST helpers with wl_rest.js imports
+  - Replaced dark theme detection IIFE with UI.detectTheme() from wl_ui.js
+  - Implemented access control gate: calls get_approval_queue, shows "Access denied" on 403
+  - User detection from splunkjs/mvc getPageInfo() sets cpCurrentUser, cpIsSuperAdmin, cpIsAdmin
+- Created 3 shared modal helpers (alert, confirm, prompt) for Wave 2 modules
+  - Promise-based returns for async interaction
+  - Dark/light theme support via CSS variables
+  - Factory pattern consolidates modal creation logic
+- Implemented tab routing with URL state management
+  - Tab map: ["queue", "limits", "usage", "trash", "admin"]
+  - URL parameter ?tab= persists active tab across page reloads
+  - showTab() function manages polling lifecycle (stopPolling/startPolling hooks)
+- Implemented browser visibility handler
+  - Pauses polling when document.hidden === true
+  - Resumes polling when page becomes visible
+  - Works with queue and usage module hooks
+- Context object passed to Wave 2 modules:
+  - { showAlert, showConfirm, showPrompt, currentUser, isSuperAdmin, isAdmin }
+  - Stored at window.__cpContext for module access
+- Build number incremented (487 → 488) for cache busting
+- Requirement FMOD-06 partially satisfied: Entry point infrastructure ready for Wave 2 feature extraction
+- Requirement FMOD-07 readiness: Tab routing and modal helpers provide foundation for all CP features
+- Plan 06-01 COMPLETE: 2 tasks executed, single atomic commit (84d2351), zero deviations
 
 ---
 
