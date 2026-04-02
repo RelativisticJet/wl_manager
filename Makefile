@@ -10,7 +10,7 @@ VERSION     := $(shell grep '^version' default/app.conf | head -1 | cut -d= -f2 
 SPL_FILE    := dist/$(APP_NAME)-$(VERSION).spl
 SPLUNK_PASS ?= Chang3d!
 
-.PHONY: help validate test package clean docker-up docker-down docker-logs docker-restart metrics metrics-report
+.PHONY: help validate appinspect test package clean docker-up docker-down docker-logs docker-restart metrics metrics-report
 
 help: ## Show this help message
 	@echo ""
@@ -30,6 +30,9 @@ help: ## Show this help message
 
 validate: ## Run all validation checks (syntax, security, structure)
 	@bash scripts/validate.sh
+
+appinspect: validate ## Run Splunk AppInspect validation (standard + cloud tag sets)
+	@bash scripts/verify_appinspect.sh --both
 
 # ── Phase 3: Test in Docker ───────────────────────────────────────────
 
