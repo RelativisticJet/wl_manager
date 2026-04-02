@@ -1,0 +1,67 @@
+[
+  {
+    "timestamp": 1677696645,
+    "action": "row_added",
+    "analyst": "jsmith",
+    "detection_rule": "Suspicious Login",
+    "csv_file": "login_whitelist.csv",
+    "app_context": "wl_manager",
+    "comment": "Added trusted IP range",
+    "added_row_count": 1,
+    "value": ["user_row_1: admin", "src_ip_row_1: 192.168.1.0/24"]
+  },
+  {
+    "timestamp": 1677696750,
+    "action": "row_removed",
+    "analyst": "kchen",
+    "detection_rule": "Failed Login Attempts",
+    "csv_file": "login_whitelist.csv",
+    "app_context": "wl_manager",
+    "comment": "Expired IP address",
+    "removed_row_count": 1,
+    "remove_reason": "No longer needed",
+    "value": ["user_row_3: legacy_user", "src_ip_row_3: 10.0.0.5"]
+  },
+  {
+    "timestamp": 1677696850,
+    "action": "row_edited",
+    "analyst": "mchen",
+    "detection_rule": "Suspicious Login",
+    "csv_file": "login_whitelist.csv",
+    "app_context": "wl_manager",
+    "comment": "Updated threshold",
+    "edited_row_count": 1,
+    "value": ["threshold_row_2_before: 5", "threshold_row_2_after: 10"]
+  },
+  {
+    "timestamp": 1677696950,
+    "action": "revert",
+    "analyst": "admin",
+    "detection_rule": "Failed Login Attempts",
+    "csv_file": "login_whitelist.csv",
+    "app_context": "wl_manager",
+    "comment": "Reverted to previous version",
+    "reverted_from_version": "20260331_203045",
+    "reverted_to_version": "20260330_150030",
+    "new_record_version": "20260331_205050",
+    "restoredback_row_count": 2,
+    "removedback_row_count": 1,
+    "editedback_row_count": 0,
+    "value": [
+      "restoredback_user_row_1: restored_user",
+      "restoredback_src_ip_row_1: 172.16.0.0/12",
+      "removedback_user_row_5: deleted_user"
+    ]
+  },
+  {
+    "timestamp": 1677697050,
+    "action": "auto_removed",
+    "analyst": "system",
+    "detection_rule": "Failed Login Attempts",
+    "csv_file": "login_whitelist.csv",
+    "app_context": "wl_manager",
+    "comment": "Auto-expired rows",
+    "auto_removed_count": 1,
+    "value": ["user_row_8: expired_user"]
+  }
+]
