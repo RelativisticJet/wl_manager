@@ -38,12 +38,19 @@
           </script>
 
           <!-- Load test files in order -->
-          <!-- Note: These will be expanded to include actual test implementations -->
+          <!-- Foundation modules first -->
           <script src="../../appserver/static/modules/wl_constants.js"></script>
           <script src="../../appserver/static/modules/wl_state.js"></script>
+          <script src="../../appserver/static/modules/wl_ui.js"></script>
+
+          <!-- Load fixture data -->
           <script src="../../tests/qunit/fixtures/sample_response.json"></script>
+
+          <!-- Load test files in dependency order -->
           <script src="../../tests/qunit/test_wl_rest.js"></script>
           <script src="../../tests/qunit/test_wl_table.js"></script>
+          <script src="../../tests/qunit/test_wl_modals.js"></script>
+          <script src="../../tests/qunit/test_wl_state.js"></script>
 
           <!-- Summary display -->
           <script>
