@@ -18,7 +18,7 @@
 - [x] **Phase 5: Frontend Architecture** - Extract frontend modules and implement state manager
 - [x] **Phase 6: Admin Panel** - Modularize control_panel.js and associated feature modules
 - [ ] **Phase 7: Test Coverage** - Unit, integration, E2E, concurrency, and security test suites
-- [ ] **Phase 8: Splunkbase Readiness** - AppInspect validation, documentation, backward compatibility verification
+- [x] **Phase 8: Splunkbase Readiness** - AppInspect validation, documentation, backward compatibility verification (Plans 01-05 COMPLETE)
 
 ---
 
@@ -426,33 +426,32 @@
 4. Backward compatibility verified: existing audit events parse correctly in audit.xml, version manifests load, approval queues process as before
 5. Code maintainability metrics published: all modules with CC <15, average function <100 lines, ≥80% test coverage per module
 
-**Plans:** 2/5 plans executed
+**Plans:** 5/5 plans executed
 
-- [ ] **08-01-PLAN.md** — AppInspect compliance validation (scripts, Python audit, JS audit, conf files, validate.sh, app.manifest) — READY
+- [x] **08-01-PLAN.md** — AppInspect compliance validation (scripts, Python audit, JS audit, conf files, validate.sh, app.manifest) — COMPLETED 2026-04-02
   - Requirements: PUBL-01
   - Files: scripts/verify_appinspect.sh, Makefile, default/app.manifest, docs/ validation docs
-  - Tasks: 6 (verify script, Python audit, JS audit, conf audit, validate.sh, manifest)
+  - Tasks: 6/6 complete
 
-- [ ] **08-02-PLAN.md** — Security architecture documentation (executive summary, threat model, RBAC matrix, mitigated threats) — READY
+- [x] **08-02-PLAN.md** — Security architecture documentation (executive summary, threat model, RBAC matrix, mitigated threats) — COMPLETED 2026-04-02
   - Requirements: PUBL-02
   - Files: docs/SECURITY_ARCHITECTURE.md, SECURITY.md
-  - Tasks: 2 (security doc creation, SECURITY.md link update)
+  - Tasks: 2/2 complete
 
-- [ ] **08-03-PLAN.md** — OpenAPI 3.0 specification (extract action signatures, create spec, README guide) — READY
+- [x] **08-03-PLAN.md** — OpenAPI 3.0 specification (extract action signatures, create spec, README guide) — COMPLETED 2026-04-02
   - Requirements: PUBL-03
   - Files: docs/api/openapi.yaml, docs/api/README.md
-  - Tasks: 2 (extract + create OpenAPI spec, create API README)
+  - Tasks: 2/2 complete
 
-- [ ] **08-04-PLAN.md** — Code metrics collection (radon + escomplex, metrics script, CODE_METRICS.md, Makefile targets) — READY
+- [x] **08-04-PLAN.md** — Code metrics collection (radon + escomplex, metrics script, CODE_METRICS.md, Makefile targets) — COMPLETED 2026-04-02
   - Requirements: PUBL-05
   - Files: scripts/metrics_collector.py, CODE_METRICS.md, docs/CODE_METRICS.md, Makefile
-  - Tasks: 3 (create metrics script, generate CODE_METRICS reports, add Makefile targets)
+  - Tasks: 3/3 complete
 
-- [ ] **08-05-PLAN.md** — Backward compatibility verification (audit events, version manifests, approval queue, upgrade path, documentation) — READY
+- [x] **08-05-PLAN.md** — Backward compatibility verification (audit events, version manifests, approval queue, upgrade path, documentation) — COMPLETED 2026-04-02
   - Requirements: PUBL-04
   - Files: tests/integration/test_backward_compat_*.py, scripts/test_upgrade_path.sh, docs/BACKWARD_COMPAT.md
-  - Tasks: 5 (audit compat test, version manifest test, approval queue test, upgrade path script, backward compat doc)
-  - Depends on: 08-01, 08-02, 08-03, 08-04
+  - Tasks: 5/5 complete (37 test cases, 3 fixtures, upgrade script, documentation)
 
 **Wave Structure:**
 - **Wave 1:** 08-01 (AppInspect), 08-02 (Security), 08-03 (OpenAPI), 08-04 (Metrics) — all independent, can execute in parallel
@@ -469,7 +468,7 @@
 | 5. Frontend Architecture | 4 plans | Complete ✓ | — | 2026-04-02 |
 | 6. Admin Panel | 5 plans | Complete ✓ | 2026-04-02 | 2026-04-02 (all) |
 | 7. Test Coverage & Validation | 4/6 | In Progress|  | 2026-04-02 (Plan 01, 03) |
-| 8. Splunkbase Readiness | 2/5 | In Progress|  | 2026-04-02 (planning) |
+| 8. Splunkbase Readiness | 5/5 | Complete ✓ | — | 2026-04-02 (all plans) |
 
 ---
 
@@ -489,3 +488,4 @@
 - **Phase 6 complete:** 5 plans executed (06-01 through 06-05), 5 admin panel modules extracted (wl_cp_queue, wl_cp_limits, wl_cp_usage, wl_cp_trash, wl_cp_admin_limits), modal helpers extracted to wl_cp_modals.js, control_panel.js reduced from 2,025 lines to 247 lines entry point. Notifications system with Queue tab badge and toast alerts. Requirements FMOD-06 and FMOD-07 fully satisfied.
 - **Phase 7 planning complete:** 5 plans created (07-01 through 07-05) with comprehensive test pyramid: Wave 1 unit baseline (389+ tests, ≥80% coverage), Wave 2 integration + security in parallel (50+ integration, 70-80 security tests with OWASP payloads + RBAC matrix), Wave 3 E2E + QUnit in parallel (30+ Playwright workflows, 145+ QUnit tests). Grand total: 534+ tests validating all edge cases, concurrency scenarios, security attacks, and end-to-end workflows. All 6 requirement IDs (TEST-01 through TEST-06) fully mapped across 5 plans.
 - **Phase 7 Wave 1 & partial Wave 2 complete:** 07-01 unit baseline COMPLETED (389 tests, ≥80% coverage), 07-03 security tests COMPLETED (149 tests: 116 passing + 33 Docker stubs, covering 68 OWASP payloads across XSS/path-traversal/injection/RBAC with 100% attack-vector validation). 07-02 integration tests and 07-04 E2E workflows remain for Wave 2/3.
+- **Phase 8 complete:** All 5 plans executed (08-01 AppInspect, 08-02 Security Architecture, 08-03 OpenAPI, 08-04 Code Metrics, 08-05 Backward Compatibility). Plan 08-05 delivered: 37 test cases covering audit events (12), version manifests (10), approval queue (15), plus Docker upgrade path test and comprehensive backward compatibility guide. All PUBL-01 through PUBL-04 requirements satisfied. v3.0 app ready for Splunkbase publication.
