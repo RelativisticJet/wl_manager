@@ -49,7 +49,7 @@ Requirements for the v3.0 modular rewrite. Each maps to roadmap phases.
 
 - [ ] **PUBL-01**: AppInspect validation passes with 0 high/critical issues
 - [ ] **PUBL-02**: Security architecture document (threat model, RBAC breakdown, data flow)
-- [ ] **PUBL-03**: OpenAPI schema documenting all REST API actions, parameters, and responses
+- [x] **PUBL-03**: OpenAPI schema documenting all REST API actions, parameters, and responses
 - [ ] **PUBL-04**: Backward compatibility verified — existing audit events, version manifests, and approval queues still parse correctly
 - [ ] **PUBL-05**: Code maintainability metrics published (CC <15, avg function <100 lines, ≥80% coverage)
 
@@ -112,7 +112,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TEST-06 | Phase 7 | Pending |
 | PUBL-01 | Phase 8 | Pending |
 | PUBL-02 | Phase 8 | Pending |
-| PUBL-03 | Phase 8 | Pending |
+| PUBL-03 | Phase 8 | Complete |
 | PUBL-04 | Phase 8 | Pending |
 | PUBL-05 | Phase 8 | Pending |
 

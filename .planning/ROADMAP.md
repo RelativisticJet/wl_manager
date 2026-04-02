@@ -426,7 +426,7 @@
 4. Backward compatibility verified: existing audit events parse correctly in audit.xml, version manifests load, approval queues process as before
 5. Code maintainability metrics published: all modules with CC <15, average function <100 lines, ≥80% test coverage per module
 
-**Plans:** 5 plans in 2 waves
+**Plans:** 2/5 plans executed
 
 - [ ] **08-01-PLAN.md** — AppInspect compliance validation (scripts, Python audit, JS audit, conf files, validate.sh, app.manifest) — READY
   - Requirements: PUBL-01
@@ -469,7 +469,7 @@
 | 5. Frontend Architecture | 4 plans | Complete ✓ | — | 2026-04-02 |
 | 6. Admin Panel | 5 plans | Complete ✓ | 2026-04-02 | 2026-04-02 (all) |
 | 7. Test Coverage & Validation | 4/6 | In Progress|  | 2026-04-02 (Plan 01, 03) |
-| 8. Splunkbase Readiness | 5 plans | Planned ✓ | — | 2026-04-02 (planning) |
+| 8. Splunkbase Readiness | 2/5 | In Progress|  | 2026-04-02 (planning) |
 
 ---
 
