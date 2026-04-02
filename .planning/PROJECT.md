@@ -41,8 +41,8 @@ SOC analysts can safely edit detection-rule whitelists with confidence that ever
 - [x] DRY compliance (no duplicated logic across modules) — Validated in Phase 2: no duplicate definitions across 11 backend modules
 - [x] Consistent error handling patterns across all modules — Validated in Phase 2: fail-closed with state rollback
 - [x] Backend orchestration modules (approval queue, notifications, file locking, daily limits) — Phase 3 complete: 4 modules extracted (wl_approval, wl_notify, wl_filelock, wl_limits), 120 tests passing, all BMOD-13 compliant
-- [ ] Modular frontend architecture (split JS into AMD modules via RequireJS)
-- [ ] Shared REST helper module (eliminate 6x duplication across JS files)
+- [x] Modular frontend architecture (split JS into AMD modules via RequireJS) — Phase 5 complete: 11 AMD modules, entry point 98% reduction (6,868→168 lines)
+- [x] Shared REST helper module (eliminate 6x duplication across JS files) — Phase 5 complete: wl_rest.js unifies all REST calls
 - [ ] Comprehensive integration test suite (all API actions)
 - [ ] Browser E2E tests for key workflows
 - [ ] Concurrency test coverage (concurrent writes, approval races)
