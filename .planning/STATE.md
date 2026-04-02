@@ -39,7 +39,8 @@ Phase 08 — splunkbase-readiness
 ## Current Position
 
 Phase: 08 (splunkbase-readiness) — EXECUTING
-Plan: 1 of 5
+Plan: 2 of 5 — COMPLETE (security architecture documentation)
+Next Plan: 3 of 5
 
 ## Roadmap Overview
 
@@ -56,7 +57,7 @@ Plan: 1 of 5
 | 5 | Frontend Architecture | FMOD-01, FMOD-02, FMOD-03, FMOD-04, FMOD-05, FMOD-08, TEST-05(p) | COMPLETE ✓ |
 | 6 | Admin Panel | FMOD-06, FMOD-07 | COMPLETE ✓ |
 | 7 | Test Coverage & Validation | TEST-01, TEST-02, TEST-03, TEST-04, TEST-05, TEST-06 | Plans 05-06 COMPLETE ✓ |
-| 8 | Splunkbase Readiness | PUBL-01, PUBL-02, PUBL-03, PUBL-04, PUBL-05 | Not started |
+| 8 | Splunkbase Readiness | PUBL-01, PUBL-02, PUBL-03, PUBL-04, PUBL-05 | Plans 01-03 COMPLETE ✓ |
 
 ---
 
@@ -358,6 +359,30 @@ Plan: 1 of 5
 - Commit: 0303e20 (refactor(03-02): wire wl_approval module into handler)
 - Requirements BMOD-11, BMOD-12, TEST-01 fulfilled
 - Phase 03-02 COMPLETE: 2 tasks executed, 382 tests passing (28% coverage, handler integration-tested only)
+
+**2026-04-02: Plan 08-03 Completion (OpenAPI Specification & API Documentation)**
+
+- Created comprehensive OpenAPI 3.0 specification documenting all 52 REST actions
+  - docs/api/openapi.yaml (599 lines): Complete OpenAPI 3.0 format spec
+  - GET actions: 20 documented (rules, csvs, csv_content, mapping, versions, status, col_widths, apps, presence, approvals, limits, notifications, trash, config)
+  - POST actions: 25 documented (save/add/remove csv, revert, create/delete rule, create/delete csv, approval workflow, admin operations, notifications, logging)
+  - Request/response examples: 46 examples across all major action categories
+  - Error codes: Comprehensive documentation of 200, 400, 403, 404, 429, 500 status codes
+  - Schemas: 22 schema sections including CSVRow, AuditEvent, VersionInfo, ApprovalRequest
+  - Security: X-Splunk-Key authentication scheme with RBAC role requirements
+- Created API usage guide (438 lines, 15+ sections)
+  - docs/api/README.md: Developer-focused documentation
+  - Quick start: Base URL, authentication, common parameters
+  - 7 detailed curl examples: get_csv, save_csv, add_row, remove_rows, get_versions, revert, submit_approval
+  - HTTP status codes reference table
+  - Tools for viewing spec: Swagger UI, ReDoc, spec validators
+  - Python client integration example (WLClient class)
+  - RBAC requirements table with role descriptions
+  - Error handling patterns and response formats
+- All actions match wl_handler.py GET_ACTIONS and POST_ACTIONS dispatch tables (verified by enum count)
+- Requirements PUBL-03 satisfied: "OpenAPI 3.0 specification documents all REST API actions"
+- Commits: 2a11e00 (openapi.yaml), c068d3e (README.md), 9d7b18d (SUMMARY.md)
+- Plan 08-03 COMPLETE: 2 tasks executed, OpenAPI spec ready for Splunkbase publication
 
 ---
 
