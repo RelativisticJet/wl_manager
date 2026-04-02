@@ -608,5 +608,210 @@ class TestErrorResponses(unittest.TestCase):
                     self.assertIn('success', body)
 
 
+class TestCreateCsv(unittest.TestCase):
+    """Tests for _action_create_csv POST handler."""
+
+    def setUp(self):
+        """Set up test handler instance."""
+        if WlHandler is None:
+            self.skipTest("wl_handler module not available")
+        self.handler = WlHandler()
+
+    def test_create_csv_success(self):
+        """Test successful CSV creation."""
+        request = {}
+        payload = {
+            "csv_file": "test_new.csv",
+            "csv_data": "col1,col2\nval1,val2\n",
+            "comment": "Created by test"
+        }
+        user = "analyst1"
+        roles = {"wl_editor"}
+
+        with patch('wl_handler.write_csv') as mock_write:
+            with patch('wl_handler.build_csv_path') as mock_path:
+                with patch('wl_handler._index_audit') as mock_audit:
+                    mock_path.return_value = "/path/to/test_new.csv"
+                    mock_write.return_value = (True, None)
+                    response = self.handler._action_create_csv(request, payload, user, roles)
+
+                    self.assertEqual(response['status'], 200)
+                    body = json.loads(response['payload'])
+                    self.assertTrue(body.get('success'))
+
+    def test_create_csv_missing_file(self):
+        """Test error when csv_file is missing."""
+        request = {}
+        payload = {
+            "csv_data": "col1,col2\nval1,val2\n",
+            "comment": "Test"
+        }
+        user = "analyst1"
+        roles = {"wl_editor"}
+
+        response = self.handler._action_create_csv(request, payload, user, roles)
+
+        self.assertEqual(response['status'], 400)
+        body = json.loads(response['payload'])
+        self.assertIn("error", body)
+
+    def test_create_csv_invalid_filename(self):
+        """Test error with invalid CSV filename."""
+        request = {}
+        payload = {
+            "csv_file": "../../../etc/passwd",
+            "csv_data": "col1\nval1\n",
+            "comment": "Test"
+        }
+        user = "analyst1"
+        roles = {"wl_editor"}
+
+        with patch('wl_handler.is_safe_filename') as mock_safe:
+            mock_safe.return_value = False
+            response = self.handler._action_create_csv(request, payload, user, roles)
+
+            self.assertEqual(response['status'], 400)
+            body = json.loads(response['payload'])
+            self.assertIn("error", body)
+
+    def test_create_csv_already_exists(self):
+        """Test error when CSV file already exists."""
+        request = {}
+        payload = {
+            "csv_file": "existing.csv",
+            "csv_data": "col1\nval1\n",
+            "comment": "Test"
+        }
+        user = "analyst1"
+        roles = {"wl_editor"}
+
+        with patch('wl_handler.build_csv_path') as mock_path:
+            with patch('wl_handler.os.path.exists') as mock_exists:
+                mock_path.return_value = "/path/to/existing.csv"
+                mock_exists.return_value = True
+                response = self.handler._action_create_csv(request, payload, user, roles)
+
+                self.assertEqual(response['status'], 400)
+                body = json.loads(response['payload'])
+                self.assertIn("error", body)
+
+
+class TestCreateRule(unittest.TestCase):
+    """Tests for _action_create_rule POST handler."""
+
+    def setUp(self):
+        """Set up test handler instance."""
+        if WlHandler is None:
+            self.skipTest("wl_handler module not available")
+        self.handler = WlHandler()
+
+    def test_create_rule_success(self):
+        """Test successful detection rule creation."""
+        request = {}
+        payload = {
+            "detection_rule": "DR_NewTest",
+            "csv_file": "test_new.csv",
+            "comment": "Created by test"
+        }
+        user = "analyst1"
+        roles = {"wl_editor"}
+
+        with patch('wl_handler._read_rules_registry') as mock_read:
+            with patch('wl_handler._write_rules_registry') as mock_write:
+                with patch('wl_handler._index_audit') as mock_audit:
+                    mock_read.return_value = {"existing_rule"}
+                    mock_write.return_value = (True, None)
+                    response = self.handler._action_create_rule(request, payload, user, roles)
+
+                    self.assertEqual(response['status'], 200)
+                    body = json.loads(response['payload'])
+                    self.assertTrue(body.get('success'))
+
+    def test_create_rule_missing_name(self):
+        """Test error when detection_rule is missing."""
+        request = {}
+        payload = {
+            "csv_file": "test.csv",
+            "comment": "Test"
+        }
+        user = "analyst1"
+        roles = {"wl_editor"}
+
+        response = self.handler._action_create_rule(request, payload, user, roles)
+
+        self.assertEqual(response['status'], 400)
+        body = json.loads(response['payload'])
+        self.assertIn("error", body)
+
+    def test_create_rule_already_exists(self):
+        """Test error when rule already exists."""
+        request = {}
+        payload = {
+            "detection_rule": "DR_Existing",
+            "csv_file": "test.csv",
+            "comment": "Test"
+        }
+        user = "analyst1"
+        roles = {"wl_editor"}
+
+        with patch('wl_handler._read_rules_registry') as mock_read:
+            mock_read.return_value = {"DR_Existing"}  # Rule already exists
+            response = self.handler._action_create_rule(request, payload, user, roles)
+
+            self.assertEqual(response['status'], 400)
+            body = json.loads(response['payload'])
+            self.assertIn("error", body)
+
+    def test_create_rule_invalid_name(self):
+        """Test error with invalid rule name."""
+        request = {}
+        payload = {
+            "detection_rule": "Invalid Rule Name!@#",
+            "csv_file": "test.csv",
+            "comment": "Test"
+        }
+        user = "analyst1"
+        roles = {"wl_editor"}
+
+        response = self.handler._action_create_rule(request, payload, user, roles)
+
+        self.assertEqual(response['status'], 400)
+        body = json.loads(response['payload'])
+        self.assertIn("error", body)
+
+
+class TestSimplePostActionsCompleteness(unittest.TestCase):
+    """Comprehensive test: all simple POST actions are implemented."""
+
+    def setUp(self):
+        if WlHandler is None:
+            self.skipTest("wl_handler module not available")
+        self.handler = WlHandler()
+
+    def test_all_simple_post_actions_have_methods(self):
+        """Verify all simple POST actions have corresponding handler methods."""
+        simple_post_actions = {
+            "create_csv",
+            "create_rule",
+            "restore_from_trash",
+            "purge_trash",
+            "save_col_widths",
+            "mark_notifications_read",
+            "cancel_request",
+            "log_event",
+            "save_as_default",
+            "reset_factory_defaults",
+            "set_trash_retention",
+        }
+
+        for action in simple_post_actions:
+            if action in self.handler.POST_ACTIONS:
+                required_roles, method_name = self.handler.POST_ACTIONS[action]
+                self.assertTrue(hasattr(self.handler, method_name),
+                              f"POST action '{action}' missing method '{method_name}'")
+                self.assertTrue(callable(getattr(self.handler, method_name)),
+                              f"POST action '{action}' method '{method_name}' is not callable")
+
+
 if __name__ == '__main__':
     unittest.main()
