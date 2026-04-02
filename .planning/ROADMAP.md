@@ -16,7 +16,7 @@
 - [x] **Phase 3: Backend Orchestration** - Extract orchestration modules (file locking, approval queue, daily limits, notifications)
 - [x] **Phase 4: Backend Integration** - Refactor wl_handler.py as thin REST router
 - [x] **Phase 5: Frontend Architecture** - Extract frontend modules and implement state manager
-- [ ] **Phase 6: Admin Panel** - Modularize control_panel.js and associated feature modules
+- [x] **Phase 6: Admin Panel** - Modularize control_panel.js and associated feature modules
 - [ ] **Phase 7: Test Coverage** - Unit, integration, E2E, concurrency, and security test suites
 - [ ] **Phase 8: Splunkbase Readiness** - AppInspect validation, documentation, backward compatibility verification
 
@@ -301,7 +301,7 @@
 5. Tab routing with URL state management (history.replaceState) and browser visibility lifecycle (document.visibilitychange)
 6. Approval queue module fires notifications for new pending requests; admin receives badge + toast
 
-**Plans:** 3/4 plans executed
+**Plans:** 5/5 plans COMPLETE
 
 - [x] **06-01-PLAN.md** — Refactor control_panel.js entry point (Wave 1) — COMPLETED
   - Requirements: FMOD-06, FMOD-07
@@ -318,18 +318,33 @@
   - Depends on: 06-01 (entry point infrastructure ready)
   - Status: COMPLETED — 5/5 tasks, 901 lines of feature code extracted, all modules wired with context injection and tab routing
 
-- [ ] **06-03-PLAN.md** — Extract complex modules and finalize (Wave 2b) — CREATED
+- [x] **06-03-PLAN.md** — Extract complex modules and finalize (Wave 2b) — COMPLETED
   - Requirements: FMOD-06, FMOD-07
   - Modules: wl_cp_queue.js (~420 lines), wl_cp_limits.js (~725 lines)
-  - Files: 2 modules, entry point updates, notification enhancement (Queue tab badge + toast), CSS updates, default/app.conf (build 488 → 489)
+  - Files: 2 modules, entry point updates, notification enhancement (Queue tab badge + toast), CSS updates, default/app.conf (build 489 → 490)
   - Tasks: 5 (create wl_cp_queue, create wl_cp_limits, add notification badge+toast, update CSS, bump build and finalize)
   - Depends on: 06-02 (all other modules available)
-  - Status: Plan created with detailed specifications for complex modules and notification system
+  - Status: COMPLETED — 5/5 tasks, all complex modules wired and finalized
+
+- [x] **06-04-PLAN.md** — Remaining feature modules and finalization (Wave 2c) — COMPLETED
+  - Requirements: FMOD-06, FMOD-07
+  - Files: Updated wl_cp_*.js modules, default/app.conf (build 490)
+  - Tasks: Multiple task closure and finalization
+  - Status: COMPLETED — Feature implementation finalized
+
+- [x] **06-05-PLAN.md** — Modal helper extraction and gap closure (Wave 3) — COMPLETED
+  - Requirements: FMOD-06
+  - Files: appserver/static/modules/wl_cp_modals.js (150 lines), refactored control_panel.js (247 lines), default/app.conf (build 491)
+  - Tasks: 3 (extract modal factory, refactor control_panel.js imports, bump build)
+  - Status: COMPLETED — 3/3 tasks, modal helpers extracted to reusable module, control_panel.js reduced to 247 lines (from 340)
+  - Gap Closed: control_panel.js is now a thin entry point with shared modal infrastructure established
 
 **Wave Structure:**
 - **Wave 1:** 06-01 (refactor control_panel.js entry point, access control gate, tab routing, modal helpers, visibility handler) — foundation for modular features
 - **Wave 2a:** 06-02 (extract wl_cp_trash, wl_cp_admin_limits, wl_cp_usage modules) — simple features ready in parallel
-- **Wave 2b:** 06-03 (extract wl_cp_queue, wl_cp_limits modules, add notifications) — complex features, final wiring and finalization
+- **Wave 2b:** 06-03 (extract wl_cp_queue, wl_cp_limits modules, add notifications) — complex features, intermediate finalization
+- **Wave 2c:** 06-04 (remaining feature modules and finalization) — feature implementation complete
+- **Wave 3:** 06-05 (modal helper extraction, gap closure) — infrastructure modularization and code health improvements
 
 ---
 
@@ -381,7 +396,7 @@
 | 3. Backend Orchestration | 3 plans | Complete ✓ | — | 2026-04-01 |
 | 4. Backend Integration | 5 plans | Complete ✓ | — | — |
 | 5. Frontend Architecture | 4 plans | Complete ✓ | — | 2026-04-02 |
-| 6. Admin Panel | 3 plans | 2/3 complete ✓ | 2026-04-02 | 2026-04-02 (06-01, 06-02) |
+| 6. Admin Panel | 5 plans | Complete ✓ | 2026-04-02 | 2026-04-02 (all) |
 | 7. Test Coverage & Validation | TBD | Not started | — | — |
 | 8. Splunkbase Readiness | TBD | Not started | — | — |
 
