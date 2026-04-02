@@ -364,43 +364,25 @@
 5. E2E browser tests pass: load CSV, save changes, request approval, admin approves, revert to previous version (using Playwright or Puppeteer)
 6. Mock Splunk SDK fixtures created for offline unit testing (no container required for unit tests)
 
-**Plans:** 5 plans in 3 waves
+**Plans:** 6 plans in 4 waves
 
-- [x] **07-01-PLAN.md** — Unit test baseline and infrastructure (Wave 1) — CREATED
-  - Requirements: TEST-01, TEST-06
-  - Files: tests/pytest.ini (markers), tests/conftest.py, tests/unit/conftest.py (consolidation), tests/unit/test_limits.py (fix 10 failing), requirements-dev.txt (pytest-cov, freezegun, hypothesis, pytest-timeout)
-  - Tasks: 5 (fix test_limits.py failures, consolidate conftest files, register pytest markers, update requirements-dev.txt, verify ≥80% coverage)
-  - Depends on: none (Wave 1 foundation)
-
-- [x] **07-02-PLAN.md** — Integration tests and concurrency (Wave 2) — CREATED
-  - Requirements: TEST-02, TEST-04
-  - Files: tests/integration/test_get_actions.py, test_simple_post_actions.py (extended), test_complex_post_actions.py (concurrency), test_docker_smoke.py (new concurrency)
-  - Tasks: 5 (extend GET action tests, extend simple POST, add concurrency scenarios 4x, Docker smoke tests with 5+ threads)
-  - Depends on: 07-01 (unit baseline complete)
-
-- [x] **07-03-PLAN.md** — Security tests with OWASP payloads and RBAC matrix (Wave 2) — CREATED
-  - Requirements: TEST-03
-  - Files: tests/security/__init__.py, conftest.py, fixtures/, test_xss.py, test_injection.py, test_rbac_bypass.py
-  - Tasks: 6 (create security fixtures with OWASP payloads, XSS tests, injection tests, RBAC bypass matrix 70-80 tests, regression tests, verify security)
-  - Depends on: 07-01 (unit baseline)
-
-- [x] **07-04-PLAN.md** — E2E browser tests with Playwright (Wave 3) — CREATED
+- [x] **07-05-PLAN.md** � QUnit frontend module tests: infrastructure + wl_rest + wl_table (Wave 3) � CREATED
   - Requirements: TEST-05
-  - Files: tests/e2e/__init__.py, conftest.py, page_objects.py, test_crud_workflow.py, test_approval_workflow.py, test_revert_workflow.py, test_admin_panel_workflow.py, test_stress_and_theme.py
-  - Tasks: 6 (create page object model, CRUD workflow tests, approval workflow tests, revert/admin panel tests, stress + theme tests, run full E2E suite)
-  - Depends on: 07-01, 07-02 (unit + integration stable)
+  - Files: tests/qunit/test_wl_rest.js, test_wl_table.js, fixtures/, appserver/static/test_runner.xml
+  - Tasks: 3 (create test infrastructure and test_runner.xml, wl_rest tests 30+, wl_table tests 40+)
+  - Depends on: 07-01, 07-04 (test infrastructure ready)
 
-- [x] **07-05-PLAN.md** — QUnit frontend module tests (Wave 3) — CREATED
+- [ ] **07-06-PLAN.md** � QUnit frontend module tests: wl_modals + wl_state + verification (Wave 4) � CREATED
   - Requirements: TEST-05
-  - Files: tests/qunit/test_wl_rest.js, test_wl_table.js, test_wl_modals.js, test_wl_state.js, fixtures/, appserver/static/test_runner.xml
-  - Tasks: 6 (create test infrastructure and test_runner.xml, wl_rest tests 30+, wl_table tests 40+, wl_modals tests 35+, wl_state tests 40+, run full suite)
-  - Depends on: 07-01, 07-04 (E2E foundations ready)
+  - Files: tests/qunit/test_wl_modals.js, test_wl_state.js, fixtures/approval_queue.json
+  - Tasks: 3 (wl_modals tests 35+, wl_state tests 40+, run full QUnit suite with >=145 tests)
+  - Depends on: 07-05 (infrastructure complete)
 
 **Wave Structure:**
 - **Wave 1 (Foundation):** 07-01 (unit baseline, test infrastructure, conftest consolidation, marker registration, requirements-dev.txt)
 - **Wave 2 (Parallel - Integration & Security):** 07-02 (integration tests, concurrency scenarios, Docker smoke), 07-03 (security tests, OWASP payloads, RBAC matrix, regressions)
-- **Wave 3 (Parallel - E2E & QUnit):** 07-04 (E2E Playwright workflows), 07-05 (QUnit frontend module tests) — depends on 07-01 and 07-02
-
+- **Wave 3 (Parallel - E2E & QUnit Infrastructure):** 07-04 (E2E Playwright workflows), 07-05 (QUnit test infrastructure + wl_rest/wl_table tests) � depends on 07-01 and 07-02
+- **Wave 4 (QUnit Module Tests):** 07-06 (wl_modals/wl_state tests + full suite verification) � depends on 07-05
 **Total Test Coverage:**
 - Unit: 389+ tests, ≥80% coverage per module (16 backend modules)
 - Integration: 50+ tests (all 15+ handler actions, concurrency scenarios)
