@@ -366,13 +366,24 @@
 
 **Plans:** 6 plans in 4 waves
 
-- [x] **07-05-PLAN.md** � QUnit frontend module tests: infrastructure + wl_rest + wl_table (Wave 3) � CREATED
+- [x] **07-01-PLAN.md** – Unit test baseline: test infrastructure, conftest consolidation, marker registration (Wave 1) – COMPLETED (2026-04-02)
+  - Requirements: TEST-01, TEST-06
+  - Status: 5/5 tasks completed, 400+ tests passing, ≥80% coverage on 11 core backend modules
+  - Key accomplishments: Fixed 10 failing test_limits tests via mock_counter_period fixture, added 12 error-handling tests, registered Phase 7 markers, updated requirements-dev.txt with hypothesis/pytest-timeout/playwright
+
+- [ ] **07-02-PLAN.md** – Integration tests: handler actions, concurrency, Docker smoke (Wave 2) – PLANNED
+
+- [ ] **07-03-PLAN.md** – Security tests: XSS, injection, RBAC matrix (Wave 2) – PLANNED
+
+- [ ] **07-04-PLAN.md** – E2E Playwright workflows: CRUD, approval, revert, admin, stress (Wave 3) – PLANNED
+
+- [x] **07-05-PLAN.md** � QUnit frontend module tests: infrastructure + wl_rest + wl_table (Wave 3) � CREATED
   - Requirements: TEST-05
   - Files: tests/qunit/test_wl_rest.js, test_wl_table.js, fixtures/, appserver/static/test_runner.xml
   - Tasks: 3 (create test infrastructure and test_runner.xml, wl_rest tests 30+, wl_table tests 40+)
   - Depends on: 07-01, 07-04 (test infrastructure ready)
 
-- [ ] **07-06-PLAN.md** � QUnit frontend module tests: wl_modals + wl_state + verification (Wave 4) � CREATED
+- [ ] **07-06-PLAN.md** � QUnit frontend module tests: wl_modals + wl_state + verification (Wave 4) � CREATED
   - Requirements: TEST-05
   - Files: tests/qunit/test_wl_modals.js, test_wl_state.js, fixtures/approval_queue.json
   - Tasks: 3 (wl_modals tests 35+, wl_state tests 40+, run full QUnit suite with >=145 tests)
@@ -381,8 +392,8 @@
 **Wave Structure:**
 - **Wave 1 (Foundation):** 07-01 (unit baseline, test infrastructure, conftest consolidation, marker registration, requirements-dev.txt)
 - **Wave 2 (Parallel - Integration & Security):** 07-02 (integration tests, concurrency scenarios, Docker smoke), 07-03 (security tests, OWASP payloads, RBAC matrix, regressions)
-- **Wave 3 (Parallel - E2E & QUnit Infrastructure):** 07-04 (E2E Playwright workflows), 07-05 (QUnit test infrastructure + wl_rest/wl_table tests) � depends on 07-01 and 07-02
-- **Wave 4 (QUnit Module Tests):** 07-06 (wl_modals/wl_state tests + full suite verification) � depends on 07-05
+- **Wave 3 (Parallel - E2E & QUnit Infrastructure):** 07-04 (E2E Playwright workflows), 07-05 (QUnit test infrastructure + wl_rest/wl_table tests) � depends on 07-01 and 07-02
+- **Wave 4 (QUnit Module Tests):** 07-06 (wl_modals/wl_state tests + full suite verification) � depends on 07-05
 **Total Test Coverage:**
 - Unit: 389+ tests, ≥80% coverage per module (16 backend modules)
 - Integration: 50+ tests (all 15+ handler actions, concurrency scenarios)
@@ -422,7 +433,7 @@
 | 4. Backend Integration | 5 plans | Complete ✓ | — | — |
 | 5. Frontend Architecture | 4 plans | Complete ✓ | — | 2026-04-02 |
 | 6. Admin Panel | 5 plans | Complete ✓ | 2026-04-02 | 2026-04-02 (all) |
-| 7. Test Coverage & Validation | 5 plans | Planned ✓ | — | — |
+| 7. Test Coverage & Validation | 6 plans | 1/6 (Plan 1 COMPLETE) | 2026-04-02 | 2026-04-02 (Plan 01) |
 | 8. Splunkbase Readiness | TBD | Not started | — | — |
 
 ---
