@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<form version="1.1" hideSplunkBar="true" hideTitle="true">
+  <label>QUnit Test Runner</label>
+  <description>Hidden dashboard for running QUnit tests. Not visible in UI.</description>
+
+  <row>
+    <panel>
+      <title>QUnit Test Results</title>
+      <html>
+        <style>
+          .qunit-container {
+            font-family: monospace;
+            font-size: 12px;
+          }
+        </style>
+
+        <!-- QUnit CSS will be loaded dynamically -->
+        <link rel="stylesheet" href="https://code.jquery.com/qunit/qunit-2.19.4.css" />
+        <div id="qunit" class="qunit-container"></div>
+        <div id="qunit-fixture"></div>
+
+        <script>
+          /**
+           * QUnit Test Runner for Whitelist Manager
+           *
+           * Loads QUnit library and all test files, runs tests, and displays results.
+           */
+          (function() {
+            "use strict";
+
+            var statusElement = document.getElementById("qunit");
+            statusElement.textContent = "Loading QUnit Test Runner...";
+
+            // Load QUnit script
+            var qunitScript = document.createElement("script");
+            qunitScript.src = "https://code.jquery.com/qunit/qunit-2.19.4.js";
+            qunitScript.onload = function() {
+              if (typeof QUnit !== "undefined") {
+                console.log("QUnit library loaded successfully");
+
+                // Configure QUnit
+                QUnit.config.autostart = false;
+                QUnit.config.hidepassed = false;
+
+                // Load Splunk dependencies and test files
+                require([
+                  "jquery",
+                  "underscore",
+                  "splunkjs/mvc"
+                ], function($, _, mvc) {
+                  console.log("Splunk dependencies loaded");
+
+                  var testFiles = [
+                    "../../app/wl_manager/tests/qunit/test_state_manager.js",
+                    "../../app/wl_manager/tests/qunit/test_rest_helpers.js",
+                    "../../app/wl_manager/tests/qunit/test_module_loading.js",
+                    "../../app/wl_manager/tests/qunit/test_state_transitions.js"
+                  ];
+
+                  var filesLoaded = 0;
+                  var fileLoadErrors = [];
+
+                  function loadNextTest() {
+                    if (filesLoaded >= testFiles.length) {
+                      console.log("All test files processed, starting QUnit");
+                      QUnit.start();
+                      return;
+                    }
+
+                    var testFile = testFiles[filesLoaded];
+                    var script = document.createElement("script");
+                    script.src = testFile + "?" + new Date().getTime();
+                    script.async = true;
+                    script.onload = function() {
+                      filesLoaded++;
+                      console.log("Loaded test file: " + testFile);
+                      loadNextTest();
+                    };
+                    script.onerror = function() {
+                      fileLoadErrors.push(testFile);
+                      filesLoaded++;
+                      console.warn("Failed to load: " + testFile);
+                      loadNextTest();
+                    };
+                    document.head.appendChild(script);
+                  }
+
+                  loadNextTest();
+                });
+              } else {
+                statusElement.textContent = "Failed to load QUnit library";
+                console.error("QUnit library failed to load");
+              }
+            };
+
+            qunitScript.onerror = function() {
+              statusElement.textContent = "Failed to load QUnit from CDN";
+              console.error("Failed to load QUnit script");
+            };
+
+            document.head.appendChild(qunitScript);
+          })();
+        </script>
+      </html>
+    </panel>
+  </row>
+</form>
