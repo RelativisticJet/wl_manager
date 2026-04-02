@@ -1,0 +1,599 @@
+openapi: 3.0.0
+
+info:
+  title: Whitelist Manager for Splunk Enterprise Security
+  description: |
+    REST API for managing detection-rule CSV whitelists in Splunk Enterprise Security.
+
+    All requests go to the `/custom/wl_manager` endpoint with an `action` parameter specifying the operation.
+    Responses are JSON with `success` (boolean) and additional fields depending on the action.
+
+    Authentication: Requires valid Splunk session key (X-Splunk-Key header or session_key parameter).
+  version: 1.0.0
+  contact:
+    name: Whitelist Manager Support
+
+servers:
+  - url: /custom/wl_manager
+    description: Splunk instance REST endpoint
+
+paths:
+  /:
+    get:
+      summary: Execute GET actions
+      operationId: get_action
+      description: |
+        Execute read-only actions on CSV files, approval queues, limits, and presence tracking.
+        Specify the action via `action` query parameter.
+      parameters:
+        - name: action
+          in: query
+          required: true
+          description: Action name (e.g., get_csv_content, get_mapping, get_versions)
+          schema:
+            type: string
+            enum:
+              - get_rules
+              - get_csvs
+              - get_csv_content
+              - get_mapping
+              - get_versions
+              - check_csv_status
+              - get_col_widths
+              - get_apps
+              - report_presence
+              - get_presence
+              - get_pending_approvals
+              - get_request_csv
+              - get_approval_queue
+              - check_daily_limit_status
+              - get_daily_limits
+              - get_analyst_usage
+              - get_admin_limits
+              - get_notifications
+              - get_trash_config
+              - list_trash
+        - name: csv_file
+          in: query
+          required: false
+          description: CSV filename (required for get_csv_content, get_versions, check_csv_status, get_col_widths, report_presence, get_presence)
+          schema:
+            type: string
+        - name: app
+          in: query
+          required: false
+          description: App context (required for multi-app support)
+          schema:
+            type: string
+        - name: tz_offset
+          in: query
+          required: false
+          description: Timezone offset in minutes (for get_csv_content)
+          schema:
+            type: integer
+        - name: last_activity
+          in: query
+          required: false
+          description: Last activity timestamp in seconds (for report_presence)
+          schema:
+            type: number
+      responses:
+        '200':
+          description: Action succeeded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+              examples:
+                get_csv_content_example:
+                  summary: Get CSV content
+                  value:
+                    success: true
+                    csv_file: "DR_BruteForce_SSH.csv"
+                    headers:
+                      - "src_ip"
+                      - "user"
+                      - "comment"
+                    rows:
+                      - src_ip: "192.168.1.100"
+                        user: "admin"
+                        comment: "Test IP"
+                      - src_ip: "192.168.1.101"
+                        user: "user2"
+                        comment: ""
+                    row_count: 2
+                get_mapping_example:
+                  summary: Get detection rule to CSV mapping
+                  value:
+                    success: true
+                    mapping:
+                      "BruteForce_SSH": "DR_BruteForce_SSH.csv"
+                      "Privilege_Escalation": "DR_PrivEsc.csv"
+                get_versions_example:
+                  summary: Get version history
+                  value:
+                    success: true
+                    csv_file: "DR_BruteForce_SSH.csv"
+                    versions:
+                      - version_id: "1704067836"
+                        timestamp: "24-02-2026 12:37:16"
+                        row_count: 42
+                        analyst: "admin"
+                get_presence_example:
+                  summary: Get current user presence
+                  value:
+                    success: true
+                    csv_file: "DR_BruteForce_SSH.csv"
+                    active_users:
+                      - user: "admin"
+                        last_activity: "2026-04-02T18:15:30Z"
+                get_daily_limits_example:
+                  summary: Get daily limits (admin only)
+                  value:
+                    success: true
+                    limits:
+                      analyst_edits:
+                        max_count: 100
+                        reset_time: "00:00:00"
+                      analyst_row_additions:
+                        max_count: 500
+        '400':
+          description: Bad request (missing required parameter, validation error)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+                    example: "csv_file is required"
+        '401':
+          description: Unauthorized (not authenticated)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Session expired or not authenticated"
+        '403':
+          description: Forbidden (insufficient permissions for this action)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+                    example: "Insufficient privileges (requires wl_editor role)"
+        '404':
+          description: Not found (CSV or resource does not exist)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+                    example: "CSV file not found"
+        '500':
+          description: Server error (unexpected exception)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+                    example: "Internal server error"
+
+    post:
+      summary: Execute POST actions
+      operationId: post_action
+      description: |
+        Execute write operations on CSV files, create/delete rules, manage approvals, and configure limits.
+        Specify the action via `action` field in request JSON body.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action:
+                  type: string
+                  description: Action name
+                  enum:
+                    - save_csv
+                    - add_row
+                    - remove_rows
+                    - revert_csv
+                    - save_col_widths
+                    - create_csv
+                    - create_rule
+                    - remove_csv
+                    - remove_rule
+                    - submit_approval
+                    - submit_dual_approval
+                    - process_approval
+                    - process_dual_approval
+                    - check_approval_gate
+                    - cancel_request
+                    - set_daily_limits
+                    - set_admin_limits
+                    - reset_daily_limits
+                    - reset_daily_usage
+                    - save_as_default
+                    - reset_factory_defaults
+                    - set_trash_retention
+                    - purge_trash
+                    - restore_from_trash
+                    - mark_notifications_read
+                    - log_event
+              examples:
+                save_csv_example:
+                  summary: Save CSV changes (edit rows)
+                  value:
+                    action: "save_csv"
+                    csv_file: "DR_BruteForce_SSH.csv"
+                    app: "SA-ThreatIntel"
+                    old_rows:
+                      - src_ip: "192.168.1.100"
+                        user: "admin"
+                        comment: "Old comment"
+                    new_rows:
+                      - src_ip: "192.168.1.100"
+                        user: "admin"
+                        comment: "Updated comment"
+                    comment: "Updated test IP comment"
+                add_row_example:
+                  summary: Add a new row to CSV
+                  value:
+                    action: "add_row"
+                    csv_file: "DR_BruteForce_SSH.csv"
+                    app: "SA-ThreatIntel"
+                    old_rows: []
+                    new_rows:
+                      - src_ip: "192.168.1.102"
+                        user: "newuser"
+                        comment: "Added via API"
+                    comment: "Adding new IP to whitelist"
+                remove_rows_example:
+                  summary: Remove rows from CSV
+                  value:
+                    action: "remove_rows"
+                    csv_file: "DR_BruteForce_SSH.csv"
+                    app: "SA-ThreatIntel"
+                    old_rows:
+                      - src_ip: "192.168.1.100"
+                        user: "admin"
+                    new_rows: []
+                    comment: "IP no longer needed"
+                revert_csv_example:
+                  summary: Revert CSV to previous version
+                  value:
+                    action: "revert_csv"
+                    csv_file: "DR_BruteForce_SSH.csv"
+                    app: "SA-ThreatIntel"
+                    version_id: "1704067836"
+                    comment: "Reverting to previous state"
+                create_rule_example:
+                  summary: Create new detection rule
+                  value:
+                    action: "create_rule"
+                    detection_rule: "NewDetectionRule_001"
+                create_csv_example:
+                  summary: Create new CSV lookup file
+                  value:
+                    action: "create_csv"
+                    csv_file: "DR_Custom_Rule.csv"
+                    app: "SA-ThreatIntel"
+                    headers:
+                      - "field1"
+                      - "field2"
+                    comment: "Creating new whitelist"
+                submit_approval_example:
+                  summary: Submit action for approval (bulk edits, etc.)
+                  value:
+                    action: "submit_approval"
+                    action_type: "save_csv"
+                    payload:
+                      csv_file: "DR_BruteForce_SSH.csv"
+                      old_rows: []
+                      new_rows:
+                        - src_ip: "10.0.0.0/8"
+                          user: "test"
+                    reason: "Adding internal subnet to whitelist"
+                process_approval_example:
+                  summary: Approve or reject a pending request
+                  value:
+                    action: "process_approval"
+                    request_id: "req_1704067836_001"
+                    approved: true
+                    admin_comment: "Approved by SOC lead"
+                set_daily_limits_example:
+                  summary: Set daily limits for analysts (superadmin only)
+                  value:
+                    action: "set_daily_limits"
+                    limit_type: "analyst_edits"
+                    max_count: 100
+                mark_notifications_read_example:
+                  summary: Mark notifications as read
+                  value:
+                    action: "mark_notifications_read"
+                    notification_ids:
+                      - "notif_1"
+                      - "notif_2"
+      responses:
+        '200':
+          description: Action succeeded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+              examples:
+                save_csv_success:
+                  summary: CSV saved successfully
+                  value:
+                    success: true
+                    message: "CSV updated successfully"
+                    new_version: "1704067900"
+                    row_count: 42
+                create_rule_success:
+                  summary: Rule created successfully
+                  value:
+                    success: true
+                    detection_rule: "NewDetectionRule_001"
+                    message: "Rule created successfully"
+                submit_approval_success:
+                  summary: Approval request submitted
+                  value:
+                    success: true
+                    request_id: "req_1704067836_001"
+                    message: "Request submitted for approval"
+                    status: "pending"
+        '400':
+          description: Bad request (validation error, missing required field)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+                    example: "csv_file is required"
+        '401':
+          description: Unauthorized (not authenticated)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Session expired or not authenticated"
+        '403':
+          description: Forbidden (insufficient permissions)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+                    example: "Insufficient privileges (requires admin role)"
+        '404':
+          description: Not found (resource does not exist)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+                    example: "CSV file not found"
+        '429':
+          description: Too many requests (daily limit exceeded)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+                    example: "Daily limit exceeded: 10/10 edits used"
+                  limit_type:
+                    type: string
+                    example: "analyst_edits"
+                  current:
+                    type: integer
+                    example: 10
+                  maximum:
+                    type: integer
+                    example: 10
+        '500':
+          description: Server error (unexpected exception)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+                    example: "Internal server error"
+
+components:
+  schemas:
+    CSVRow:
+      type: object
+      description: A row from a CSV lookup file (dynamic fields based on CSV headers)
+      additionalProperties:
+        type: string
+      example:
+        src_ip: "192.168.1.100"
+        user: "admin"
+        comment: "Test entry"
+
+    AuditEvent:
+      type: object
+      description: Audit event logged to wl_audit index
+      properties:
+        action:
+          type: string
+          enum:
+            - added
+            - removed
+            - edited
+            - revert
+            - auto_removed
+            - dr_created
+            - csv_created
+            - csv_deleted
+        timestamp:
+          type: string
+          format: date-time
+        analyst:
+          type: string
+          description: Username of analyst who made the change
+        detection_rule:
+          type: string
+        csv_file:
+          type: string
+        app_context:
+          type: string
+        comment:
+          type: string
+
+    VersionInfo:
+      type: object
+      description: Information about a specific CSV version
+      properties:
+        version_id:
+          type: string
+        timestamp:
+          type: string
+          description: Human-readable timestamp (e.g., "24-02-2026 12:37:16")
+        row_count:
+          type: integer
+        analyst:
+          type: string
+
+    ApprovalRequest:
+      type: object
+      description: Pending approval request
+      properties:
+        request_id:
+          type: string
+        action_type:
+          type: string
+          description: Type of action (save_csv, remove_csv, etc.)
+        submitted_by:
+          type: string
+        submitted_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum:
+            - pending
+            - approved
+            - rejected
+            - cancelled
+        reason:
+          type: string
+
+  securitySchemes:
+    SplunkSession:
+      type: apiKey
+      in: header
+      name: X-Splunk-Key
+      description: Splunk session key
+
+  responses:
+    UnauthorizedError:
+      description: Authentication failed
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "Session expired or not authenticated"
+
+    ForbiddenError:
+      description: Insufficient privileges
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: false
+              error:
+                type: string
+                example: "Insufficient privileges for this action"
+
+    NotFoundError:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: false
+              error:
+                type: string
+                example: "Resource not found"
+
+security:
+  - SplunkSession: []
+
+tags:
+  - name: CSV Operations
+    description: Read and modify CSV lookup files
+  - name: Approval Workflow
+    description: Submit and process bulk edits for approval
+  - name: Admin Operations
+    description: Manage limits, defaults, and trash
+  - name: Presence Tracking
+    description: Track active users and sessions
