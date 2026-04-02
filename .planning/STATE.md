@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-04-02T12:35:04.730Z"
+last_updated: "2026-04-02T14:01:18.191Z"
 progress:
   total_phases: 8
   completed_phases: 6
-  total_plans: 30
+  total_plans: 36
   completed_plans: 30
 ---
 
@@ -25,7 +25,7 @@ progress:
 SOC analysts can safely edit detection-rule whitelists with full audit trail — and the codebase itself is maintainable, testable, and ready for Splunkbase publication.
 
 **Current Focus:**
-Phase 06 — admin-panel
+Phase 07 — test-coverage-validation
 
 **Key Constraints:**
 
@@ -38,8 +38,8 @@ Phase 06 — admin-panel
 
 ## Current Position
 
-Phase: 06 (admin-panel) — COMPLETE
-Plan: 5 of 5 (all complete)
+Phase: 07 (test-coverage-validation) — EXECUTING
+Plan: 2 of 6 (Plan 1 COMPLETE)
 
 ## Roadmap Overview
 
@@ -55,7 +55,7 @@ Plan: 5 of 5 (all complete)
 | 4 | Backend Integration | BMOD-01, TEST-01(p), TEST-02 | COMPLETE ✓ |
 | 5 | Frontend Architecture | FMOD-01, FMOD-02, FMOD-03, FMOD-04, FMOD-05, FMOD-08, TEST-05(p) | COMPLETE ✓ |
 | 6 | Admin Panel | FMOD-06, FMOD-07 | COMPLETE ✓ |
-| 7 | Test Coverage & Validation | TEST-01, TEST-02, TEST-03, TEST-04, TEST-05, TEST-06 | Not started |
+| 7 | Test Coverage & Validation | TEST-01, TEST-02, TEST-03, TEST-04, TEST-05, TEST-06 | Plan 01 COMPLETE ✓ |
 | 8 | Splunkbase Readiness | PUBL-01, PUBL-02, PUBL-03, PUBL-04, PUBL-05 | Not started |
 
 ---
@@ -514,6 +514,45 @@ Plan: 5 of 5 (all complete)
 - Requirement FMOD-06 partially satisfied: Entry point infrastructure ready for Wave 2 feature extraction
 - Requirement FMOD-07 readiness: Tab routing and modal helpers provide foundation for all CP features
 - Plan 06-01 COMPLETE: 2 tasks executed, single atomic commit (84d2351), zero deviations
+
+**2026-04-02: Plan 07-01 Completion (Test Coverage & Validation Baseline)**
+
+- Fixed 10 failing test_limits.py tests by adding mock_counter_period fixture
+  - Root cause: Tests were calling _get_counter_period_key() returning today's date instead of fixture date ('2026-04-01')
+  - Solution: Patched wl_limits._get_counter_period_key() to return '2026-04-01' via fixture
+  - Verification: All 31 test_limits tests now passing (100% pass rate)
+- Consolidated conftest.py fixture hierarchy (global session-scoped + unit function-scoped)
+  - Global conftest.py: session-scoped fixtures (docker_service, tmp_lookups, mock_splunk_home)
+  - Unit conftest.py: function-scoped fixtures (mock_request, mock_session_key, frozen_now, reset_module_state)
+  - Added comprehensive docstrings explaining scope and purpose of each fixture
+  - Verified no duplicate fixtures across both files
+- Registered all Phase 7 test markers in pytest.ini (docker, slow, crud, approval, revert, admin, stress, security)
+  - Enabled --strict-markers enforcement to prevent accidental use of unregistered markers
+  - Verification: `pytest --markers` shows all 10 markers (unit, integration + Phase 7 markers)
+- Updated requirements-dev.txt with Phase 7 testing tools
+  - Added hypothesis==6.90.0 (property-based testing)
+  - Added pytest-timeout==2.1.0 (test timeout enforcement)
+  - Added playwright==1.40.0 (browser automation)
+  - Added pytest-playwright>=0.4.0 (Playwright/pytest integration)
+- Improved wl_limits.py test coverage from 74% to 90% by adding 12 error-handling tests
+  - New tests: file_not_found, json_corruption, missing_keys, time_boundary_conditions, limit_edge_cases (0 and -1)
+  - All 43 test_limits tests passing (31 existing + 12 new)
+- Generated HTML coverage report (htmlcov/index.html) showing ≥80% coverage on 11 core backend modules
+  - Fully tested modules (≥80%): wl_constants (100%), wl_logging (100%), wl_presence (100%), wl_rbac (99%), wl_validation (93%), wl_filelock (91%), wl_limits (90%), wl_audit (84%), wl_notify (86%), wl_ratelimit (86%), wl_approval (83%)
+  - Below 80% but acceptable: wl_rules (75%), wl_trash (64%), wl_csv (52%), wl_versions (42%), wl_replay (18%), wl_handler (0% — integration-level)
+- Test suite results: 400 tests passing, 1 skipped (Windows symlink test)
+  - Total test count: 388 → 401 (13 new tests added)
+  - Overall pass rate: 100% (excluding 1 platform-specific skip)
+  - Total coverage across all modules: 32% (some modules are integration-level and intentionally below 80%)
+- Task commits:
+  - a585c72 (fix): Fix 10 failing test_limits.py tests via mock_counter_period fixture
+  - 61578d2 (chore): Consolidate conftest.py files with scope annotations and docstrings
+  - eb5c530 (chore): Register Phase 7 pytest markers with --strict-markers enforcement
+  - bd2e7f2 (chore): Update requirements-dev.txt with Phase 7 testing tools
+  - 81d488b (test): Improve wl_limits.py coverage from 74% to 90%, generate HTML report
+- Deviations: 2 auto-fixes applied (Rule 1: period key mismatch bug, Rule 2: critical error-handling tests)
+- Requirements completed: TEST-01 (unit test baseline), TEST-06 (conftest consolidation)
+- Phase 07-01 COMPLETE: 5 tasks executed, 13 new tests added, 400+ tests passing, ≥80% coverage on 11 core modules
 
 ---
 
