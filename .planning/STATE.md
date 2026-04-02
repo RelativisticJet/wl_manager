@@ -13,7 +13,7 @@ progress:
 
 # State: Whitelist Manager v3.0 Modular Rewrite
 
-**Date:** 2026-03-31  
+**Date:** 2026-04-02  
 **Project:** Whitelist Manager for Splunk Enterprise Security  
 **Milestone:** v3.0 Modular Rewrite
 
@@ -441,6 +441,25 @@ Plan: 2 of 4
 - Build number incremented (484 → 485) for cache-busting
 - Requirement FMOD-05 fulfilled: "Wave 2: Independent Features"
 - Plan 05-02 COMPLETE: 5 tasks executed, single atomic commit (80f815b)
+
+## 2026-04-02: Plan 05-01 Completion (Wave 1 Foundation Layer)
+
+- Implemented 4 foundation AMD modules (wl_constants, wl_state, wl_rest, wl_ui)
+  - wl_constants: 208 lines — 8 export objects (SELECTORS, CONFIG, PATTERNS, ROLES, ACTION_TYPES, HTTP, MESSAGE_TYPES, EXPIRE_COLUMN_NAMES)
+  - wl_state: 295 lines — Centralized state manager with register/get/set/reset/batch/isDirty/on/off, event-driven mutations, validators
+  - wl_rest: 175 lines — Unified REST helpers (restGet, restPost) eliminating 6x duplication
+  - wl_ui: 235 lines — UI utilities (showMsg, showFatalError, toggleTheme) with theme persistence
+- Refactored notifications.js from standalone IIFE to AMD module using wl_rest helpers
+  - Replaced 5 direct $.ajax calls with REST.restGet/restPost
+  - Custom event 'wl:notificationsUpdated' instead of window.__wlNotifCallbacks
+  - Legacy callback support maintained for backward compatibility
+- Created QUnit test infrastructure and test files
+  - test_state_manager.js: 18 test cases covering State API, validators, event firing
+  - test_rest_helpers.js: 16 test cases covering URL building, promises, error handling
+- All 6 commits created: 409df3d, 92f8643, 956af6d, 02711aa, 9fcb660, b1d1192
+- Requirements FMOD-01, FMOD-02, FMOD-03, FMOD-04, FMOD-08 fulfilled
+- Zero deviations from plan; all acceptance criteria met
+- Wave 1 foundation layer COMPLETE — ready for Wave 2 feature modules
 
 ---
 
