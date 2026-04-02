@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-04-01T22:35:50.131Z"
+last_updated: "2026-04-02T00:14:50.796Z"
 progress:
   total_phases: 8
   completed_phases: 4
-  total_plans: 21
+  total_plans: 25
   completed_plans: 21
 ---
 
@@ -25,7 +25,7 @@ progress:
 SOC analysts can safely edit detection-rule whitelists with full audit trail — and the codebase itself is maintainable, testable, and ready for Splunkbase publication.
 
 **Current Focus:**
-Phase 04 — backend-integration
+Phase 05 — frontend-architecture
 
 **Key Constraints:**
 
@@ -38,8 +38,8 @@ Phase 04 — backend-integration
 
 ## Current Position
 
-Phase: 04 (backend-integration) — EXECUTING
-Plan: 1 of 2
+Phase: 05 (frontend-architecture) — EXECUTING
+Plan: 2 of 4
 
 ## Roadmap Overview
 
@@ -428,6 +428,19 @@ Plan: 1 of 2
 - Requirement BMOD-01 partially satisfied: Pipeline abstraction created; handler still requires progressive migration
 - Requirement TEST-02 satisfied: Architecture validation tests created (2 tests passing, no Splunk framework required)
 - Phase 04 complete: All 4 plans executed, 376 tests passing (374 baseline + 2 new)
+
+**2026-04-02: Plan 05-02 Completion (Wave 2: Independent Feature Modules)**
+
+- Extracted three independent feature modules from monolith
+  - **wl_search.js** (177 lines): Search/filter with debounced input, case-insensitive matching, State event listeners, custom wl:searchUpdated event
+  - **wl_presence.js** (208 lines): User presence tracking with 30-second heartbeat polling, per-CSV isolation, graceful error handling, custom wl:presenceUpdated event
+  - **wl_csv_io.js** (462 lines): RFC 4180-compliant CSV parser with validation, import preview modal, CSV injection prevention (formula-safe escaping), export with timestamp filenames
+- Entry point updated: whitelist_manager.js now requires Wave 2 modules and initializes them before loadRules()
+- Presence polling started automatically on module initialization
+- Event handlers wired for CSV import/export completion
+- Build number incremented (484 → 485) for cache-busting
+- Requirement FMOD-05 fulfilled: "Wave 2: Independent Features"
+- Plan 05-02 COMPLETE: 5 tasks executed, single atomic commit (80f815b)
 
 ---
 
