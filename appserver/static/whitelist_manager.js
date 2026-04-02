@@ -23,11 +23,21 @@ require([
     "splunkjs/mvc",
     "splunkjs/mvc/utils",
     "splunkjs/mvc/simplexml/ready!",
+    // Wave 1 Foundation Modules
+    "modules/wl_constants",
+    "modules/wl_state",
+    "modules/wl_rest",
+    "modules/wl_ui",
     // Wave 2 Feature Modules (independent features)
     "modules/wl_search",
     "modules/wl_presence",
-    "modules/wl_csv_io"
-], function ($, _, mvc, utils, Search, Presence, CsvIO) {
+    "modules/wl_csv_io",
+    // Wave 2.5 Coupled Feature Modules (table, modals, versions, approvals)
+    "modules/wl_table",
+    "modules/wl_modals",
+    "modules/wl_versions",
+    "modules/wl_approval_ui"
+], function ($, _, mvc, utils, Constants, State, REST, UI, Search, Presence, CsvIO, Table, Modals, Versions, ApprovalUI) {
     "use strict";
 
     // ══════════════════════════════════════════════════════════════════
@@ -6722,6 +6732,12 @@ require([
     };
 
     // ══════════════════════════════════════════════════════════════════
+    // Initialize Foundation Modules (Wave 1)
+    // ══════════════════════════════════════════════════════════════════
+    // These provide constants, state management, REST helpers, and UI utilities
+    // Already loaded but referenced via require() dependency injection
+
+    // ══════════════════════════════════════════════════════════════════
     // Wave 2 Feature Modules Initialization
     // ══════════════════════════════════════════════════════════════════
 
@@ -6745,10 +6761,33 @@ require([
     });
 
     // ══════════════════════════════════════════════════════════════════
-    // Wave 3 Feature Modules (wl_table, wl_modals, etc.) — PLACEHOLDER
+    // Wave 2.5 Coupled Feature Modules Initialization
     // ══════════════════════════════════════════════════════════════════
-    // Wave 3 modules will extract table rendering, modal dialogs, and other coupled features.
-    // These will be added as dependencies in 05-03 (Wave 3) plan execution.
+    // Initialize table, modals, versions, and approval UI modules
+    Table.init();           // Table rendering and cell editing
+    Modals.init();          // Modal dialogs for add/remove/edit
+    Versions.init();        // Version history and revert
+    ApprovalUI.init();      // Approval request and queue UI
+
+    // Wire table row removal event to show modal
+    $(document).on('wl:rowRemovalRequested', function(event, data) {
+        Modals.showRemoveModal(data.indices, function(reason) {
+            // Handler will be in entry point (existing removeRow logic)
+            // Placeholder for Wave 4 refactoring
+        });
+    });
+
+    // Wire version revert from UI
+    // (Version dropdown triggered from table toolbar — to be wired in Wave 4)
+
+    // Wire approval needed modal
+    // (Triggered when save requires approval — to be wired in Wave 4)
+
+    // ══════════════════════════════════════════════════════════════════
+    // Wave 4 Finalization (Entry Point Refactoring) — PLACEHOLDER
+    // ══════════════════════════════════════════════════════════════════
+    // Wave 4 will simplify this entry point to <100 lines by removing all event handlers
+    // and delegating to feature modules. Core logic will move to domain modules.
 
     // ══════════════════════════════════════════════════════════════════
     // Wave 4 Finalization (Entry Point Refactoring) — PLACEHOLDER
