@@ -1,0 +1,66 @@
+[
+  {
+    "request_id": "550e8400-e29b-41d4-a716-446655440001",
+    "status": "pending",
+    "timestamp": 1677696645,
+    "analyst": "jsmith",
+    "action_type": "save_csv",
+    "csv_file": "DR102_whitelist.csv",
+    "detection_rule": "Suspicious Login",
+    "reason": "Updated whitelist for trusted partners",
+    "payload": {
+      "rows": [
+        {"user": "admin", "src_ip": "192.168.1.0/24", "reason": "Partner network"}
+      ]
+    }
+  },
+  {
+    "request_id": "550e8400-e29b-41d4-a716-446655440002",
+    "status": "pending",
+    "timestamp": 1677696750,
+    "analyst": "kchen",
+    "action_type": "revert_csv",
+    "csv_file": "DR103_failed_logins.csv",
+    "detection_rule": "Failed Login Attempts",
+    "reason": "Revert to previous version due to error",
+    "payload": {
+      "reverted_to_version": "20260330_150030"
+    }
+  },
+  {
+    "request_id": "550e8400-e29b-41d4-a716-446655440003",
+    "status": "approved",
+    "timestamp": 1677696850,
+    "analyst": "mchen",
+    "action_type": "save_csv",
+    "csv_file": "DR104_phishing.csv",
+    "detection_rule": "Phishing Detection",
+    "reason": "Added known phishing URLs",
+    "payload": {
+      "rows": []
+    }
+  },
+  {
+    "request_id": "550e8400-e29b-41d4-a716-446655440004",
+    "status": "pending",
+    "timestamp": 1677696950,
+    "analyst": "admin",
+    "action_type": "add_rule",
+    "detection_rule": "New Detection Rule",
+    "reason": "Creating new detection rule for monitoring",
+    "payload": {
+      "rule_name": "New Detection Rule",
+      "description": "Monitors for suspicious activity"
+    }
+  },
+  {
+    "request_id": "550e8400-e29b-41d4-a716-446655440005",
+    "status": "rejected",
+    "timestamp": 1677697050,
+    "analyst": "jsmith",
+    "action_type": "delete_rule",
+    "detection_rule": "Deprecated Rule",
+    "reason": "Rule no longer used",
+    "payload": {}
+  }
+]
