@@ -636,3 +636,42 @@ Next Plan: 3 of 5
 - All 5 tasks completed, 4 commits created (d62faca, 1b99d9d, 14f3078, 1c9ba43, 906e3b2)
 - Zero deviations from plan (1 auto-fix applied: freeze_time bug)
 - Plan 07-02 COMPLETE: 100% test pass rate, comprehensive handler coverage, concurrency safety verified
+
+**2026-04-02: Plan 08-02 Completion (Security Architecture Documentation)**
+
+- Created comprehensive security architecture documentation (docs/SECURITY_ARCHITECTURE.md, 583 lines)
+  - Two-part structure: Executive Summary (Splunk admins) + Detailed Threat Model (security reviewers)
+  - Part 1: Data accessed/modified, roles defined (4 tiers), audit completeness, cloud compatibility
+  - Part 2: STRIDE threat analysis (6 categories, 23 threats), DREAD scoring (5 high-risk scenarios), mitigated threats (6 documented with code evidence)
+  - RBAC matrix: 4 roles (wl_viewer, wl_editor, wl_admin, wl_superadmin) × 8+ capabilities per role
+  - Authentication flow diagram: Splunk session → user context extraction → role lookup
+  - Authorization flow: RBAC predicates applied at 3 gates (entry, action, precondition)
+  - Audit event flow: Validation → diff computation → event construction → HTTP POST to wl_audit index
+  - Mitigated vulnerabilities documented with evidence:
+    1. Optimistic locking bypass (commit 2fa8c3d: mtime validation in wl_versions.py)
+    2. Client trust bypass (commit 3e7f2b1: wl_validation.py with 25 unit tests)
+    3. Reserved prefix convention enforcement (commit 5c3a9e2: internal column whitelist)
+    4. RBAC bypass in approval paths (commit 39d37ef: multiple gates in wl_approval.py)
+    5. Set-vs-counter duplicate tracking bug (commit 4a2f8d9: Counter multiset in wl_csv.py)
+    6. State sync contract violation (commit 2e1d4c5: syncInputs guard in whitelist_manager.js)
+  - Security testing checklist (13 items) for deployment reviews
+  - Compliance alignment: NIST SP 800-53 (authentication, authorization, audit), OWASP (injection, rate limiting, input validation)
+- Updated SECURITY.md to reference full security architecture documentation
+  - Added subsection "Full Security Architecture Documentation"
+  - Relative link (works in GitHub and .spl package): [docs/SECURITY_ARCHITECTURE.md](docs/SECURITY_ARCHITECTURE.md)
+  - Listed key components: threat model, STRIDE/DREAD analysis, mitigated threats, RBAC matrix, data flows
+  - Preserved all original content (Supported Versions, Reporting a Vulnerability, Security Review History)
+- Task 1 commit: 8221577 (security architecture creation)
+- Task 2 commit: 8a10939 (SECURITY.md link update)
+- Summary commit: bb36854 (plan completion documentation)
+- Requirement PUBL-02 satisfied: Security architecture documentation complete
+- All verification criteria passed:
+  - docs/SECURITY_ARCHITECTURE.md exists (583 lines, >100 minimum)
+  - Executive Summary suitable for Splunk admins
+  - STRIDE threat model comprehensive (6 categories, 23 threats)
+  - DREAD scoring provided (5 high-risk scenarios)
+  - Mitigated threats documented with code references
+  - RBAC matrix complete (4 roles, 8+ capabilities each)
+  - Data flow diagrams included
+  - SECURITY.md updated with relative link
+- Plan 08-02 COMPLETE: 2 tasks executed, comprehensive security documentation delivered, zero deviations
