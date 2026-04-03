@@ -13,9 +13,13 @@ require([
     "underscore",
     "splunkjs/mvc",
     "splunkjs/mvc/utils",
+    "app/wl_manager/modules/wl_debug",
     "splunkjs/mvc/simplexml/ready!"
-], function ($, _, mvc, utils) {
+], function ($, _, mvc, utils, Debug) {
     "use strict";
+
+    // Activate debug interceptor (remove for production)
+    Debug.init();
 
     // ══════════════════════════════════════════════════════════════════
     // Dark theme detection (same as whitelist_manager.js)
