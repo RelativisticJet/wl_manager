@@ -158,7 +158,7 @@ def get_admin_users(session_key: str) -> List[str]:
             admins = []
             for entry in entries:
                 content_data = entry.get("content", {})
-                name = content_data.get("name", "")
+                name = entry.get("name", "")
                 roles = set(content_data.get("roles", []))
                 if roles & ADMIN_ROLES:
                     admins.append(name)

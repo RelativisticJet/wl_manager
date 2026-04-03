@@ -13,27 +13,23 @@ require([
     "underscore",
     "splunkjs/mvc",
     "splunkjs/mvc/utils",
+    "app/wl_manager/modules/wl_rest",
+    "app/wl_manager/modules/wl_ui",
     "app/wl_manager/modules/wl_debug",
     "splunkjs/mvc/simplexml/ready!"
-], function ($, _, mvc, utils, Debug) {
+], function ($, _, mvc, utils, REST, UI, Debug) {
     "use strict";
 
     // Activate debug interceptor (remove for production)
     Debug.init();
 
-    // ══════════════════════════════════════════════════════════════════
-    // Dark theme detection (same as whitelist_manager.js)
-    // ══════════════════════════════════════════════════════════════════
-    (function detectDarkTheme() {
-        var bg = window.getComputedStyle(document.body).backgroundColor;
-        var m = bg.match(/(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
-        if (m) {
-            var brightness = (parseInt(m[1]) + parseInt(m[2]) + parseInt(m[3])) / 3;
-            if (brightness < 128) {
-                $("body").addClass("wl-dark");
-            }
-        }
-    })();
+    // ── Module aliases (Option A: local vars, zero changes to usage sites) ──
+    var restUrl  = REST.restUrl;
+    var restGet  = REST.restGet;
+    var restPost = REST.restPost;
+
+    // ── Dark theme detection (via wl_ui module) ──
+    UI.detectDarkTheme();
 
     // ══════════════════════════════════════════════════════════════════
     // Current user detection
@@ -55,36 +51,6 @@ require([
             } catch (e) { /* ignore */ }
         }
     })();
-
-    // ══════════════════════════════════════════════════════════════════
-    // REST helpers
-    // ══════════════════════════════════════════════════════════════════
-    function restUrl() {
-        return Splunk.util.make_url(
-            "/splunkd/__raw/services/custom/wl_manager"
-        );
-    }
-
-    function restGet(params) {
-        params = params || {};
-        params.output_mode = "json";
-        return $.ajax({
-            url: restUrl(),
-            type: "GET",
-            data: params,
-            dataType: "json"
-        });
-    }
-
-    function restPost(payload) {
-        return $.ajax({
-            url: restUrl() + "?output_mode=json",
-            type: "POST",
-            contentType: "application/json",
-            data: JSON.stringify(payload),
-            dataType: "json"
-        });
-    }
 
     // ══════════════════════════════════════════════════════════════════
     // Extract analyst reason from approval queue entry
@@ -202,7 +168,7 @@ require([
         );
     }
 
-    restPost({ action: "get_approval_queue" })
+    restGet({ action: "get_approval_queue" })
     .done(function (data) {
         if (data.error) {
             showAccessDenied();
@@ -211,7 +177,7 @@ require([
         $("#wl-cp-loading").hide();
         $("#wl-cp-content").show();
         cpIsSuperAdmin = !!data.is_superadmin;
-        initControlPanel(data.queue || []);
+        initControlPanel(data.approval_queue || data.queue || []);
     })
     .fail(function (xhr) {
         // Distinguish authorization failure from transient errors.
@@ -256,9 +222,9 @@ require([
     function pollQueueChanges() {
         // Skip if a modal is open (user is mid-action)
         if ($(".wl-modal-overlay").length) { return; }
-        restPost({ action: "get_approval_queue" })
+        restGet({ action: "get_approval_queue" })
         .done(function (data) {
-            var queue = data.queue || [];
+            var queue = data.approval_queue || data.queue || [];
             var newPending = queue.filter(function (q) { return q.status === "pending"; }).length;
             var newResolved = queue.filter(function (q) { return q.status !== "pending"; }).length;
             if (newPending !== allPending.length || newResolved !== allResolved.length) {
@@ -339,6 +305,8 @@ require([
     function renderApprovalQueue(queue) {
         allPending = queue.filter(function (q) { return q.status === "pending"; });
         allResolved = queue.filter(function (q) { return q.status !== "pending"; });
+        // Sort newest first so latest approvals appear on page 1
+        allResolved.sort(function (a, b) { return (b.resolved_at || b.timestamp) - (a.resolved_at || a.timestamp); });
         pendingPage = 0;
         historyPage = 0;
         renderQueueHtml();
@@ -717,9 +685,9 @@ require([
     }
 
     function refreshQueue() {
-        restPost({ action: "get_approval_queue" })
+        restGet({ action: "get_approval_queue" })
         .done(function (data) {
-            renderApprovalQueue(data.queue || []);
+            renderApprovalQueue(data.approval_queue || data.queue || []);
         });
     }
 
@@ -756,7 +724,7 @@ require([
     var customDefaults = null;  // company custom defaults (null if not set)
 
     function loadDailyLimits() {
-        restPost({ action: "get_daily_limits" }).done(function (data) {
+        restGet({ action: "get_daily_limits" }).done(function (data) {
             defaultLimits = data.defaults || {};
             customDefaults = data.custom_defaults || null;
             renderDailyLimitsForm(data.limits || {}, data.change_history || []);
@@ -1514,7 +1482,7 @@ require([
     }
 
     function loadAnalystUsage(preservePage) {
-        restPost({ action: "get_analyst_usage" }).done(function (data) {
+        restGet({ action: "get_analyst_usage" }).done(function (data) {
             cachedUsageData = data.all_analysts || {};
             cachedUsageDate = data.date || "today";
             cachedUsageLimits = data.limits || {};
@@ -1667,7 +1635,7 @@ require([
     // ══════════════════════════════════════════════════════════════════
 
     function loadTrash() {
-        restPost({ action: "list_trash" })
+        restGet({ action: "list_trash" })
         .done(function (data) {
             if (data.error) {
                 $("#wl-cp-trash").html(
@@ -1675,7 +1643,7 @@ require([
                     _.escape(data.error) + '</p>');
                 return;
             }
-            renderTrashTable(data.trash || [], data.auto_purged || 0);
+            renderTrashTable(data.trash_items || [], data.auto_purged || 0);
         })
         .fail(function () {
             $("#wl-cp-trash").html(
@@ -1694,7 +1662,7 @@ require([
 
         // Trash config
         html += '<div style="margin-bottom:12px">';
-        restPost({ action: "get_trash_config" }).done(function (cfg) {
+        restGet({ action: "get_trash_config" }).done(function (cfg) {
             var days = (cfg.config || {}).retention_days || 30;
             var configHtml = '<span style="color:var(--wl-muted,#888);font-size:12px">' +
                 'Retention period: <strong>' + days + ' days</strong>';
@@ -1855,7 +1823,7 @@ require([
                 'Only super-admins can view and modify admin limits.</p>');
             return;
         }
-        restPost({ action: "get_admin_limits" })
+        restGet({ action: "get_admin_limits" })
         .done(function (data) {
             if (data.error) {
                 $("#wl-cp-admin-limits").html(

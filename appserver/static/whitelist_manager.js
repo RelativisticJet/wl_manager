@@ -23,13 +23,25 @@ require([
     "splunkjs/mvc",
     "splunkjs/mvc/utils",
     "app/wl_manager/modules/wl_constants",
+    "app/wl_manager/modules/wl_rest",
+    "app/wl_manager/modules/wl_ui",
     "app/wl_manager/modules/wl_debug",
     "splunkjs/mvc/simplexml/ready!"
-], function ($, _, mvc, utils, C, Debug) {
+], function ($, _, mvc, utils, C, REST, UI, Debug) {
     "use strict";
 
     // Activate debug interceptor (remove for production)
     Debug.init();
+
+    // ── Module aliases (Option A: local vars, zero changes to usage sites) ──
+    var restUrl  = REST.restUrl;
+    var restGet  = REST.restGet;
+    var restPost = REST.restPost;
+
+    // ── UI module: message banner, daily limit msgs ──
+    var showMsg          = UI.showMsg;
+    var clearMsg         = UI.clearMsg;
+    var formatDailyLimitMsg = UI.formatDailyLimitMsg;
 
     // ══════════════════════════════════════════════════════════════════
     // State
@@ -43,7 +55,6 @@ require([
     var selectedApp     = "";
     var allRules        = [];
     var mappingData     = [];
-    var msgTimer        = null;     // timeout id for auto-dismiss messages
     var undoTimer       = null;     // timeout id for undo bar
     var undoState       = null;     // {row, reason, prevRows, prevOriginal}
     var saving           = false;   // debounce flag to prevent rapid saves
@@ -399,50 +410,17 @@ require([
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════
-    // Dark theme detection
-    // ══════════════════════════════════════════════════════════════════
-    // Splunk loads separate CSS files for dark/light — no body class.
-    // Detect by checking the computed background-color of <body>.
-    (function detectDarkTheme() {
-        var bg = window.getComputedStyle(document.body).backgroundColor;
-        // Parse rgb(r,g,b) — if average brightness < 128 it's dark
-        var m = bg.match(/(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
-        if (m) {
-            var brightness = (parseInt(m[1]) + parseInt(m[2]) + parseInt(m[3])) / 3;
-            if (brightness < 128) {
-                $("#wl-dropdowns").closest(".dashboard-panel").addClass("wl-dark");
-                $("body").addClass("wl-dark");
-            }
-        }
-    })();
-
-    // ══════════════════════════════════════════════════════════════════
-    // Character counter for reason/comment textareas
-    // ══════════════════════════════════════════════════════════════════
-    $(document).on("input", "textarea[maxlength]", function () {
-        var $ta = $(this);
-        var id = $ta.attr("id");
-        if (!id) return;
-        var $counter = $(".wl-char-counter[data-for='" + id + "']");
-        if ($counter.length) {
-            var max = parseInt($ta.attr("maxlength"), 10) || 500;
-            var used = ($ta.val() || "").length;
-            $counter.text(used + " / " + max);
-        }
-    });
+    // ── Dark theme (module handles body class; WM adds panel class) ──
+    if (UI.detectDarkTheme()) {
+        $("#wl-dropdowns").closest(".dashboard-panel").addClass("wl-dark");
+    }
 
     // ══════════════════════════════════════════════════════════════════
     // Detect admin role
     // ══════════════════════════════════════════════════════════════════
     (function detectAdminRole() {
-        $.ajax({
-            url: Splunk.util.make_url("/splunkd/__raw/services/custom/wl_manager") + "?output_mode=json",
-            type: "POST",
-            contentType: "application/json",
-            data: JSON.stringify({ action: "get_approval_queue" }),
-            dataType: "json"
-        }).done(function () {
+        restGet({ action: "get_approval_queue" })
+        .done(function () {
             isAdmin = true;
             // If CSV was already loaded & locked before this check completed,
             // re-render the approval bar now that we know user is admin
@@ -458,6 +436,9 @@ require([
     var $table       = $("#csv-table-container");
     var $msg         = $("#message-container");
     var $diff        = $("#diff-container");
+
+    // Initialize UI module (message banner, char counter)
+    UI.init($msg);
     var $ruleSearch  = $("#rule-search");
     var $ruleList    = $("#rule-list");
     // Replace native CSV <select> with custom dropdown
@@ -502,36 +483,6 @@ require([
     var $searchInput = $searchGroup.find("#wl-search-input");
     var $searchClear = $searchGroup.find("#wl-search-clear");
     // ══════════════════════════════════════════════════════════════════
-    // REST helpers
-    // ══════════════════════════════════════════════════════════════════
-    function restUrl() {
-        return Splunk.util.make_url(
-            "/splunkd/__raw/services/custom/wl_manager"
-        );
-    }
-
-    function restGet(params) {
-        params = params || {};
-        params.output_mode = "json";
-        return $.ajax({
-            url:      restUrl(),
-            type:     "GET",
-            data:     params,
-            dataType: "json"
-        });
-    }
-
-    function restPost(payload) {
-        return $.ajax({
-            url:         restUrl() + "?output_mode=json",
-            type:        "POST",
-            contentType: "application/json",
-            data:        JSON.stringify(payload),
-            dataType:    "json"
-        });
-    }
-
-    // ══════════════════════════════════════════════════════════════════
     // Conflict handling (optimistic locking)
     // ══════════════════════════════════════════════════════════════════
     function handleSaveError(xhr, fallbackMsg) {
@@ -557,62 +508,7 @@ require([
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════
-    // Messages
-    // ══════════════════════════════════════════════════════════════════
-    function showMsg(text, type) {
-        var cls = {
-            error:   "wl-alert wl-alert-error",
-            success: "wl-alert wl-alert-success",
-            info:    "wl-alert wl-alert-info",
-            warning: "wl-alert wl-alert-warning"
-        }[type || "info"] || "wl-alert wl-alert-info";
-
-        if (msgTimer) { clearTimeout(msgTimer); msgTimer = null; }
-
-        $msg.html(
-            '<div class="' + cls + '">' +
-            '<span class="wl-alert-close">&times;</span>' +
-            text +
-            "</div>"
-        );
-        $msg.children().first().stop(true).css("opacity", 1);
-
-        msgTimer = setTimeout(function () {
-            $msg.children().first().fadeOut(400, function () { $(this).remove(); });
-            msgTimer = null;
-        }, 10000);
-    }
-
-    $msg.on("click", ".wl-alert-close", function () {
-        if (msgTimer) { clearTimeout(msgTimer); msgTimer = null; }
-        $(this).parent().fadeOut(200, function () { $(this).remove(); });
-    });
-
-    function formatDailyLimitMsg(dl) {
-        var LIMIT_LABELS = {
-            "row_removal": "Row removal",
-            "row_addition": "Row addition",
-            "row_edit": "Row editing",
-            "bulk_row_removal": "Bulk row removal",
-            "bulk_row_edit": "Bulk row editing",
-            "column_removal": "Column removal",
-            "revert": "CSV revert"
-        };
-        var raw = String(dl.limit_type || "");
-        var label = _.escape(LIMIT_LABELS[raw] || raw.replace(/_/g, " "));
-        // When the limit is set to 0, the action is disabled entirely
-        if (dl.disabled || dl.maximum === 0) {
-            return label + " has been disabled by your administrator. " +
-                "This action is not permitted.";
-        }
-        var count = dl.action_count || "?";
-        var over = dl.exceeded_by || (dl.current + count - dl.maximum);
-        return "Daily limit exceeded for " + label.toLowerCase() + ". " +
-            "This action affects " + count + " row(s), exceeding your daily limit by " +
-            over + " (" + dl.current + "/" + dl.maximum + " used). " +
-            "Contact your administrator.";
-    }
+    // showMsg, formatDailyLimitMsg → wl_ui.js module (aliased above)
 
     // ══════════════════════════════════════════════════════════════════
     // Searchable Detection Rule Dropdown
@@ -788,9 +684,11 @@ require([
         $searchGroup.hide();
         $revertGroup.hide();
         clearUndo();
+        pendingApprovals = [];
+        $("#wl-approval-actions").remove();
         $table.html('<p class="wl-muted">Select a detection rule and CSV file above.</p>');
         $diff.empty();
-        $msg.empty();
+        clearMsg();
     });
 
     function filterRules(query) {
@@ -809,6 +707,8 @@ require([
         $ruleClear.show();
         renderRuleList(allRules);
         clearUndo();
+        pendingApprovals = [];
+        $("#wl-approval-actions").remove();
         updateUrlParams();
 
         var csvEntries = mappingData.filter(function (m) {
@@ -1657,7 +1557,7 @@ require([
 
             // ── Reason gate: prompt for approval reason ──
             if (reasonGates.require_reason_csv_creation) {
-                showApprovalReasonPopup("Create CSV", function (reason) {
+                showApprovalReasonPopup("Create " + csvName, function (reason) {
                     payload.approval_reason = reason;
                     submitCreateCsv(payload, csvName, headers, selectedApp);
                 });
@@ -5138,7 +5038,7 @@ require([
     // Load CSV content from REST
     // ══════════════════════════════════════════════════════════════════
     function loadCsv(csvFile, appContext) {
-        $msg.empty();
+        clearMsg();
         $diff.empty();
         $("#wl-approval-actions").remove();
         $("#wl-addition-preview").remove();
