@@ -253,6 +253,8 @@ require([
 
     function renderDropdown(notifications) {
         var $body = $("#wl-notif-dropdown-body");
+        // Sort newest first
+        notifications.sort(function (a, b) { return (b.timestamp || 0) - (a.timestamp || 0); });
         if (!notifications.length) {
             $body.html('<div class="wl-notif-empty">No notifications</div>');
             return;

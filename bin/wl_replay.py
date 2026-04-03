@@ -18,6 +18,7 @@ Module structure:
 
 import sys
 import os
+import csv
 import json
 from typing import Dict, Any, Tuple
 
@@ -27,12 +28,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # Layer 3: Domain modules (CSV, versions, rules, trash, audit)
 from wl_csv import read_csv, write_csv, compute_diff
 from wl_versions import snapshot_version, get_versions_list
-from wl_rules import read_rules_registry, write_rules_registry, get_rule_csv_file
+from wl_rules import (read_rules_registry, write_rules_registry, get_rule_csv_file,
+                      create_rule_pipeline, delete_rule_pipeline, delete_csv_pipeline)
 from wl_trash import move_to_trash, restore_from_trash
 from wl_audit import build_audit_event, post_audit_event
 from wl_logging import get_audit_logger
 from wl_validation import resolve_csv_path, safe_realpath, build_csv_path
-from wl_constants import OWN_LOOKUPS, APPS_DIR
+from wl_constants import OWN_LOOKUPS, APPS_DIR, MAPPING_FILE
 
 # Module logger for non-blocking errors
 _logger = get_audit_logger()
@@ -161,12 +163,12 @@ def _execute_replay_save_csv(context: Dict[str, Any], request_item: Dict[str, An
         # Write CSV to disk
         write_csv(path, headers, rows)
 
-        # Create version snapshot
-        version_id, _ = snapshot_version(csv_file, app_context, headers, rows)
+        # Create version snapshot (path, analyst, action_label)
+        analyst = context.get("original_analyst", "")
+        version_id, _ = snapshot_version(path, analyst, "save_csv")
 
         # Post audit event
         session_key = context.get("session_key", "")
-        analyst = context.get("original_analyst", "")
         approving_admin = context.get("approving_admin", "")
         request_id = context.get("request_id", "")
 
@@ -182,7 +184,7 @@ def _execute_replay_save_csv(context: Dict[str, Any], request_item: Dict[str, An
             approving_admin=approving_admin
         )
 
-        post_result, post_error = post_audit_event(audit_evt, session_key)
+        post_result, post_error = post_audit_event(session_key, audit_evt)
         if not post_result:
             _logger.error(f"Audit posting failed for replay_save_csv: {post_error}")
 
@@ -271,13 +273,13 @@ def _execute_replay_revert_csv(context: Dict[str, Any], request_item: Dict[str, 
 
         write_csv(path, headers, rows)
 
-        # Create new version snapshot of reverted state
-        new_version_id, _ = snapshot_version(csv_file, app_context, headers, rows)
+        # Create new version snapshot of reverted state (path, analyst, action_label)
+        analyst = context.get("original_analyst", "")
+        new_version_id, _ = snapshot_version(path, analyst, "revert_csv")
 
         # Post audit event
         session_key = context.get("session_key", "")
         approving_admin = context.get("approving_admin", "")
-        analyst = context.get("original_analyst", "")
         request_id = context.get("request_id", "")
 
         audit_evt = build_audit_event(
@@ -293,7 +295,7 @@ def _execute_replay_revert_csv(context: Dict[str, Any], request_item: Dict[str, 
             original_analyst=analyst
         )
 
-        post_result, post_error = post_audit_event(audit_evt, session_key)
+        post_result, post_error = post_audit_event(session_key, audit_evt)
         if not post_result:
             _logger.error(f"Audit posting failed for replay_revert_csv: {post_error}")
 
@@ -313,189 +315,87 @@ def _execute_replay_revert_csv(context: Dict[str, Any], request_item: Dict[str, 
 
 def _execute_replay_create_rule(context: Dict[str, Any], request_item: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Execute create_rule action — add new detection rule to registry.
-
-    Args:
-        context: Approval context with metadata
-        request_item: Contains detection_rule, csv_file, app_context
-
-    Returns:
-        Dict: {success: bool, message: str, error: str (optional)}
+    Execute create_rule action — delegates to create_rule_pipeline.
     """
     rule_name = request_item.get("detection_rule", "")
-    csv_file = request_item.get("csv_file", "")
 
-    try:
-        rules = read_rules_registry()
+    result = create_rule_pipeline(rule_name)
 
-        if rule_name in rules:
-            return {
-                "success": False,
-                "error": f"Rule '{rule_name}' already exists",
-                "error_type": "rule_exists"
-            }
-
-        # Add rule to registry
-        rules.append(rule_name)
-        write_rules_registry(rules)
-
-        # Post audit event
-        session_key = context.get("session_key", "")
-        approving_admin = context.get("approving_admin", "")
-        analyst = context.get("original_analyst", "")
-        request_id = context.get("request_id", "")
-
-        audit_evt = build_audit_event(
-            action="replay_create_rule",
-            analyst=approving_admin,
-            detection_rule=rule_name,
-            csv_file=csv_file,
-            app_context=request_item.get("app_context", ""),
-            comment=f"Rule created by {approving_admin}, approved from request by {analyst}",
-            request_id=request_id
-        )
-
-        post_result, post_error = post_audit_event(audit_evt, session_key)
-        if not post_result:
-            _logger.error(f"Audit posting failed for replay_create_rule: {post_error}")
-
-        return {
-            "success": True,
-            "message": f"Rule '{rule_name}' created successfully"
-        }
-
-    except Exception as e:
+    if not result.get("success"):
         return {
             "success": False,
-            "error": str(e),
-            "error_type": "create_rule_failed"
+            "error": result.get("error", "Create rule failed"),
+            "error_type": "create_rule_failed",
         }
+
+    return {
+        "success": True,
+        "message": result.get("message", "Rule created"),
+    }
 
 
 def _execute_replay_delete_rule(context: Dict[str, Any], request_item: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Execute delete_rule action — remove detection rule from registry.
+    Execute delete_rule action — delegates to delete_rule_pipeline.
 
-    Args:
-        context: Approval context with metadata
-        request_item: Contains detection_rule, reason/comment
-
-    Returns:
-        Dict: {success: bool, message: str, error: str (optional)}
+    The pipeline handles: mapping removal, registry cleanup, trash, and audit.
     """
     rule_name = request_item.get("detection_rule", "")
-    reason = request_item.get("reason", "") or request_item.get("comment", "")
+    original = request_item.get("payload", {})
+    reason = (original.get("comment") or original.get("approval_reason")
+              or request_item.get("comment", "") or "Approved via approval queue")
+    removal_type = original.get("removal_type", "permanent")
+    session_key = context.get("session_key", "")
+    analyst = context.get("original_analyst", "")
 
-    try:
-        rules = read_rules_registry()
+    result = delete_rule_pipeline(
+        rule_name, removal_type, reason, analyst, session_key)
 
-        if rule_name not in rules:
-            return {
-                "success": False,
-                "error": f"Rule '{rule_name}' not found",
-                "error_type": "rule_not_found"
-            }
-
-        # Remove rule from registry
-        rules = [r for r in rules if r != rule_name]
-        write_rules_registry(rules)
-
-        # Post audit event
-        session_key = context.get("session_key", "")
-        approving_admin = context.get("approving_admin", "")
-        analyst = context.get("original_analyst", "")
-        request_id = context.get("request_id", "")
-
-        audit_evt = build_audit_event(
-            action="replay_delete_rule",
-            analyst=approving_admin,
-            detection_rule=rule_name,
-            csv_file="",
-            app_context=request_item.get("app_context", ""),
-            comment=f"Rule deleted by {approving_admin}, approved from request by {analyst}. Reason: {reason}",
-            request_id=request_id
-        )
-
-        post_result, post_error = post_audit_event(audit_evt, session_key)
-        if not post_result:
-            _logger.error(f"Audit posting failed for replay_delete_rule: {post_error}")
-
-        return {
-            "success": True,
-            "message": f"Rule '{rule_name}' deleted successfully"
-        }
-
-    except Exception as e:
+    if not result.get("success"):
         return {
             "success": False,
-            "error": str(e),
-            "error_type": "delete_rule_failed"
+            "error": result.get("error", "Delete rule failed"),
+            "error_type": "delete_rule_failed",
         }
+
+    return {
+        "success": True,
+        "message": result.get("message", "Rule deleted"),
+        "data": result.get("data", {}),
+    }
 
 
 def _execute_replay_delete_csv(context: Dict[str, Any], request_item: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Execute delete_csv action — move CSV to trash.
+    Execute delete_csv action — delegates to delete_csv_pipeline.
 
-    Args:
-        context: Approval context with metadata
-        request_item: Contains csv_file, app_context, reason/comment
-
-    Returns:
-        Dict: {success: bool, message: str, error: str (optional)}
+    The pipeline handles: mapping removal, trash, last-rule cleanup, and audit.
     """
     csv_file = request_item.get("csv_file", "")
-    app_context = request_item.get("app_context", "")
-    reason = request_item.get("reason", "") or request_item.get("comment", "")
+    original = request_item.get("payload", {})
+    reason = (original.get("comment") or original.get("approval_reason")
+              or request_item.get("comment", "") or "Approved via approval queue")
+    removal_type = original.get("removal_type", "permanent")
+    rule_name = original.get("rule_name", request_item.get("detection_rule", ""))
+    session_key = context.get("session_key", "")
+    analyst = context.get("original_analyst", "")
 
-    try:
-        # Move CSV to trash
-        success, error = move_to_trash(
-            csv_file,
-            "csv",
-            app_context,
-            request_item.get("detection_rule", ""),
-            reason
-        )
+    result = delete_csv_pipeline(
+        csv_file, removal_type, reason, analyst, session_key,
+        rule_name=rule_name)
 
-        if not success:
-            return {
-                "success": False,
-                "error": error or "Failed to move CSV to trash",
-                "error_type": "delete_csv_failed"
-            }
-
-        # Post audit event
-        session_key = context.get("session_key", "")
-        approving_admin = context.get("approving_admin", "")
-        analyst = context.get("original_analyst", "")
-        request_id = context.get("request_id", "")
-
-        audit_evt = build_audit_event(
-            action="replay_delete_csv",
-            analyst=approving_admin,
-            detection_rule=request_item.get("detection_rule", ""),
-            csv_file=csv_file,
-            app_context=app_context,
-            comment=f"CSV moved to trash by {approving_admin}, approved from request by {analyst}. Reason: {reason}",
-            request_id=request_id
-        )
-
-        post_result, post_error = post_audit_event(audit_evt, session_key)
-        if not post_result:
-            _logger.error(f"Audit posting failed for replay_delete_csv: {post_error}")
-
-        return {
-            "success": True,
-            "message": f"CSV '{csv_file}' moved to trash"
-        }
-
-    except Exception as e:
+    if not result.get("success"):
         return {
             "success": False,
-            "error": str(e),
-            "error_type": "delete_csv_failed"
+            "error": result.get("error", "Delete CSV failed"),
+            "error_type": "delete_csv_failed",
         }
+
+    return {
+        "success": True,
+        "message": result.get("message", "CSV deleted"),
+        "data": result.get("data", {}),
+    }
 
 
 def _execute_replay_create_csv(context: Dict[str, Any], request_item: Dict[str, Any]) -> Dict[str, Any]:
@@ -512,7 +412,9 @@ def _execute_replay_create_csv(context: Dict[str, Any], request_item: Dict[str, 
     csv_file = request_item.get("csv_file", "")
     app_context = request_item.get("app_context", "")
     detection_rule = request_item.get("detection_rule", "")
-    columns = request_item.get("columns", [])
+    # The original create_csv payload is stored under "payload"
+    original = request_item.get("payload", {})
+    columns = original.get("headers", original.get("columns", []))
 
     try:
         # Build CSV path
@@ -529,26 +431,51 @@ def _execute_replay_create_csv(context: Dict[str, Any], request_item: Dict[str, 
         empty_rows = []
         write_csv(path, columns, empty_rows)
 
-        # Create version snapshot
-        version_id, _ = snapshot_version(csv_file, app_context, columns, empty_rows)
+        # Create version snapshot (path, analyst, action_label)
+        analyst = context.get("original_analyst", "")
+        version_id, _ = snapshot_version(path, analyst, "create_csv")
+
+        # Update rule-CSV mapping file
+        try:
+            existing = []
+            if os.path.isfile(MAPPING_FILE):
+                with open(MAPPING_FILE, "r", newline="",
+                          encoding="utf-8-sig") as fh:
+                    existing = list(csv.DictReader(fh))
+            existing.append({
+                "rule_name": detection_rule,
+                "csv_file": csv_file,
+                "app_context": app_context or "wl_manager",
+            })
+            with open(MAPPING_FILE, "w", newline="",
+                      encoding="utf-8") as fh:
+                writer = csv.DictWriter(
+                    fh,
+                    fieldnames=["rule_name", "csv_file", "app_context"],
+                    extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(existing)
+        except OSError as exc:
+            _logger.error(f"Failed to update mapping for create_csv: {exc}")
 
         # Post audit event
         session_key = context.get("session_key", "")
         approving_admin = context.get("approving_admin", "")
-        analyst = context.get("original_analyst", "")
         request_id = context.get("request_id", "")
 
         audit_evt = build_audit_event(
-            action="replay_create_csv",
-            analyst=approving_admin,
+            action="csv_created",
+            analyst=analyst,
             detection_rule=detection_rule,
             csv_file=csv_file,
             app_context=app_context,
-            comment=f"CSV created by {approving_admin}, approved from request by {analyst}. Columns: {', '.join(columns)}",
-            request_id=request_id
+            status="approved",
+            comment="CSV created via approval by {}. Columns: {}".format(
+                approving_admin, ", ".join(columns)),
+            request_id=request_id,
         )
 
-        post_result, post_error = post_audit_event(audit_evt, session_key)
+        post_result, post_error = post_audit_event(session_key, audit_evt)
         if not post_result:
             _logger.error(f"Audit posting failed for replay_create_csv: {post_error}")
 

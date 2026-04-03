@@ -133,7 +133,8 @@ from wl_rules import (read_rules_registry, write_rules_registry, read_csv_mappin
 # Layer 3: Trash Management (imported from wl_trash module)
 # ---------------------------------------------------------------------------
 from wl_trash import (move_to_trash, list_trash, restore_from_trash,
-                      restore_from_trash_pipeline, purge_trash_item, auto_cleanup_trash)
+                      restore_from_trash_pipeline, purge_trash_item, auto_cleanup_trash,
+                      get_trash_dir)
 
 # ---------------------------------------------------------------------------
 # Layer 3: Version Snapshots & Manifest (imported from wl_versions module)
@@ -855,7 +856,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         "set_daily_limits": (SUPERADMIN_ROLES, "_action_set_daily_limits"),
         "set_admin_limits": (SUPERADMIN_ROLES, "_action_set_admin_limits"),
         "reset_daily_limits": (SUPERADMIN_ROLES, "_action_reset_daily_limits"),
-        "reset_daily_usage": (SUPERADMIN_ROLES, "_action_reset_daily_usage"),
+        "reset_daily_usage": (ADMIN_ROLES, "_action_reset_daily_usage"),
         "save_as_default": (SUPERADMIN_ROLES, "_action_save_as_default"),
         "reset_factory_defaults": (SUPERADMIN_ROLES, "_action_reset_factory_defaults"),
         "set_trash_retention": (ADMIN_ROLES, "_action_set_trash_retention"),
@@ -1462,7 +1463,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _action_list_trash(self, request, query, user, roles):
         """GET action wrapper for list_trash (admin-only)."""
-        items = list_trash()
+        items, err = list_trash()
+        if err:
+            return self._resp(500, {"error": "Failed to list trash: " + err})
         return self._resp(200, {"trash_items": items})
 
     # ==================================================================
@@ -1493,13 +1496,51 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _action_create_csv(self, request, payload, user, roles):
         """POST action wrapper for create_csv."""
+        # Approval bypass: replaying an approved request
+        if payload.get("_from_approval"):
+            return self._create_csv(request, payload, user)
+        # Admins execute directly (never gated)
+        if is_admin(roles):
+            return self._create_csv(request, payload, user)
+        # Analyst permission check
+        cfg = _read_limit_config()
+        if not cfg.get("allow_analyst_create_csv", False):
+            return self._resp(403, {
+                "error": "Creating CSV files is not permitted. "
+                         "An admin must enable it in the Control Panel."})
+        # Approval gate: route to queue if configured
+        if cfg.get("require_reason_csv_creation", False):
+            return self._submit_create_delete_approval(
+                request, payload, user, "create_csv",
+                "Create CSV '{}'".format(
+                    payload.get("csv_file", "unknown")))
         return self._create_csv(request, payload, user)
 
     def _action_create_rule(self, request, payload, user, roles):
         """POST: Register a new detection rule name."""
         detection_rule = (payload.get("detection_rule") or "").strip()
+        # Approval bypass: replaying an approved request
+        if payload.get("_from_approval"):
+            return self._execute_create_rule(request, detection_rule, user)
+        # Admins execute directly (never gated)
+        if is_admin(roles):
+            return self._execute_create_rule(request, detection_rule, user)
+        # Analyst permission check
+        cfg = _read_limit_config()
+        if not cfg.get("allow_analyst_create_rules", False):
+            return self._resp(403, {
+                "error": "Creating detection rules is not permitted. "
+                         "An admin must enable it in the Control Panel."})
+        # Approval gate: route to queue if configured
+        if cfg.get("require_reason_rule_creation", False):
+            return self._submit_create_delete_approval(
+                request, payload, user, "create_rule",
+                "Create rule '{}'".format(detection_rule))
+        return self._execute_create_rule(request, detection_rule, user)
+
+    def _execute_create_rule(self, request, detection_rule, user):
+        """Execute create_rule after permission/approval checks pass."""
         result = create_rule_pipeline(detection_rule)
-        # Audit event (secondary — log+continue)
         try:
             evt = build_audit_event(
                 action="dr_created", analyst=user,
@@ -1527,6 +1568,19 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 "error": "removal_type must be 'unlink' or 'permanent'"})
         if not comment:
             return self._resp(400, {"error": "A reason is required"})
+
+        # Analyst approval gate (skip for admin or approved replays)
+        if not payload.get("_from_approval") and not is_admin(roles):
+            cfg = _read_limit_config()
+            if not cfg.get("allow_analyst_delete_csv", False):
+                return self._resp(403, {
+                    "error": "Removing CSV files is not permitted. "
+                             "An admin must enable it in the Control Panel."})
+            if cfg.get("require_reason_csv_deletion", False):
+                payload["approval_reason"] = comment
+                return self._submit_create_delete_approval(
+                    request, payload, user, "remove_csv",
+                    "Remove CSV '{}'".format(csv_file))
 
         # Admin daily limit for CSV deletion (soft delete)
         if removal_type == "permanent":
@@ -1593,6 +1647,19 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 "error": "removal_type must be 'unlink' or 'permanent'"})
         if not comment:
             return self._resp(400, {"error": "A reason is required"})
+
+        # Analyst approval gate (skip for admin or approved replays)
+        if not payload.get("_from_approval") and not is_admin(roles):
+            cfg = _read_limit_config()
+            if not cfg.get("allow_analyst_delete_rules", False):
+                return self._resp(403, {
+                    "error": "Removing detection rules is not permitted. "
+                             "An admin must enable it in the Control Panel."})
+            if cfg.get("require_reason_rule_deletion", False):
+                payload["approval_reason"] = comment
+                return self._submit_create_delete_approval(
+                    request, payload, user, "remove_rule",
+                    "Remove rule '{}'".format(rule_name))
 
         # Admin daily limit for rule deletion
         if removal_type == "permanent":
@@ -3218,7 +3285,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 return self._resp(403, {
                     "error": "Requires super-admin role to submit "
                              "trash purge requests"})
-            trash_dir = _get_trash_dir()
+            trash_dir = get_trash_dir()
             if not os.path.isdir(os.path.join(trash_dir, tid)):
                 return self._resp(404, {
                     "error": "Trash item not found"})
@@ -3413,7 +3480,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
             elif action_type == "admin_purge_trash":
                 trash_id = meta.get("trash_id", "")
-                trash_dir = _get_trash_dir()
+                trash_dir = get_trash_dir()
                 if not os.path.isdir(os.path.join(trash_dir, trash_id)):
                     target["status"] = "failed"
                     target["failure_reason"] = "Trash item no longer exists"
@@ -3486,7 +3553,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         elif action_type == "admin_purge_trash":
             purge_comment = "Dual-approved purge by {}".format(admin_user)
             # Read metadata before purging for audit
-            trash_dir = _get_trash_dir()
+            trash_dir = get_trash_dir()
             trash_meta = {}
             meta_path = os.path.join(
                 trash_dir, meta.get("trash_id", ""), "metadata.json")
