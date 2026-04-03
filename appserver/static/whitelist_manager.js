@@ -22,9 +22,14 @@ require([
     "underscore",
     "splunkjs/mvc",
     "splunkjs/mvc/utils",
+    "app/wl_manager/modules/wl_constants",
+    "app/wl_manager/modules/wl_debug",
     "splunkjs/mvc/simplexml/ready!"
-], function ($, _, mvc, utils) {
+], function ($, _, mvc, utils, C, Debug) {
     "use strict";
+
+    // Activate debug interceptor (remove for production)
+    Debug.init();
 
     // ══════════════════════════════════════════════════════════════════
     // State
@@ -43,11 +48,11 @@ require([
     var undoState       = null;     // {row, reason, prevRows, prevOriginal}
     var saving           = false;   // debounce flag to prevent rapid saves
     var currentPage      = 0;       // zero-based page index for CSV table
-    var ROWS_PER_PAGE    = 10;      // rows visible per page (default)
-    var PAGE_SIZE_OPTIONS = [10, 20, 50];
-    var MAX_ROWS         = 5000;   // maximum rows allowed per CSV
-    var MAX_COLUMNS      = 100;    // maximum columns allowed per CSV
-    var MAX_CELL_CHARS   = 1000;   // maximum characters per cell
+    var ROWS_PER_PAGE    = C.ROWS_PER_PAGE;
+    var PAGE_SIZE_OPTIONS = C.PAGE_SIZE_OPTIONS;
+    var MAX_ROWS         = C.MAX_ROWS;
+    var MAX_COLUMNS      = C.MAX_COLUMNS;
+    var MAX_CELL_CHARS   = C.MAX_CELL_CHARS;
     var selectedIdxSet   = {};      // tracks selected row indices across pages (key=idx, value=true)
     var expireColumn     = "";      // name of the expiration column (e.g. "Expires", "expiry", "termination_date")
     var searchQuery      = "";      // current search/filter text for the CSV table
@@ -68,14 +73,13 @@ require([
     // ══════════════════════════════════════════════════════════════════
     // CSV Import: Client-side parser, validator, preview renderer
     // ══════════════════════════════════════════════════════════════════
-    var IMPORT_MAX_FILE_SIZE = 2 * 1024 * 1024;  // 2 MB
-    var IMPORT_PREVIEW_ROWS = 10;
-    var IMPORT_MAX_ERRORS = 10;
-    var IMPORT_MAX_WARN_EXAMPLES = 5;
-    var SAFE_COLNAME_RE = /^(?=.*[a-zA-Z0-9])[a-zA-Z0-9_\-.()\/:&#@+]+$/;
-    var EXPIRE_COLUMN_NAMES_LIST = ["expires", "expire", "expiration", "expiration_date",
-                                    "expiry", "termination", "termination_date"];
-    var VALID_EXPIRE_RE = /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?( UTC)?$/;
+    var IMPORT_MAX_FILE_SIZE = C.IMPORT_MAX_FILE_SIZE;
+    var IMPORT_PREVIEW_ROWS = C.IMPORT_PREVIEW_ROWS;
+    var IMPORT_MAX_ERRORS = C.IMPORT_MAX_ERRORS;
+    var IMPORT_MAX_WARN_EXAMPLES = C.IMPORT_MAX_WARN_EXAMPLES;
+    var SAFE_COLNAME_RE = C.SAFE_COLNAME_RE;
+    var EXPIRE_COLUMN_NAMES_LIST = C.EXPIRE_COLUMN_NAMES_LIST;
+    var VALID_EXPIRE_RE = C.VALID_EXPIRE_RE;
 
     // RFC 4180-compliant CSV parser: handles quoted fields, embedded
     // commas, double-quote escaping, BOM, mixed line endings.
