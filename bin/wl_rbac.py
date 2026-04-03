@@ -111,10 +111,10 @@ def get_roles(request: dict) -> Set[str]:
             "/services/authentication/current-context",
             sessionKey=session_key,
             getargs={"output_mode": "json"},
-            raiseException=False,
+            raiseAllErrors=False,
         )
 
-        if status == 200:
+        if status.status == 200:
             data = json.loads(content)
             entries = data.get("entry", [])
             if entries:
@@ -149,10 +149,10 @@ def get_admin_users(session_key: str) -> List[str]:
             "/services/authentication/users",
             sessionKey=session_key,
             getargs={"output_mode": "json", "count": "0"},
-            raiseException=False,
+            raiseAllErrors=False,
         )
 
-        if status == 200:
+        if status.status == 200:
             data = json.loads(content)
             entries = data.get("entry", [])
             admins = []
