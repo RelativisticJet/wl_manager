@@ -399,7 +399,7 @@ def _add_notification(for_user, notif_type, message,
 def _notify_admins(notif_type, message, related_request_id=None,
                    extra=None, session_key=""):
     """Send notification to all admin-role users."""
-    admin_users = _get_admin_users(session_key)
+    admin_users = get_admin_users(session_key)
     for admin_user in admin_users:
         _add_notification(admin_user, notif_type, message,
                           related_request_id, extra)
@@ -865,6 +865,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # Notifications & Logging
         "mark_notifications_read": (None, "_action_mark_notifications_read"),
         "log_event": (None, "_action_log_event"),
+
+        # Debug (temporary — remove before release)
+        "debug_log": (None, "_action_debug_log"),
     }
 
     def __init__(self, command_line, command_arg):
@@ -1217,6 +1220,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         manifest, _ = read_version_manifest(path)
 
+        # Handle legacy manifests stored as a bare list
+        if isinstance(manifest, list):
+            manifest = {"versions": manifest}
+
         # Backfill col_count for entries created before this field existed
         versions_dir = get_versions_dir(path)
         updated = False
@@ -1232,7 +1239,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if updated:
             _, _ = write_version_manifest(path, manifest)
 
-        return self._resp(200, {"csv_file": csv_file, "versions": manifest})
+        return self._resp(200, {
+            "csv_file": csv_file,
+            "versions": manifest.get("versions", []),
+        })
 
 
     def _check_csv_status(self, csv_file, app_context):
@@ -1754,6 +1764,22 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         """POST action wrapper for log_event."""
         return self._log_event(request, payload)
 
+    def _action_debug_log(self, request, payload, user, roles):
+        """Write frontend debug entry to /tmp/wl_debug.log."""
+        import datetime
+        entry = payload.get("entry", {})
+        entry["user"] = user
+        line = "{} {}\n".format(
+            datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            json.dumps(entry, default=str),
+        )
+        try:
+            with open("/tmp/wl_debug.log", "a", encoding="utf-8") as f:
+                f.write(line)
+        except Exception:
+            pass
+        return self._resp(200, {"ok": True})
+
     # ==================================================================
     # POST
     # ==================================================================
@@ -1770,7 +1796,12 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                          "determined. Please log in again.",
             })
 
-        payload = json.loads(request.get("payload", "{}"))
+        payload_str = request.get("payload", "") or ""
+        # Direct REST API calls (port 8089) send form-encoded payload=...
+        if payload_str.startswith("payload="):
+            from urllib.parse import unquote
+            payload_str = unquote(payload_str[len("payload="):])
+        payload = json.loads(payload_str or "{}")
         action = payload.get("action", "")
 
         if not action:
@@ -2024,12 +2055,15 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             })
 
         # ── Call pipeline to execute CSV creation ───────────────────────
+        session_key = (request.get("system_authtoken", "") or
+                       request.get("session", {}).get("authtoken", "")
+                       ) if request else ""
         result = create_csv_pipeline(
             csv_path=csv_path,
             headers=headers,
             initial_rows=initial_rows,
             analyst=user,
-            session_key=self.session_key,
+            session_key=session_key,
             csv_file=csv_filename,
             app_context=app_context,
             detection_rule=detection_rule,
@@ -2481,7 +2515,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # ── Call save_csv_pipeline for execution ──────────────────────
         has_comment_col = "Comment" in new_headers
-        session_key = request.get("session_key", "") if request else ""
+        session_key = (request.get("system_authtoken", "") or
+                       request.get("session", {}).get("authtoken", "")
+                       ) if request else ""
 
         pipeline_result = save_csv_pipeline(
             csv_path=path,
@@ -2664,13 +2700,16 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 })
 
         # ── Call pipeline to execute the revert ──────────────────────
+        session_key = (request.get("system_authtoken", "") or
+                       request.get("session", {}).get("authtoken", "")
+                       ) if request else ""
         result = revert_csv_pipeline(
             csv_path=path,
             version_filename=version_filename,
             version_display=version_display,
             revert_reason=revert_reason,
             analyst=user,
-            session_key=self.session_key,
+            session_key=session_key,
             csv_file=csv_file,
             app_context=app_context,
             detection_rule=detection_rule,
@@ -2706,7 +2745,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     # Approval workflow handlers
     # ------------------------------------------------------------------
 
-    def _extract_request_reasons(action_type, stored_payload):
+    def _extract_request_reasons(self, action_type, stored_payload):
         """Extract user-provided reason fields from a stored approval payload.
 
         Returns a dict with the appropriate reason fields based on action type:
