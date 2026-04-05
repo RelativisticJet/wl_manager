@@ -86,6 +86,7 @@ from wl_logging import get_audit_logger
 # ---------------------------------------------------------------------------
 from wl_validation import (
     sanitize_text,
+    validate_ascii_text,
     is_safe_filename,
     safe_realpath,
     build_csv_path,
@@ -1097,21 +1098,24 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         except (ValueError, TypeError):
             tz_offset_min = 0
         if get_expire_column(headers):
-            kept, expired = remove_expired_rows(headers, rows, tz_offset_min)
-            if expired:
+            kept, expired_count = remove_expired_rows(headers, rows, tz_offset_min)
+            if expired_count:
+                # Identify the expired rows (difference between original and kept)
+                kept_ids = set(id(r) for r in kept)
+                expired_rows = [r for r in rows if id(r) not in kept_ids]
                 try:
                     write_csv(path, headers, kept)
                 except OSError as exc:
                     _logger.warning("Cannot write cleaned CSV %s: %s", csv_file, exc)
                 else:
-                    auto_removed_count = len(expired)
+                    auto_removed_count = expired_count
                     rows = kept
 
                     detection_rule = self._lookup_rule_for_csv(csv_file)
                     ts = int(datetime.now(timezone.utc).timestamp())
                     expired_clean = [
                         {k: v for k, v in r.items() if not k.startswith("_")}
-                        for r in expired
+                        for r in expired_rows
                     ]
                     value_lines = []
                     for i, entry in enumerate(expired_clean, 1):
@@ -1488,7 +1492,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _action_revert_csv(self, request, payload, user, roles):
         """POST action wrapper for revert_csv."""
-        return self._revert_csv(request, payload, user)
+        return self._revert_csv(request, payload, user, roles=roles)
 
     def _action_save_col_widths(self, request, payload, user, roles):
         """POST action wrapper for save_col_widths."""
@@ -1496,9 +1500,6 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _action_create_csv(self, request, payload, user, roles):
         """POST action wrapper for create_csv."""
-        # Approval bypass: replaying an approved request
-        if payload.get("_from_approval"):
-            return self._create_csv(request, payload, user)
         # Admins execute directly (never gated)
         if is_admin(roles):
             return self._create_csv(request, payload, user)
@@ -1519,9 +1520,6 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     def _action_create_rule(self, request, payload, user, roles):
         """POST: Register a new detection rule name."""
         detection_rule = (payload.get("detection_rule") or "").strip()
-        # Approval bypass: replaying an approved request
-        if payload.get("_from_approval"):
-            return self._execute_create_rule(request, detection_rule, user)
         # Admins execute directly (never gated)
         if is_admin(roles):
             return self._execute_create_rule(request, detection_rule, user)
@@ -1569,8 +1567,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if not comment:
             return self._resp(400, {"error": "A reason is required"})
 
-        # Analyst approval gate (skip for admin or approved replays)
-        if not payload.get("_from_approval") and not is_admin(roles):
+        # Analyst approval gate (skip for admins)
+        if not is_admin(roles):
             cfg = _read_limit_config()
             if not cfg.get("allow_analyst_delete_csv", False):
                 return self._resp(403, {
@@ -1648,8 +1646,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if not comment:
             return self._resp(400, {"error": "A reason is required"})
 
-        # Analyst approval gate (skip for admin or approved replays)
-        if not payload.get("_from_approval") and not is_admin(roles):
+        # Analyst approval gate (skip for admins)
+        if not is_admin(roles):
             cfg = _read_limit_config()
             if not cfg.get("allow_analyst_delete_rules", False):
                 return self._resp(403, {
@@ -1990,6 +1988,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             })
 
         # Validate and sanitize cell values in initial_rows
+        _non_ascii_re = re.compile(r'[^\x00-\x7F]')
+        _corrupt_re = re.compile(r'^[?\s]+$')
         if initial_rows:
             for i, row in enumerate(initial_rows):
                 for h in headers:
@@ -2000,6 +2000,21 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                         return self._resp(400, {
                             "error": "Cell in row {}, column '{}' exceeds {} characters".format(
                                 i + 1, h[:30], MAX_CELL_CHARS)
+                        })
+                    if _non_ascii_re.search(v):
+                        return self._resp(200, {
+                            "error": "Non-ASCII characters in row {}, "
+                                     "column '{}'. Only ASCII characters "
+                                     "are allowed.".format(
+                                         i + 1, h[:30])
+                        })
+                    if v.strip() and _corrupt_re.match(v.strip()):
+                        return self._resp(200, {
+                            "error": "Row {}, column '{}': value '{}' "
+                                     "appears to be encoding corruption "
+                                     "(only ? characters). Re-save the CSV "
+                                     "from Excel as CSV UTF-8.".format(
+                                         i + 1, h[:30], v.strip()[:20])
                         })
                     # Sanitize: strip nulls, control chars, normalize newlines
                     cleaned = v.replace("\x00", "")
@@ -2194,7 +2209,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         detection_rule = payload.get("detection_rule", "")
         new_headers = payload.get("headers", [])
         new_rows = payload.get("rows", [])
-        analyst_comment = sanitize_text(payload.get("comment", ""))
+        raw_comment = payload.get("comment", "")
+        ascii_err = validate_ascii_text(raw_comment)
+        if ascii_err:
+            return self._resp(200, {"error": ascii_err})
+        analyst_comment = sanitize_text(raw_comment)
         removal_reasons = payload.get("removal_reasons", [])
         if not isinstance(removal_reasons, list):
             removal_reasons = []
@@ -2205,6 +2224,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             })
         for rr in removal_reasons:
             if isinstance(rr, dict) and isinstance(rr.get("reason"), str):
+                ascii_err = validate_ascii_text(rr["reason"])
+                if ascii_err:
+                    return self._resp(200, {"error": ascii_err})
                 rr["reason"] = rr["reason"][:500]
         bulk_removal = payload.get("bulk_removal", [])
         if not isinstance(bulk_removal, list):
@@ -2216,6 +2238,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             })
         for br in bulk_removal:
             if isinstance(br, dict) and isinstance(br.get("reason"), str):
+                ascii_err = validate_ascii_text(br["reason"])
+                if ascii_err:
+                    return self._resp(200, {"error": ascii_err})
                 br["reason"] = br["reason"][:500]
         column_removal_reasons = payload.get("column_removal_reasons", [])
         if not isinstance(column_removal_reasons, list):
@@ -2227,6 +2252,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             })
         for cr in column_removal_reasons:
             if isinstance(cr, dict) and isinstance(cr.get("reason"), str):
+                ascii_err = validate_ascii_text(cr["reason"])
+                if ascii_err:
+                    return self._resp(200, {"error": ascii_err})
                 cr["reason"] = cr["reason"][:500]
         row_reorder = payload.get("row_reorder", None)
         column_reorder = payload.get("column_reorder", None)
@@ -2239,6 +2267,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     len(column_renames), MAX_COLUMNS)
             })
         explicit_row_add_reason = payload.get("row_add_reason", "")[:500]
+        ascii_err = validate_ascii_text(explicit_row_add_reason)
+        if ascii_err:
+            return self._resp(200, {"error": ascii_err})
         expected_mtime = payload.get("expected_mtime", None)
 
         # ── Validate filename ─────────────────────────────────────────
@@ -2292,6 +2323,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             })
 
         # ── Validate and sanitize cell values ───────────────────────
+        _non_ascii_re = re.compile(r'[^\x00-\x7F]')
+        _corrupt_re = re.compile(r'^[?\s]+$')
         for i, row in enumerate(new_rows):
             for h, v in row.items():
                 if isinstance(v, str):
@@ -2300,6 +2333,21 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                             "error": "Cell value too long in row {}, column '{}': "
                                      "{} chars (max {}).".format(
                                          i + 1, h[:50], len(v), MAX_CELL_CHARS)
+                        })
+                    if _non_ascii_re.search(v):
+                        return self._resp(200, {
+                            "error": "Non-ASCII characters in row {}, "
+                                     "column '{}'. Only ASCII characters "
+                                     "are allowed.".format(
+                                         i + 1, h[:50])
+                        })
+                    if v.strip() and _corrupt_re.match(v.strip()):
+                        return self._resp(200, {
+                            "error": "Row {}, column '{}': value '{}' "
+                                     "appears to be encoding corruption "
+                                     "(only ? characters). Re-save the CSV "
+                                     "from Excel as CSV UTF-8.".format(
+                                         i + 1, h[:50], v.strip()[:20])
                         })
                     # Strip null bytes, control chars, and normalize newlines
                     cleaned = v.replace("\x00", "")
@@ -2640,7 +2688,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         })
 
 
-    def _revert_csv(self, request, payload, user, _from_approval=False):
+    def _revert_csv(self, request, payload, user, _from_approval=False,
+                    roles=None):
         """Revert a CSV file to a previous version snapshot."""
         csv_file = payload.get("csv_file", "")
         app_context = payload.get("app_context", "")
@@ -2652,6 +2701,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         if not revert_reason.strip():
             return self._resp(400, {"error": "A reason is required for revert"})
+        ascii_err = validate_ascii_text(revert_reason)
+        if ascii_err:
+            return self._resp(200, {"error": ascii_err})
         if len(revert_reason) > 500:
             revert_reason = revert_reason[:500]
 
@@ -2688,15 +2740,22 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # later time, so mtime will naturally differ.
         if not _from_approval and expected_mtime is not None:
             try:
+                expected_int = int(expected_mtime)
+            except (ValueError, TypeError):
+                return self._resp(400, {
+                    "error": "Invalid expected_mtime value. Please reload "
+                             "the file and try again.",
+                })
+            try:
                 current_mtime = int(os.path.getmtime(path))
-                if current_mtime != int(expected_mtime):
+                if current_mtime != expected_int:
                     return self._resp(409, {
                         "error": "Conflict: the CSV file was modified by another "
                                  "user or process since you loaded it. Please "
                                  "reload the file and try again.",
                         "current_mtime": current_mtime,
                     })
-            except (ValueError, TypeError, OSError):
+            except OSError:
                 pass
 
         # ── Locate the version file ──────────────────────────────────
@@ -2720,7 +2779,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # ── Daily limit enforcement for reverts ──────────────────────
         # Skip when replaying from approval — already checked at
         # submission time in _submit_approval().
-        if not _from_approval:
+        # Admins are exempt — they control these limits.
+        _is_admin = roles and is_admin(roles)
+        if not _from_approval and not _is_admin:
             allowed, current, maximum = _check_daily_limit(user, "revert")
             if not allowed:
                 return self._resp(429, {
@@ -2734,7 +2795,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # ── Approval gate for large reverts ──────────────────────────
         # Skip when replaying from approval — the admin already approved.
-        if not _from_approval:
+        # Admins are exempt — they ARE the approvers.
+        if not _from_approval and not _is_admin:
             total_row_changes = (
                 diff.get("added_count", 0) +
                 diff.get("removed_count", 0) +
@@ -2978,7 +3040,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             })
 
         request_id = _generate_request_id(user, csv_file, detection_rule)
-        description = sanitize_text(payload.get("description", ""))
+        raw_description = payload.get("description", "")
+        ascii_err = validate_ascii_text(raw_description)
+        if ascii_err:
+            return self._resp(200, {"error": ascii_err})
+        description = sanitize_text(raw_description)
 
         # ── Validate original_payload size ────────────────────────────
         original_payload = payload.get("original_payload", {})
@@ -2994,24 +3060,28 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     payload_size / (1024 * 1024))
             })
 
-        # ── Sanitize text fields inside original_payload ──────────────
+        # ── Validate + sanitize text fields inside original_payload ────
         # The original_payload is stored as-is for replay, but reason
         # fields displayed in the UI must be sanitized to prevent
         # injection of misleading text or unsanitized characters.
-        if "comment" in original_payload:
-            original_payload["comment"] = sanitize_text(
-                original_payload.get("comment", ""))
-        if "revert_reason" in original_payload:
-            original_payload["revert_reason"] = sanitize_text(
-                original_payload.get("revert_reason", ""))
-        if "row_add_reason" in original_payload:
-            original_payload["row_add_reason"] = sanitize_text(
-                original_payload.get("row_add_reason", ""))
+        for _field in ("comment", "revert_reason", "row_add_reason"):
+            if _field in original_payload:
+                ascii_err = validate_ascii_text(original_payload.get(_field, ""))
+                if ascii_err:
+                    return self._resp(200, {"error": ascii_err})
+                original_payload[_field] = sanitize_text(
+                    original_payload.get(_field, ""))
         for cr in original_payload.get("column_removal_reasons", []):
             if isinstance(cr, dict) and "reason" in cr:
+                ascii_err = validate_ascii_text(cr.get("reason", ""))
+                if ascii_err:
+                    return self._resp(200, {"error": ascii_err})
                 cr["reason"] = sanitize_text(cr.get("reason", ""))
         for br in original_payload.get("bulk_removal", []):
             if isinstance(br, dict) and "reason" in br:
+                ascii_err = validate_ascii_text(br.get("reason", ""))
+                if ascii_err:
+                    return self._resp(200, {"error": ascii_err})
                 br["reason"] = sanitize_text(br.get("reason", ""))
 
         # ── Validate pending_highlight.row_keys size ─────────────────
@@ -3026,7 +3096,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         else:
             pending_highlight = {}
 
-        comment = sanitize_text(payload.get("comment", ""))
+        raw_comment = payload.get("comment", "")
+        ascii_err = validate_ascii_text(raw_comment)
+        if ascii_err:
+            return self._resp(200, {"error": ascii_err})
+        comment = sanitize_text(raw_comment)
 
         entry = {
             "request_id": request_id,
@@ -3127,8 +3201,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     def _cancel_request(self, request, payload, user):
         """Cancel a pending approval request — only the original requester."""
         request_id = payload.get("request_id", "")
-        cancellation_reason = sanitize_text(
-            payload.get("cancellation_reason", ""))
+        raw_cancel = payload.get("cancellation_reason", "")
+        ascii_err = validate_ascii_text(raw_cancel)
+        if ascii_err:
+            return self._resp(200, {"error": ascii_err})
+        cancellation_reason = sanitize_text(raw_cancel)
 
         if not cancellation_reason.strip():
             return self._resp(400, {"error": "Cancellation reason is required"})
@@ -3241,7 +3318,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         - admin_purge_trash: permanently purge a trashed item
         """
         action_type = payload.get("action_type", "")
-        comment = sanitize_text(payload.get("comment", ""))[:500]
+        raw_comment = payload.get("comment", "")
+        ascii_err = validate_ascii_text(raw_comment)
+        if ascii_err:
+            return self._resp(200, {"error": ascii_err})
+        comment = sanitize_text(raw_comment)[:500]
 
         valid_types = {
             "admin_delete_rule", "admin_delete_csv", "admin_purge_trash",
@@ -3366,8 +3447,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         """
         request_id = payload.get("request_id", "")
         decision = payload.get("decision", "")
-        admin_comment = sanitize_text(
-            payload.get("admin_comment", ""))[:500]
+        raw_admin_comment = payload.get("admin_comment", "")
+        ascii_err = validate_ascii_text(raw_admin_comment)
+        if ascii_err:
+            return self._resp(200, {"error": ascii_err})
+        admin_comment = sanitize_text(raw_admin_comment)[:500]
 
         if decision not in ("approve", "reject"):
             return self._resp(400, {
@@ -3726,6 +3810,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     def _process_approval_inner(self, request, payload, admin_user):
         request_id = payload.get("request_id", "")
         decision = payload.get("decision", "")
+        for _fld_name in ("rejection_reason", "cancellation_reason",
+                          "admin_comment"):
+            ascii_err = validate_ascii_text(payload.get(_fld_name, ""))
+            if ascii_err:
+                return self._resp(200, {"error": ascii_err})
         rejection_reason = sanitize_text(
             payload.get("rejection_reason", ""))
         cancellation_reason = sanitize_text(
@@ -4925,7 +5014,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         })
 
     def _reset_daily_usage_action(self, payload, admin_user):
-        """Reset daily usage counters for a specific analyst or all analysts."""
+        """Reset daily usage counters for a specific analyst or all analysts.
+
+        Self-reset is blocked: admins cannot reset their own counters.
+        Only other admins or superadmins can reset a given user's usage.
+        """
         analyst = payload.get("analyst", "")
         counters = _read_daily_limits()
         today = _get_counter_period_key()
@@ -4934,6 +5027,12 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             return self._resp(200, {"message": "No usage to reset."})
 
         if analyst and analyst != "all":
+            # Block self-reset — defense in depth against insider threat
+            if analyst == admin_user:
+                return self._resp(200, {
+                    "error": "Cannot reset your own daily usage. "
+                             "Ask another admin or superadmin."
+                })
             if analyst in counters[today]:
                 del counters[today][analyst]
                 _write_daily_limits(counters)
@@ -4944,10 +5043,16 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 "message": "No usage found for " + analyst
             })
 
-        # Reset all analysts
+        # Reset all — exclude the caller's own counters
+        own_counts = counters[today].pop(admin_user, None)
         counters[today] = {}
+        if own_counts:
+            counters[today][admin_user] = own_counts
         _write_daily_limits(counters)
-        return self._resp(200, {"message": "Daily usage reset for all analysts"})
+        return self._resp(200, {
+            "message": "Daily usage reset for all analysts"
+                       + (" (your own usage was preserved)" if own_counts else "")
+        })
 
     def _check_daily_limit_status(self, user):
         """Return the current user's remaining daily limits."""

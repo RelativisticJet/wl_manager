@@ -1432,6 +1432,28 @@ th.wl-pending-approval-header {
     font-size: 11px;
     color: var(--wl-text-muted, #999);
 }
+.wl-import-expired-warning {
+    margin-top: 10px;
+    padding: 8px 12px;
+    background: var(--wl-warn-bg, #fff3e0);
+    border: 1px solid var(--wl-warn-border, #ffcc80);
+    border-radius: 4px;
+    color: var(--wl-warn-text, #e65100);
+    font-size: 12px;
+    max-height: 140px;
+    overflow-y: auto;
+}
+.wl-import-expired-warning code {
+    background: rgba(0, 0, 0, 0.1);
+    padding: 1px 4px;
+    border-radius: 2px;
+    font-size: 11px;
+}
+.wl-import-expired-warning small {
+    margin-top: 4px;
+    display: inline-block;
+    opacity: 0.85;
+}
 .wl-import-summary {
     font-size: 12px;
     color: var(--wl-text-muted, #aaa);

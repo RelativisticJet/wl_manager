@@ -1,254 +1,333 @@
 /**
- * wl_versions.js - Version History & Revert Module
+ * wl_versions.js — Version Control & Revert Module
  *
- * Manages version history display and revert functionality.
+ * Handles CSV version history: loading versions from backend, rendering
+ * the revert dropdown, showing the revert reason modal, and executing
+ * reverts (including auto-submission to approval queue for large reverts).
  *
- * Public API: init(), loadVersions(), showVersionDropdown(), revertToVersion(versionId), getVersionHistory()
- *
- * Events:
- *   - Listens: state:csvFileSelected, state:selectedCsv
- *   - Fires: wl:csvReverted, wl:versionsLoaded
+ * Public API:
+ *   init(config)                      — wire dependencies, DOM refs, state, callbacks
+ *   loadVersions(csvFile, appContext) — fetch version list and render dropdown
+ *   hide()                            — hide the revert dropdown (rule clear/switch)
  */
-
 define([
-    'modules/wl_constants',
-    'modules/wl_state',
-    'modules/wl_rest',
-    'modules/wl_ui'
-], function(Constants, State, REST, UI) {
-    'use strict';
+    "jquery",
+    "underscore",
+    "app/wl_manager/modules/wl_constants",
+    "app/wl_manager/modules/wl_rest",
+    "app/wl_manager/modules/wl_ui"
+], function ($, _, C, REST, UI) {
+    "use strict";
 
-    var versions = [];
-    var selectedCsv = "";
-    var selectedApp = "";
-    var currentRowCount = 0;
+    // ── Shared state proxy (set by init) ────────────────────────────
+    var S = null;
 
-    /**
-     * Initialize versions module.
-     */
-    function init() {
-        State.on('state:csvFileSelected', function() {
-            selectedCsv = State.get('selectedCsv') || "";
-            selectedApp = State.get('selectedApp') || "";
-            if (selectedCsv) {
-                loadVersions();
-            }
-        });
+    // ── DOM references (set by init) ────────────────────────────────
+    var _dom = {};      // { $revertSelect, $revertGroup }
 
-        State.on('state:selectedCsv', function(csv) {
-            selectedCsv = csv || "";
-            if (selectedCsv) {
-                loadVersions();
-            }
-        });
+    // ── Entry-point callbacks (set by init) ─────────────────────────
+    var _actions = {};
 
-        State.on('state:currentRows', function(rows) {
-            currentRowCount = (rows || []).length;
-        });
+    // ── Module aliases ──────────────────────────────────────────────
+    var restGet  = REST.restGet;
+    var restPost = REST.restPost;
+    var showMsg  = UI.showMsg;
 
-        selectedCsv = State.get('selectedCsv') || "";
-        selectedApp = State.get('selectedApp') || "";
-        currentRowCount = (State.get('currentRows') || []).length;
-    }
+    // ── Module-internal state ───────────────────────────────────────
+    var versionsList = [];
 
-    /**
-     * Load version history from server.
-     */
-    function loadVersions() {
-        if (!selectedCsv) { return; }
+    // ══════════════════════════════════════════════════════════════════
+    // Init
+    // ══════════════════════════════════════════════════════════════════
 
-        REST.restGet({
-            action: "get_versions",
-            csv_file: selectedCsv,
-            app_context: selectedApp
-        }).done(function(data) {
-            versions = data.versions || [];
-            $(document).trigger('wl:versionsLoaded', {
-                csv: selectedCsv,
-                versions: versions
-            });
-        }).fail(function(xhr) {
-            console.warn('[wl_versions] Failed to load versions:', xhr);
-            versions = [];
-        });
-    }
+    function init(config) {
+        S        = config.state;
+        _dom     = config.dom     || {};
+        _actions = config.actions || {};
 
-    /**
-     * Show version history dropdown.
-     * Displays "Current" at top (non-selectable) plus last 5 previous versions.
-     * Format: "24-02-2026 12:37:16 (42 rows, by admin)"
-     */
-    function showVersionDropdown() {
-        if (!versions || !versions.length) {
-            UI.showMsg("No version history available for this CSV.", "info");
-            return;
-        }
-
-        var html = '<div class="wl-modal-overlay">';
-        html += '<div class="wl-modal wl-versions-modal">';
-        html += '<h3>Version History</h3>';
-        html += '<div class="wl-versions-list">';
-
-        // Current version at top
-        html += '<div class="wl-version-entry wl-version-current">';
-        html += '<span class="wl-version-label">Current</span> ';
-        html += '<span class="wl-version-info">(' + currentRowCount + ' rows)</span>';
-        html += '</div>';
-
-        // Previous versions (last 5)
-        var displayed = 0;
-        for (var i = 0; i < versions.length && displayed < 5; i++) {
-            var v = versions[i];
-            var timestamp = v.timestamp || v.id;
-            var author = v.author || "unknown";
-            var rowCount = v.row_count || 0;
-            var label = timestamp + ' (' + rowCount + ' rows, by ' + author + ')';
-
-            html += '<div class="wl-version-entry" data-version-id="' + _.escape(v.id) + '">';
-            html += '<span class="wl-version-label">' + _.escape(label) + '</span>';
-            html += '</div>';
-            displayed++;
-        }
-
-        html += '</div>';
-        html += '<div class="wl-form-actions">';
-        html += '<span class="wl-modal-btn wl-btn-cancel">Cancel</span>';
-        html += '</div></div></div>';
-
-        var $overlay = $(html).appendTo('body');
-
-        $overlay.find('.wl-version-entry:not(.wl-version-current)').on('click', function() {
-            var versionId = $(this).data('version-id');
-            $overlay.remove();
-            showRevertConfirm(versionId);
-        });
-
-        $overlay.find('.wl-btn-cancel').on('click', function() {
-            $overlay.remove();
-        });
-
-        $overlay.on('click', function(e) {
-            if (e.target === this) { $overlay.remove(); }
-        });
-    }
-
-    /**
-     * Show confirmation before revert with reason required.
-     */
-    function showRevertConfirm(versionId) {
-        var version = versions.find(function(v) { return v.id === versionId; });
-        if (!version) {
-            UI.showMsg("Version not found.", "error");
-            return;
-        }
-
-        var timestamp = version.timestamp || version.id;
-        var html = '<div class="wl-modal-overlay">';
-        html += '<div class="wl-modal">';
-        html += '<h3>Revert to Version</h3>';
-        html += '<p>Revert to version <strong>' + _.escape(timestamp) + '</strong>?</p>';
-        html += '<p>This will restore the CSV to its state at that time and create a new version snapshot.</p>';
-        html += '<form id="wl-revert-form">';
-        html += '<div class="wl-form-group">';
-        html += '<label for="wl-revert-reason">Reason for revert (required)</label>';
-        html += '<textarea id="wl-revert-reason" class="wl-modal-input" maxlength="500" rows="3" ' +
-                'placeholder="Why are you reverting to this version?"></textarea>';
-        html += '<span class="wl-form-help">Min 5 chars</span>';
-        html += '</div>';
-        html += '<div class="wl-form-actions">';
-        html += '<span class="wl-modal-btn wl-btn-cancel">Cancel</span> ';
-        html += '<span class="wl-modal-btn wl-btn-danger">Revert</span>';
-        html += '</div></form></div></div>';
-
-        var $overlay = $(html).appendTo('body');
-        var $form = $overlay.find('#wl-revert-form');
-        var $reason = $overlay.find('#wl-revert-reason');
-
-        $overlay.find('.wl-btn-cancel').on('click', function() {
-            $overlay.remove();
-        });
-
-        $form.on('submit', function(e) {
-            e.preventDefault();
-            var reason = $reason.val().trim();
-            if (reason.length < 5) {
-                UI.showMsg("Reason must be at least 5 characters.", "error");
+        // Bind revert dropdown change event
+        _dom.$revertSelect.on("change", function () {
+            var val = $(this).val();
+            if (!val) { return; }
+            if (S.csvLocked) {
+                showMsg("This CSV is locked by a pending approval request.", "error");
+                $(this).prop("selectedIndex", 0);
                 return;
             }
-            $overlay.remove();
-            revertToVersion(versionId, reason);
-        });
 
-        $overlay.find('.wl-btn-danger').on('click', function() {
-            $form.submit();
-        });
+            var $opt = $(this).find("option:selected");
+            var versionDisplay = $opt.data("display") || "";
 
-        $overlay.on('click', function(e) {
-            if (e.target === this) { $overlay.remove(); }
+            showRevertModal(val, versionDisplay, function () {
+                // Reset to first option so the same version can be selected again
+                _dom.$revertSelect.prop("selectedIndex", 0);
+            });
         });
-
-        $reason.focus();
     }
 
-    /**
-     * Revert CSV to specified version.
-     */
-    function revertToVersion(versionId, reason) {
-        if (!selectedCsv || !versionId) {
-            UI.showMsg("Missing CSV or version ID.", "error");
+    // ══════════════════════════════════════════════════════════════════
+    // Load versions from backend
+    // ══════════════════════════════════════════════════════════════════
+
+    function loadVersions(csvFile, appContext) {
+        restGet({
+            action:   "get_versions",
+            csv_file: csvFile,
+            app:      appContext || ""
+        })
+        .done(function (data) {
+            versionsList = data.versions || [];
+            renderVersionsDropdown();
+        })
+        .fail(function () {
+            versionsList = [];
+            renderVersionsDropdown();
+        });
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Render dropdown options
+    // ══════════════════════════════════════════════════════════════════
+
+    function renderVersionsDropdown() {
+        _dom.$revertSelect.empty();
+
+        if (!versionsList.length) {
+            _dom.$revertSelect.append('<option value="">-- No previous versions --</option>');
+            _dom.$revertSelect.prop("disabled", true);
+            _dom.$revertGroup.show();
             return;
         }
 
-        UI.showMsg("Reverting to version&hellip;", "info");
+        function versionLabel(v, isCurrent) {
+            var rowWord = v.row_count === 1 ? "row" : "rows";
+            var colWord = (v.col_count || 0) === 1 ? "column" : "columns";
+            var parts = v.row_count + " " + rowWord;
+            if (v.col_count && v.col_count > 0) {
+                parts += " - " + v.col_count + " " + colWord;
+            }
+            if (isCurrent) {
+                return v.display + " (current)";
+            }
+            return v.display + " (" + parts + " - " + v.analyst + ")";
+        }
 
-        REST.restPost({
-            action: "revert_csv",
-            csv_file: selectedCsv,
-            app_context: selectedApp,
-            version_id: versionId,
-            reason: reason
-        }).done(function(data) {
+        // Latest version is the current state — show it as a non-selectable header
+        var current = versionsList[versionsList.length - 1];
+        _dom.$revertSelect.append(
+            '<option value="" selected="selected">' +
+            _.escape(versionLabel(current, true)) +
+            '</option>'
+        );
+
+        // Previous versions (up to 5) — newest first
+        var previous = versionsList.slice(0, versionsList.length - 1);
+        for (var i = previous.length - 1; i >= 0; i--) {
+            var v = previous[i];
+            _dom.$revertSelect.append(
+                '<option value="' + _.escape(v.filename) + '" ' +
+                'data-display="' + _.escape(v.display) + '">' +
+                _.escape(versionLabel(v, false)) +
+                '</option>'
+            );
+        }
+        _dom.$revertSelect.prop("disabled", !previous.length);
+        _dom.$revertGroup.show();
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Revert confirmation modal
+    // ══════════════════════════════════════════════════════════════════
+
+    function showRevertModal(versionFilename, versionDisplay, onClose) {
+        $(".wl-modal-overlay").remove();
+
+        var html =
+            '<div class="wl-modal-overlay">' +
+                '<div class="wl-modal">' +
+                    '<div class="wl-modal-header">Revert to Previous Version</div>' +
+                    '<div class="wl-modal-body">' +
+                        '<p>This version of the lookup file will now be loaded. ' +
+                        'Unsaved changes will be overridden.</p>' +
+                        '<p>Reverting to: <strong>' + _.escape(versionDisplay) + '</strong></p>' +
+                        '<label class="wl-dp-label">Please provide a reason why revert is used:</label>' +
+                        '<textarea id="wl-revert-reason" class="wl-input" rows="3" ' +
+                        'maxlength="500" placeholder="Reason for revert (required)" ' +
+                        'style="width:100%;resize:vertical"></textarea>' +
+                        '<div class="wl-char-counter" data-for="wl-revert-reason">0 / 500</div>' +
+                    '</div>' +
+                    '<div class="wl-modal-actions">' +
+                        '<span class="btn btn-primary" id="wl-revert-ok">OK</span> ' +
+                        '<span class="btn" id="wl-revert-cancel">Cancel</span>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+
+        var $modal = $(html);
+        $("body").append($modal);
+
+        $modal.on("click", "#wl-revert-ok", function () {
+            var $input = $modal.find("#wl-revert-reason");
+            var reason = $input.val().trim();
+            if (!reason) {
+                $input.addClass("wl-input-error");
+                return;
+            }
+            if (C.NON_ASCII_RE.test(reason)) {
+                $input.addClass("wl-input-error");
+                UI.showMsg(C.ASCII_ERROR_MSG, "error");
+                return;
+            }
+            $modal.remove();
+            doRevert(versionFilename, versionDisplay, reason);
+        });
+
+        $modal.on("click", "#wl-revert-cancel", function () {
+            $modal.remove();
+            if (onClose) { onClose(); }
+        });
+
+        $modal.on("click", function (e) {
+            if ($(e.target).hasClass("wl-modal-overlay")) {
+                $modal.remove();
+                if (onClose) { onClose(); }
+            }
+        });
+
+        setTimeout(function () {
+            $modal.find("#wl-revert-reason").focus();
+        }, 100);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Execute revert (POST to backend, handle approval fallback)
+    // ══════════════════════════════════════════════════════════════════
+
+    function doRevert(versionFilename, versionDisplay, reason) {
+        if (S.saving) { return; }
+        if (S.csvLocked) {
+            showMsg("This CSV is locked by a pending approval request.", "error");
+            return;
+        }
+        S.saving = true;
+
+        showMsg("Reverting to version " + _.escape(versionDisplay) + "&hellip;", "info");
+
+        restPost({
+            action:           "revert_csv",
+            csv_file:         S.selectedCsv,
+            app_context:      S.selectedApp,
+            detection_rule:   S.selectedRule || "",
+            version_filename: versionFilename,
+            version_display:  versionDisplay,
+            revert_reason:    reason,
+            expected_mtime:   S.loadedMtime
+        })
+        .done(function (data) {
             if (data.error) {
-                UI.showMsg(_.escape(data.error), "error");
+                S.saving = false;
+                showMsg(_.escape(data.error), "error");
                 return;
             }
-            UI.showMsg("Reverted to version " + _.escape(versionId), "success");
 
-            // Update State with reverted data
-            if (data.headers && data.rows) {
-                State.set('currentHeaders', data.headers);
-                State.set('currentRows', data.rows);
-                State.set('originalRows', data.rows.map(function(r) {
-                    return $.extend({}, r);
-                }));
+            var revertMsg = "Reverted successfully to version " + _.escape(versionDisplay) + ".";
+            var details = [];
+            if (data.rows_before !== data.rows_after) {
+                details.push("Rows: " + _.escape(String(data.rows_before)) + " &rarr; " + _.escape(String(data.rows_after)));
+            }
+            if (data.cols_before !== undefined && data.cols_before !== data.cols_after) {
+                details.push("Columns: " + _.escape(String(data.cols_before)) + " &rarr; " + _.escape(String(data.cols_after)));
+            }
+            if (details.length) { revertMsg += "<br>" + details.join(" &nbsp;|&nbsp; "); }
+            showMsg(revertMsg, "success");
+
+            var diffInfo = data.diff || {};
+            if (diffInfo.text_diff && diffInfo.text_diff.length) {
+                _actions.renderDiff(diffInfo);
             }
 
-            // Reload versions
-            loadVersions();
-
-            $(document).trigger('wl:csvReverted', {
-                versionId: versionId,
-                reason: reason
+            // Reload the CSV from server to show reverted content
+            _actions.reloadCsvQuiet(function () {
+                S.saving = false;
             });
-        }).fail(function(xhr) {
-            UI.showMsg("Failed to revert CSV. Please try again.", "error");
-            console.error('[wl_versions] Revert failed:', xhr);
+        })
+        .fail(function (xhr) {
+            S.saving = false;
+            var err = "Failed to revert.";
+            try {
+                var resp = JSON.parse(xhr.responseText);
+                err = resp.error || err;
+                if (resp.requires_approval) {
+                    // Auto-submit an approval request for the large revert
+                    var desc = "Revert " + S.selectedCsv + " to version " + versionDisplay;
+                    var changeParts = [];
+                    if (resp.revert_row_changes) changeParts.push(resp.revert_row_changes + " row changes");
+                    if (resp.revert_col_changes) changeParts.push(resp.revert_col_changes + " column changes");
+                    if (changeParts.length) desc += " (" + changeParts.join(", ") + ")";
+
+                    showMsg("Large revert requires approval. Submitting request&hellip;", "info");
+
+                    restPost({
+                        action: "submit_approval",
+                        approval_action_type: "revert",
+                        csv_file: S.selectedCsv,
+                        app_context: S.selectedApp,
+                        detection_rule: S.selectedRule || "",
+                        description: desc,
+                        original_payload: {
+                            action: "revert_csv",
+                            csv_file: S.selectedCsv,
+                            app_context: S.selectedApp,
+                            detection_rule: S.selectedRule || "",
+                            version_filename: versionFilename,
+                            version_display: versionDisplay,
+                            revert_reason: reason
+                        },
+                        expected_mtime: S.loadedMtime,
+                        pending_highlight: {
+                            type: "revert",
+                            version_filename: versionFilename,
+                            version_display: versionDisplay
+                        }
+                    })
+                    .done(function (data) {
+                        if (data.error) {
+                            showMsg(_.escape(data.error), "error");
+                            return;
+                        }
+                        showMsg(
+                            "Your revert request has been submitted for approval. " +
+                            "Request ID: <strong>" + _.escape(data.request_id) + "</strong>",
+                            "success"
+                        );
+                        // Reload to show CSV lock status
+                        _actions.loadCsv(S.selectedCsv, S.selectedApp);
+                    })
+                    .fail(function (xhr2) {
+                        var err2 = "Failed to submit approval request.";
+                        try { err2 = JSON.parse(xhr2.responseText).error || err2; }
+                        catch (e2) { console.warn("wl_manager: failed to parse error response", e2); }
+                        showMsg(_.escape(err2), "error");
+                    });
+                    return;
+                }
+            } catch (e) { console.warn("wl_manager: failed to parse revert response", e); }
+            _actions.handleSaveError(xhr, "Failed to revert.");
         });
     }
 
-    /**
-     * Get current version history array.
-     */
-    function getVersionHistory() {
-        return versions.slice();
+    // ══════════════════════════════════════════════════════════════════
+    // Hide dropdown (rule clear / rule switch)
+    // ══════════════════════════════════════════════════════════════════
+
+    function hide() {
+        _dom.$revertGroup.hide();
     }
 
-    // Public API
+    // ── Public API ──────────────────────────────────────────────────
     return {
-        init: init,
+        init:         init,
         loadVersions: loadVersions,
-        showVersionDropdown: showVersionDropdown,
-        revertToVersion: revertToVersion,
-        getVersionHistory: getVersionHistory
+        hide:         hide
     };
 });

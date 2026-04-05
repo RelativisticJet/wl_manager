@@ -31,6 +31,10 @@ define([], function () {
         EXPIRE_COLUMN_NAMES_LIST: [
             "expires", "expire", "expiration", "expiration_date",
             "expiry", "termination", "termination_date"
-        ]
+        ],
+
+        // ── Text field validation ──────────────────────────────────
+        NON_ASCII_RE: /[^\x00-\x7F]/,
+        ASCII_ERROR_MSG: "Only ASCII characters are allowed in text fields"
     };
 });

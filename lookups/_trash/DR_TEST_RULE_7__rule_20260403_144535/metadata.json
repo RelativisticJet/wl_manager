@@ -1,0 +1,19 @@
+{
+  "item_type": "rule",
+  "name": "DR_TEST_RULE_7",
+  "deleted_by": "analyst2",
+  "deleted_at": 1775227535,
+  "deleted_at_human": "2026-04-03 14:45:35 UTC",
+  "comment": "Test rule no longer needed",
+  "expiry_ts": 1777819535,
+  "expiry_human": "2026-05-03 14:45:35 UTC",
+  "retention_days": 30,
+  "rule_name": "",
+  "app_context": "",
+  "associated_csvs": [
+    {
+      "csv_file": "DR_TEST_RULE_7.csv",
+      "app_context": "wl_manager"
+    }
+  ]
+}

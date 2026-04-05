@@ -1,305 +1,1082 @@
 /**
- * wl_modals.js - Modal Dialogs Module
+ * wl_modals.js — Modal Dialogs Module
  *
- * Provides modal dialogs for add/remove/edit row operations.
+ * All modal dialog UI extracted from the entry point. Covers three groups:
  *
- * Public API: init(), showAddRowModal(callback), showRemoveModal(rows, callback), showEditModal(rowIndex, fields, callback)
+ *   Group A  — Entity CRUD modals: showRemoveModal, showNewRuleModal,
+ *              showApprovalReasonPopup, showCreateCsvModal
+ *   Group B  — Generic prompt modals: showRemoveRowModal, showRemoveColumnModal
+ *   Group C  — Approval action modals: showApproveConfirmModal,
+ *              showRejectReasonModal, showCancelRequestModal
  *
- * Events:
- *   - Listens: state:currentRows, state:currentHeaders, state:csvLocked
- *   - Fires: wl:rowAdded, wl:rowRemoved, wl:rowEdited
+ * Public API:
+ *   init(config)                             — wire state proxy, DOM, callbacks
+ *   showRemoveModal(type, name, parentRule)  — remove rule/CSV confirmation
+ *   showNewRuleModal()                       — create new detection rule
+ *   showApprovalReasonPopup(label, onSubmit) — approval reason dialog
+ *   showCreateCsvModal(ruleName)             — create CSV with optional import
+ *   showRemoveRowModal(title, body, onConfirm, opts) — row removal reason
+ *   showRemoveColumnModal(colName, onConfirm) — column removal reason
+ *   showApproveConfirmModal(requestId)       — approve request confirmation
+ *   showRejectReasonModal(requestId)         — reject request with reason
+ *   showCancelRequestModal(requestId)        — cancel own request with reason
  */
-
 define([
-    'modules/wl_constants',
-    'modules/wl_state',
-    'modules/wl_rest',
-    'modules/wl_ui'
-], function(Constants, State, REST, UI) {
-    'use strict';
+    "jquery",
+    "underscore",
+    "app/wl_manager/modules/wl_constants",
+    "app/wl_manager/modules/wl_rest",
+    "app/wl_manager/modules/wl_ui",
+    "app/wl_manager/modules/wl_csv_io"
+], function ($, _, C, REST, UI, CsvIO) {
+    "use strict";
 
-    var currentRows = [];
-    var currentHeaders = [];
-    var csvLocked = false;
+    // ── Shared state proxy (set by init) ────────────────────────────
+    var S = null;
 
-    var MIN_REASON_LENGTH = 5;
-    var MAX_REASON_LENGTH = 500;
+    // ── Entry-point callbacks (set by init) ─────────────────────────
+    var _actions = {};
 
-    /**
-     * Initialize modals module.
-     */
-    function init() {
-        State.on('state:currentRows', function(rows) {
-            currentRows = rows || [];
-        });
-        State.on('state:currentHeaders', function(headers) {
-            currentHeaders = headers || [];
-        });
-        State.on('state:csvLocked', function(locked) {
-            csvLocked = locked || false;
-        });
+    // ── Module aliases ──────────────────────────────────────────────
+    var restGet  = REST.restGet;
+    var restPost = REST.restPost;
+    var showMsg  = UI.showMsg;
+    var IMPORT_MAX_FILE_SIZE = C.IMPORT_MAX_FILE_SIZE;
 
-        currentRows = State.get('currentRows') || [];
-        currentHeaders = State.get('currentHeaders') || [];
-        csvLocked = State.get('csvLocked') || false;
+    // ══════════════════════════════════════════════════════════════════
+    // Init
+    // ══════════════════════════════════════════════════════════════════
+
+    function init(config) {
+        S        = config.state   || {};
+        _actions = config.actions || {};
     }
 
-    /**
-     * Show modal to add a new row.
-     * Form has input fields for each column, validation enforced.
-     *
-     * @param {function} callback - Called with new row data on submit
-     */
-    function showAddRowModal(callback) {
-        if (csvLocked) {
-            UI.showMsg("CSV is locked by a pending approval request.", "error");
-            return;
+    // ══════════════════════════════════════════════════════════════════
+    // GROUP A: Entity CRUD Modals
+    // ══════════════════════════════════════════════════════════════════
+
+    // ── Remove Rule or CSV modal ────────────────────────────────────
+
+    function showRemoveModal(type, name, parentRule) {
+        $(".wl-modal-overlay").remove();
+
+        var isRule = (type === "rule");
+        var title = isRule ? "Remove Detection Rule" : "Remove CSV File";
+
+        // For rules, list affected CSVs
+        var affectedCsvs = [];
+        if (isRule) {
+            S.mappingData.forEach(function (m) {
+                if (m.rule_name === name) {
+                    affectedCsvs.push(m.csv_file);
+                }
+            });
+        } else {
+            // For CSV removal, check if it's the last CSV for the rule
+            var ruleCsvCount = 0;
+            S.mappingData.forEach(function (m) {
+                if (m.rule_name === (parentRule || S.selectedRule)) {
+                    ruleCsvCount++;
+                }
+            });
+            if (ruleCsvCount <= 1) {
+                title += " (Last CSV)";
+            }
         }
 
-        var visibleHeaders = currentHeaders.filter(function(h) {
-            return h.charAt(0) !== '_';
-        });
-
-        var html = '<div class="wl-modal-overlay">';
-        html += '<div class="wl-modal">';
-        html += '<h3>Add New Row</h3>';
-        html += '<form id="wl-add-row-form">';
-        visibleHeaders.forEach(function(h) {
-            html += '<div class="wl-form-group">';
-            html += '<label for="wl-add-field-' + _.escape(h) + '">' + _.escape(h) + '</label>';
-            html += '<textarea id="wl-add-field-' + _.escape(h) + '" class="wl-modal-input" ' +
-                    'data-header="' + _.escape(h) + '" maxlength="1000" rows="2" placeholder="Enter value"></textarea>';
-            html += '</div>';
-        });
-        html += '<div class="wl-form-actions">';
-        html += '<span class="wl-modal-btn wl-btn-cancel">Cancel</span> ';
-        html += '<span class="wl-modal-btn wl-btn-primary">Add Row</span>';
-        html += '</div></form></div></div>';
-
-        var $overlay = $(html).appendTo('body');
-        var $form = $overlay.find('#wl-add-row-form');
-
-        $overlay.find('.wl-btn-cancel').on('click', function() {
-            $overlay.remove();
-        });
-
-        $form.on('submit', function(e) {
-            e.preventDefault();
-            var newRow = {};
-            var valid = true;
-
-            $form.find('.wl-modal-input').each(function() {
-                var header = $(this).data('header');
-                var val = $(this).val().trim();
-                newRow[header] = val;
+        var summaryHtml = '';
+        if (isRule) {
+            summaryHtml = '<div style="margin-bottom:12px;font-size:13px">' +
+                '<strong>Rule:</strong> ' + _.escape(name) + '<br>' +
+                '<strong>CSV files (' + affectedCsvs.length + '):</strong> ' +
+                (affectedCsvs.length
+                    ? affectedCsvs.map(function (c) { return _.escape(c); }).join(', ')
+                    : '<em>none</em>') +
+                '</div>';
+        } else {
+            var lastCsvWarning = '';
+            var ruleCsvs = S.mappingData.filter(function (m) {
+                return m.rule_name === (parentRule || S.selectedRule);
             });
+            if (ruleCsvs.length <= 1) {
+                lastCsvWarning =
+                    '<div style="margin-top:8px;padding:6px 10px;border-radius:4px;' +
+                    'background:var(--wl-bg-warning,#fff3cd);color:#856404;font-size:12px">' +
+                    'This is the only CSV for rule <strong>' +
+                    _.escape(parentRule || S.selectedRule) +
+                    '</strong>. Removing it will also remove the rule from the dropdown.' +
+                    '</div>';
+            }
+            summaryHtml = '<div style="margin-bottom:12px;font-size:13px">' +
+                '<strong>CSV:</strong> ' + _.escape(name) + '<br>' +
+                '<strong>Rule:</strong> ' + _.escape(parentRule || S.selectedRule) +
+                lastCsvWarning +
+                '</div>';
+        }
 
-            // Validation: all required fields non-empty (optional — adjust as needed)
-            if (!valid) {
-                UI.showMsg("Please fill in required fields.", "error");
+        var fileWord = isRule
+            ? (affectedCsvs.length === 1 ? '1 CSV file' : affectedCsvs.length + ' CSV files')
+            : 'the CSV file';
+
+        var html =
+            '<div class="wl-modal-overlay">' +
+            '<div class="wl-modal" style="max-width:520px">' +
+                '<h3 style="margin-top:0">' + title + '</h3>' +
+                summaryHtml +
+                '<div style="margin-bottom:12px">' +
+                    '<label style="display:block;margin-bottom:8px;cursor:pointer">' +
+                        '<input type="radio" name="wl-remove-type" value="unlink" checked ' +
+                            'style="margin-right:6px" />' +
+                        '<strong>Unlink</strong> — remove from mapping only ' +
+                        '<span style="color:var(--wl-text-muted);font-size:12px">' +
+                        '(files stay on disk)</span>' +
+                    '</label>' +
+                    '<label style="display:block;cursor:pointer">' +
+                        '<input type="radio" name="wl-remove-type" value="permanent" ' +
+                            'style="margin-right:6px" />' +
+                        '<strong>Delete permanently</strong> — remove from mapping ' +
+                        'and delete ' + fileWord + ' from disk ' +
+                        '<span style="color:var(--wl-text-muted);font-size:12px">' +
+                        '(version history kept as safety net)</span>' +
+                    '</label>' +
+                '</div>' +
+                '<div style="margin-bottom:12px">' +
+                    '<label style="display:block;margin-bottom:4px;font-weight:600;font-size:13px">' +
+                        'Reason (required)</label>' +
+                    '<textarea id="wl-remove-reason" rows="2" maxlength="500" ' +
+                        'style="width:100%;box-sizing:border-box;font-family:inherit;' +
+                        'font-size:13px;padding:6px 8px;border:1px solid var(--wl-border);' +
+                        'border-radius:3px;background:var(--wl-bg-input);color:var(--wl-text);' +
+                        'resize:vertical" placeholder="Why is this being removed?"></textarea>' +
+                    '<div class="wl-char-counter" data-for="wl-remove-reason">0 / 500</div>' +
+                '</div>' +
+                '<div style="display:flex;gap:8px;justify-content:flex-end">' +
+                    '<span class="btn" id="wl-remove-confirm" ' +
+                        'style="background:#e74c3c;color:#fff;cursor:pointer">Remove</span>' +
+                    '<span class="btn" id="wl-remove-cancel" ' +
+                        'style="cursor:pointer">Cancel</span>' +
+                '</div>' +
+            '</div></div>';
+
+        $("body").append(html);
+
+        setTimeout(function () { $("#wl-remove-reason").focus(); }, 100);
+
+        // Cancel
+        $(".wl-modal-overlay").on("click", "#wl-remove-cancel", function () {
+            $(".wl-modal-overlay").remove();
+        });
+        $(".wl-modal-overlay").on("click", function (e) {
+            if ($(e.target).hasClass("wl-modal-overlay")) {
+                $(".wl-modal-overlay").remove();
+            }
+        });
+
+        // Confirm
+        $(".wl-modal-overlay").on("click", "#wl-remove-confirm", function () {
+            var removalType = $("input[name='wl-remove-type']:checked").val();
+            var reason = ($("#wl-remove-reason").val() || "").trim();
+            if (!reason) {
+                $("#wl-remove-reason").css("border-color", "#e74c3c").attr(
+                    "placeholder", "A reason is required!");
+                return;
+            }
+            if (C.NON_ASCII_RE.test(reason)) {
+                $("#wl-remove-reason").css("border-color", "#e74c3c");
+                showMsg(C.ASCII_ERROR_MSG, "error");
                 return;
             }
 
-            $overlay.remove();
-            if (callback) { callback(newRow); }
+            var $btn = $(this);
+            $btn.text("Removing\u2026").css("pointer-events", "none");
 
-            $(document).trigger('wl:rowAdded', newRow);
-        });
+            var payload;
+            if (isRule) {
+                payload = {
+                    action: "remove_rule",
+                    rule_name: name,
+                    removal_type: removalType,
+                    comment: reason
+                };
+            } else {
+                payload = {
+                    action: "remove_csv",
+                    csv_file: name,
+                    rule_name: parentRule || S.selectedRule,
+                    removal_type: removalType,
+                    comment: reason
+                };
+            }
 
-        $overlay.find('.wl-btn-primary').on('click', function() {
-            $form.submit();
-        });
+            // Check reason gate for remove actions
+            var gateKey = isRule ? "require_reason_rule_deletion" : "require_reason_csv_deletion";
+            if (S.reasonGates[gateKey]) {
+                payload.approval_reason = reason;
+            }
 
-        // Close on overlay click
-        $overlay.on('click', function(e) {
-            if (e.target === this) { $overlay.remove(); }
+            restPost(payload)
+            .done(function (data) {
+                $(".wl-modal-overlay").remove();
+                if (data.error) {
+                    showMsg(_.escape(data.error), "error");
+                    return;
+                }
+                if (data.request_id) {
+                    showMsg(
+                        "Your request to remove <strong>" + _.escape(name) +
+                        "</strong> has been submitted for admin approval.",
+                        "info");
+                    return;
+                }
+                showMsg(_.escape(data.message || "Removed successfully"), "success");
+
+                // Delegate UI reset to entry point
+                _actions.onEntityRemoved(isRule, name, parentRule);
+            })
+            .fail(function (xhr) {
+                $(".wl-modal-overlay").remove();
+                var errMsg = "Failed to remove";
+                try {
+                    errMsg = JSON.parse(xhr.responseText).error || errMsg;
+                } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
+                showMsg(_.escape(errMsg), "error");
+            });
         });
     }
 
-    /**
-     * Show modal to remove one or more rows.
-     * Requires a reason (5+ chars).
-     *
-     * @param {array} rowIndices - Indices to remove
-     * @param {function} callback - Called with reason on confirm
-     */
-    function showRemoveModal(rowIndices, callback) {
-        if (csvLocked) {
-            UI.showMsg("CSV is locked by a pending approval request.", "error");
-            return;
-        }
+    // ── Create New Rule modal ───────────────────────────────────────
 
-        var count = rowIndices ? rowIndices.length : 1;
-        var title = count === 1 ? "Remove Row" : "Remove " + count + " Rows";
-        var msg = count === 1
-            ? "Remove this row? This action will be saved immediately and logged in the audit trail."
-            : "Remove <strong>" + count + "</strong> selected row(s)? This action will be saved immediately and logged in the audit trail.";
+    function showNewRuleModal() {
+        $(".wl-modal-overlay").remove();
 
-        var html = '<div class="wl-modal-overlay">';
-        html += '<div class="wl-modal">';
-        html += '<h3>' + title + '</h3>';
-        html += '<p>' + msg + '</p>';
-        html += '<form id="wl-remove-form">';
-        html += '<div class="wl-form-group">';
-        html += '<label for="wl-remove-reason">Reason for removal (required)</label>';
-        html += '<textarea id="wl-remove-reason" class="wl-modal-input" maxlength="' + MAX_REASON_LENGTH + '" ' +
-                'rows="3" placeholder="Why are you removing this row?"></textarea>';
-        html += '<span class="wl-form-help">Min ' + MIN_REASON_LENGTH + ' chars</span>';
-        html += '</div>';
-        html += '<div class="wl-form-actions">';
-        html += '<span class="wl-modal-btn wl-btn-cancel">Cancel</span> ';
-        html += '<span class="wl-modal-btn wl-btn-danger">Remove</span>';
-        html += '</div></form></div></div>';
+        var html =
+            '<div class="wl-modal-overlay">' +
+                '<div class="wl-modal" style="max-width:450px">' +
+                    '<div class="wl-modal-header">Create New Detection Rule</div>' +
+                    '<div class="wl-modal-body">' +
+                        '<label class="wl-dp-label">Detection Rule Name:</label>' +
+                        '<input type="text" id="wl-new-rule-name" class="wl-input" ' +
+                            'placeholder="e.g. DR150_suspicious_activity" ' +
+                            'autocomplete="off" style="width:100%" maxlength="100" />' +
+                        '<div id="wl-new-rule-error" style="color:#ef9a9a;font-size:12px;margin-top:6px;display:none"></div>' +
+                    '</div>' +
+                    '<div class="wl-modal-actions">' +
+                        '<span class="btn btn-primary" id="wl-new-rule-ok">Next</span> ' +
+                        '<span class="btn" id="wl-new-rule-cancel">Cancel</span>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
 
-        var $overlay = $(html).appendTo('body');
-        var $form = $overlay.find('#wl-remove-form');
-        var $reason = $overlay.find('#wl-remove-reason');
+        var $modal = $(html);
+        $("body").append($modal);
 
-        $overlay.find('.wl-btn-cancel').on('click', function() {
-            $overlay.remove();
-        });
+        // Force dark theme on modal inputs
+        var darkBg = getComputedStyle(document.documentElement).getPropertyValue("--wl-bg-input").trim() || "#1a1c1e";
+        var darkTxt = getComputedStyle(document.documentElement).getPropertyValue("--wl-text").trim() || "#e0e0e0";
+        $modal.find(".wl-input").css({ "background-color": darkBg, "color": darkTxt });
 
-        $form.on('submit', function(e) {
-            e.preventDefault();
-            var reason = $reason.val().trim();
-            if (reason.length < MIN_REASON_LENGTH) {
-                UI.showMsg("Reason must be at least " + MIN_REASON_LENGTH + " characters.", "error");
+        function validate() {
+            var name = $modal.find("#wl-new-rule-name").val().trim();
+            var $err = $modal.find("#wl-new-rule-error");
+            $err.hide();
+
+            if (!name) {
+                $err.text("Detection rule name is required.").show();
                 return;
             }
-            $overlay.remove();
-            if (callback) { callback(reason); }
-            $(document).trigger('wl:rowRemoved', { indices: rowIndices, reason: reason });
+            if (/[^a-zA-Z0-9_\-. ]/.test(name)) {
+                $err.text("Rule name can only contain letters, numbers, underscores, hyphens, dots, and spaces.").show();
+                return;
+            }
+            if (!/[a-zA-Z0-9]/.test(name)) {
+                $err.text("Rule name must contain at least one letter or number.").show();
+                return;
+            }
+            var exists = S.allRules.some(function (r) {
+                return r.toLowerCase() === name.toLowerCase();
+            });
+            if (exists) {
+                $err.text("Rule '" + _.escape(name) + "' already exists. Select it from the dropdown instead.").show();
+                return;
+            }
+
+            var createPayload = { action: "create_rule", detection_rule: name };
+
+            function submitCreateRule(payload) {
+                $modal.find("#wl-new-rule-ok").addClass("disabled").text("Creating...");
+                restPost(payload)
+                .done(function (resp) {
+                    $modal.remove();
+                    if (resp.request_id) {
+                        showMsg(
+                            "Your request to create rule <strong>" + _.escape(name) +
+                            "</strong> has been submitted for admin approval.",
+                            "info");
+                        return;
+                    }
+                    _actions.onRuleCreated(name);
+                })
+                .fail(function (xhr) {
+                    var errMsg = "Failed to create detection rule.";
+                    try {
+                        var r = JSON.parse(xhr.responseText);
+                        if (r.error) { errMsg = r.error; }
+                    } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
+                    $err.text(errMsg).show();
+                    $modal.find("#wl-new-rule-ok").removeClass("disabled").text("Next");
+                });
+            }
+
+            if (S.reasonGates.require_reason_rule_creation) {
+                showApprovalReasonPopup("Create rule '" + name + "'", function (reason) {
+                    createPayload.approval_reason = reason;
+                    submitCreateRule(createPayload);
+                });
+                return;
+            }
+            submitCreateRule(createPayload);
+        }
+
+        $modal.on("click", "#wl-new-rule-ok", validate);
+        $modal.on("click", "#wl-new-rule-cancel", function () { $modal.remove(); });
+        $modal.on("click", function (e) {
+            if ($(e.target).hasClass("wl-modal-overlay")) { $modal.remove(); }
+        });
+        $modal.on("keydown", "#wl-new-rule-name", function (e) {
+            if (e.which === 13) { e.preventDefault(); validate(); }
         });
 
-        $overlay.find('.wl-btn-danger').on('click', function() {
-            $form.submit();
-        });
-
-        $overlay.on('click', function(e) {
-            if (e.target === this) { $overlay.remove(); }
-        });
-
-        $reason.focus();
+        setTimeout(function () { $modal.find("#wl-new-rule-name").focus(); }, 100);
     }
 
-    /**
-     * Show modal to edit a single row's fields.
-     *
-     * @param {number} rowIndex - Row index to edit
-     * @param {object} callback - Called with updated row on submit
-     */
-    function showEditModal(rowIndex, callback) {
-        if (csvLocked) {
-            UI.showMsg("CSV is locked by a pending approval request.", "error");
-            return;
-        }
+    // ── Approval reason popup (shared by gated create/delete flows) ─
 
-        if (rowIndex < 0 || rowIndex >= currentRows.length) {
-            UI.showMsg("Row not found.", "error");
-            return;
-        }
+    function showApprovalReasonPopup(actionLabel, onSubmit) {
+        $(".wl-approval-reason-overlay").remove();
+        var html =
+            '<div class="wl-modal-overlay wl-approval-reason-overlay">' +
+                '<div class="wl-modal" style="max-width:440px">' +
+                    '<h3 style="margin:0 0 8px">Approval Required</h3>' +
+                    '<p style="margin:0 0 12px;font-size:13px;color:var(--wl-text-muted,#999)">' +
+                        'This action requires admin approval. Please provide a reason for: ' +
+                        '<strong>' + _.escape(actionLabel) + '</strong></p>' +
+                    '<textarea id="wl-approval-reason-text" class="wl-input" ' +
+                        'style="width:100%;height:80px;resize:vertical;font-size:13px" ' +
+                        'placeholder="Reason for this request (required)" maxlength="500"></textarea>' +
+                    '<div class="wl-char-counter" data-for="wl-approval-reason-text">0 / 500</div>' +
+                    '<div id="wl-approval-reason-error" class="wl-msg-error" style="display:none;margin-top:6px"></div>' +
+                    '<div class="wl-modal-actions" style="margin-top:12px">' +
+                        '<span class="btn btn-primary" id="wl-approval-reason-ok">Submit Request</span> ' +
+                        '<span class="btn" id="wl-approval-reason-cancel">Cancel</span>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+        var $popup = $(html);
+        $("body").append($popup);
 
-        var row = currentRows[rowIndex];
-        var visibleHeaders = currentHeaders.filter(function(h) {
-            return h.charAt(0) !== '_';
+        $popup.on("click", "#wl-approval-reason-ok", function () {
+            var reason = $popup.find("#wl-approval-reason-text").val().trim();
+            if (!reason) {
+                $popup.find("#wl-approval-reason-error").text("A reason is required.").show();
+                return;
+            }
+            if (C.NON_ASCII_RE.test(reason)) {
+                $popup.find("#wl-approval-reason-error").text(C.ASCII_ERROR_MSG).show();
+                return;
+            }
+            $popup.remove();
+            onSubmit(reason);
         });
-
-        var html = '<div class="wl-modal-overlay">';
-        html += '<div class="wl-modal">';
-        html += '<h3>Edit Row #' + (rowIndex + 1) + '</h3>';
-        html += '<form id="wl-edit-row-form">';
-        visibleHeaders.forEach(function(h) {
-            var val = row[h] || "";
-            html += '<div class="wl-form-group">';
-            html += '<label for="wl-edit-field-' + _.escape(h) + '">' + _.escape(h) + '</label>';
-            html += '<textarea id="wl-edit-field-' + _.escape(h) + '" class="wl-modal-input" ' +
-                    'data-header="' + _.escape(h) + '" maxlength="1000" rows="2">' + _.escape(val) + '</textarea>';
-            html += '</div>';
+        $popup.on("click", "#wl-approval-reason-cancel", function () { $popup.remove(); });
+        $popup.on("click", function (e) {
+            if ($(e.target).hasClass("wl-approval-reason-overlay")) { $popup.remove(); }
         });
-        html += '<div class="wl-form-actions">';
-        html += '<span class="wl-modal-btn wl-btn-cancel">Cancel</span> ';
-        html += '<span class="wl-modal-btn wl-btn-primary">Save</span>';
-        html += '</div></form></div></div>';
-
-        var $overlay = $(html).appendTo('body');
-        var $form = $overlay.find('#wl-edit-row-form');
-
-        $overlay.find('.wl-btn-cancel').on('click', function() {
-            $overlay.remove();
+        $popup.on("keydown", function (e) {
+            if (e.key === "Escape") { $popup.remove(); }
         });
+        setTimeout(function () { $popup.find("#wl-approval-reason-text").focus(); }, 100);
+    }
 
-        $form.on('submit', function(e) {
-            e.preventDefault();
-            var updatedRow = $.extend({}, row);
+    // ── Create CSV modal ────────────────────────────────────────────
 
-            $form.find('.wl-modal-input').each(function() {
-                var header = $(this).data('header');
-                var val = $(this).val();
-                updatedRow[header] = val;
+    function showCreateCsvModal(ruleName) {
+        $(".wl-modal-overlay").remove();
+
+        var safeName = ruleName.replace(/[^a-zA-Z0-9_\-]/g, "_");
+        var suggestedFile = safeName + ".csv";
+
+        restGet({ action: "get_apps" }).done(function (appData) {
+            var apps = (appData.apps || []);
+            var defaultApp = appData.default_app || "wl_manager";
+
+            var appOptions = "";
+            apps.forEach(function (a) {
+                var sel = a.name === defaultApp ? " selected" : "";
+                appOptions += '<option value="' + _.escape(a.name) + '"' + sel + '>' +
+                    _.escape(a.name) + (a.has_lookups ? "" : " (no lookups/)") +
+                    '</option>';
             });
 
-            $overlay.remove();
-            if (callback) { callback(updatedRow); }
-            $(document).trigger('wl:rowEdited', { index: rowIndex, row: updatedRow });
-        });
+            var html =
+                '<div class="wl-modal-overlay">' +
+                    '<div class="wl-modal" style="max-width:560px">' +
+                        '<div class="wl-modal-header">Create CSV Whitelist</div>' +
+                        '<div class="wl-modal-body">' +
+                            '<p style="margin:0 0 12px 0;font-size:13px">Create a new CSV whitelist for <strong>' +
+                                _.escape(ruleName) + '</strong>.</p>' +
 
-        $overlay.find('.wl-btn-primary').on('click', function() {
-            $form.submit();
-        });
+                            '<div class="wl-import-section">' +
+                                '<label>Import from CSV file</label>' +
+                                '<div class="wl-import-file-row">' +
+                                    '<input type="file" accept=".csv" id="wl-import-file" class="wl-import-file-hidden" />' +
+                                    '<span class="btn wl-import-file-btn" id="wl-import-file-trigger">Choose File</span>' +
+                                    '<span class="wl-import-file-name" id="wl-import-file-label">No file chosen</span>' +
+                                    '<span class="wl-import-clear" id="wl-import-clear" style="display:none">Clear</span>' +
+                                '</div>' +
+                            '</div>' +
 
-        $overlay.on('click', function(e) {
-            if (e.target === this) { $overlay.remove(); }
+                            '<div class="wl-import-divider">or create manually</div>' +
+
+                            '<label class="wl-dp-label">Target App:</label>' +
+                            '<select id="wl-create-csv-app" class="wl-input" style="width:100%">' +
+                                appOptions +
+                            '</select>' +
+                            '<div id="wl-create-csv-app-warn" class="wl-crossapp-warning" style="display:none">' +
+                                '<strong>Warning:</strong> This CSV will be created inside another app\'s lookups/ directory. ' +
+                                'Ensure you have the appropriate permissions and that this is intentional.' +
+                            '</div>' +
+                            '<label class="wl-dp-label" style="margin-top:10px">CSV File Name:</label>' +
+                            '<input type="text" id="wl-create-csv-name" class="wl-input" ' +
+                                'value="' + _.escape(suggestedFile) + '" ' +
+                                'autocomplete="off" style="width:100%" maxlength="100" />' +
+                            '<div id="wl-create-csv-headers-manual">' +
+                                '<label class="wl-dp-label" style="margin-top:10px">Column Headers (comma-separated):</label>' +
+                                '<input type="text" id="wl-create-csv-headers" class="wl-input" ' +
+                                    'placeholder="e.g. user, src_ip, Comment, Expires" ' +
+                                    'autocomplete="off" style="width:100%" maxlength="500" />' +
+                            '</div>' +
+                            '<div id="wl-create-csv-headers-imported" style="display:none">' +
+                                '<label class="wl-dp-label" style="margin-top:10px">Column Headers (from imported file):</label>' +
+                                '<div class="wl-import-headers-display" id="wl-import-headers-text"></div>' +
+                            '</div>' +
+
+                            '<div id="wl-import-messages" class="wl-import-messages" style="display:none"></div>' +
+                            '<div id="wl-create-csv-error" style="color:#ef9a9a;font-size:12px;margin-top:6px;display:none"></div>' +
+                            '<div id="wl-import-preview" style="display:none"></div>' +
+                        '</div>' +
+                        '<div class="wl-modal-actions">' +
+                            '<span class="btn btn-primary" id="wl-create-csv-ok">Create</span> ' +
+                            '<span class="btn" id="wl-create-csv-cancel">Cancel</span>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>';
+
+            var $modal = $(html);
+            $("body").append($modal);
+
+            // Force dark theme on modal inputs
+            var darkBg = getComputedStyle(document.documentElement).getPropertyValue("--wl-bg-input").trim() || "#1a1c1e";
+            var darkTxt = getComputedStyle(document.documentElement).getPropertyValue("--wl-text").trim() || "#e0e0e0";
+            $modal.find(".wl-input").css({ "background-color": darkBg, "color": darkTxt });
+
+            _bindCreateCsvEvents($modal, ruleName, defaultApp);
+
+            $modal.on("click", "#wl-import-file-trigger", function () {
+                $modal.find("#wl-import-file").trigger("click");
+            });
+
+            setTimeout(function () { $modal.find("#wl-import-file-trigger").focus(); }, 100);
         });
     }
 
-    /**
-     * Show generic confirmation modal with custom title and message.
-     * Used for approval flows, etc.
-     *
-     * @param {string} title - Modal title
-     * @param {string} message - Modal message (HTML)
-     * @param {object} options - {confirmText, cancelText, confirmClass, onConfirm, onCancel}
-     */
-    function showConfirmModal(title, message, options) {
-        options = options || {};
-        var confirmText = options.confirmText || "Confirm";
-        var cancelText = options.cancelText || "Cancel";
-        var confirmClass = options.confirmClass || "wl-btn-primary";
-        var onConfirm = options.onConfirm || function() {};
-        var onCancel = options.onCancel || function() {};
+    function _bindCreateCsvEvents($modal, ruleName, defaultApp) {
 
-        var html = '<div class="wl-modal-overlay">';
-        html += '<div class="wl-modal">';
-        html += '<h3>' + _.escape(title) + '</h3>';
-        html += '<p>' + message + '</p>';
-        html += '<div class="wl-form-actions">';
-        html += '<span class="wl-modal-btn wl-btn-cancel">' + _.escape(cancelText) + '</span> ';
-        html += '<span class="wl-modal-btn ' + confirmClass + '">' + _.escape(confirmText) + '</span>';
-        html += '</div></div></div>';
+        // ── Import state ──
+        var importedHeaders = null;
+        var importedRows = null;
 
-        var $overlay = $(html).appendTo('body');
+        // ── File input handler ──
+        $modal.on("change", "#wl-import-file", function (e) {
+            var file = e.target.files && e.target.files[0];
+            if (!file) return;
 
-        $overlay.find('.wl-btn-cancel').on('click', function() {
-            $overlay.remove();
-            onCancel();
+            var $err = $modal.find("#wl-create-csv-error");
+            var $msgs = $modal.find("#wl-import-messages");
+            var $preview = $modal.find("#wl-import-preview");
+            $err.hide();
+            $msgs.empty().hide();
+            $preview.empty().hide();
+
+            if (file.size > IMPORT_MAX_FILE_SIZE) {
+                var sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+                $err.text("File is too large (" + sizeMB + " MB). Maximum allowed is 2 MB.").show();
+                resetImportMode();
+                return;
+            }
+
+            if (!file.name.toLowerCase().endsWith(".csv")) {
+                $err.text("Only .csv files are accepted.").show();
+                resetImportMode();
+                return;
+            }
+
+            var reader = new FileReader();
+            reader.onload = function (ev) {
+                var text = ev.target.result;
+                var parsed = CsvIO.parseCSV(text);
+
+                if (parsed.errors.length > 0 && parsed.headers.length === 0) {
+                    $err.text(parsed.errors[0]).show();
+                    resetImportMode();
+                    return;
+                }
+
+                var validation = CsvIO.validateImportedCSV(file.name, parsed.headers, parsed.rows);
+                parsed.errors.forEach(function (e) { validation.errors.unshift(e); });
+
+                CsvIO.renderImportMessages(validation.errors, validation.warnings, $msgs);
+
+                if (validation.errors.length > 0) {
+                    $modal.find("#wl-create-csv-ok").addClass("disabled");
+                } else {
+                    $modal.find("#wl-create-csv-ok").removeClass("disabled");
+                }
+
+                importedHeaders = parsed.headers;
+                importedRows = parsed.rows;
+
+                $modal.find("#wl-create-csv-name").val(file.name);
+                $modal.find("#wl-create-csv-headers-manual").hide();
+                $modal.find("#wl-import-headers-text").text(parsed.headers.join(", "));
+                $modal.find("#wl-create-csv-headers-imported").show();
+                $modal.find("#wl-import-file-label").text(file.name);
+                $modal.find("#wl-import-clear").show();
+
+                if (validation.errors.length === 0) {
+                    CsvIO.renderImportPreview(parsed.headers, parsed.rows, $preview);
+                }
+            };
+
+            reader.onerror = function () {
+                $err.text("Failed to read file. Please try again.").show();
+                resetImportMode();
+            };
+
+            reader.readAsText(file, "UTF-8");
         });
 
-        $overlay.find('.' + confirmClass).on('click', function() {
-            $overlay.remove();
-            onConfirm();
+        // ── Clear import ──
+        function resetImportMode() {
+            importedHeaders = null;
+            importedRows = null;
+            $modal.find("#wl-import-file").val("");
+            $modal.find("#wl-import-file-label").text("No file chosen");
+            $modal.find("#wl-import-clear").hide();
+            $modal.find("#wl-create-csv-headers-manual").show();
+            $modal.find("#wl-create-csv-headers-imported").hide();
+            $modal.find("#wl-import-messages").empty().hide();
+            $modal.find("#wl-import-preview").empty().hide();
+            $modal.find("#wl-create-csv-ok").removeClass("disabled").text("Create");
+        }
+
+        $modal.on("click", "#wl-import-clear", function () {
+            resetImportMode();
+            var safeName = ruleName.replace(/[^a-zA-Z0-9_\-]/g, "_");
+            $modal.find("#wl-create-csv-name").val(safeName + ".csv");
         });
 
-        $overlay.on('click', function(e) {
-            if (e.target === this) { $overlay.remove(); onCancel(); }
+        // ── Create button ──
+        function validateAndCreate() {
+            var csvName = $modal.find("#wl-create-csv-name").val().trim();
+            var selectedApp = $modal.find("#wl-create-csv-app").val();
+            var $err = $modal.find("#wl-create-csv-error");
+            $err.hide();
+
+            if (!csvName) {
+                $err.text("CSV file name is required.").show();
+                return;
+            }
+            if (!csvName.toLowerCase().endsWith(".csv")) {
+                csvName += ".csv";
+            }
+            if (/[^a-zA-Z0-9_\-.]/.test(csvName)) {
+                $err.text("File name can only contain letters, numbers, underscores, hyphens, and dots.").show();
+                return;
+            }
+            var csvStem = csvName.replace(/\.csv$/i, "");
+            if (!/[a-zA-Z0-9]/.test(csvStem)) {
+                $err.text("File name must contain at least one letter or number.").show();
+                return;
+            }
+
+            var headers, payload;
+
+            if (importedHeaders) {
+                headers = importedHeaders;
+                payload = {
+                    action: "create_csv",
+                    detection_rule: ruleName,
+                    csv_file: csvName,
+                    headers: headers,
+                    app_context: selectedApp,
+                    initial_rows: importedRows
+                };
+            } else {
+                var headersStr = $modal.find("#wl-create-csv-headers").val().trim();
+                if (!headersStr) {
+                    $err.text("At least one column header is required.").show();
+                    return;
+                }
+                headers = headersStr.split(",").map(function (h) { return h.trim(); }).filter(Boolean);
+                if (!headers.length) {
+                    $err.text("At least one non-empty column header is required.").show();
+                    return;
+                }
+                var seen = {};
+                for (var i = 0; i < headers.length; i++) {
+                    var lc = headers[i].toLowerCase();
+                    if (seen[lc]) {
+                        $err.text("Duplicate column header: '" + _.escape(headers[i]) + "'").show();
+                        return;
+                    }
+                    seen[lc] = true;
+                }
+                var safeColNameRe = /^(?=.*[a-zA-Z0-9])[a-zA-Z0-9_\-.()\/:&#@+]+$/;
+                for (var j = 0; j < headers.length; j++) {
+                    if (/\s/.test(headers[j])) {
+                        $err.text("Column '" + _.escape(headers[j].substring(0, 30)) +
+                            "' cannot contain spaces. Use underscores instead (e.g. 'src_ip').").show();
+                        return;
+                    }
+                    if (headers[j].charAt(0) === "_") {
+                        $err.text('Column names starting with "_" are reserved.').show();
+                        return;
+                    }
+                    if (!safeColNameRe.test(headers[j])) {
+                        $err.text("Column '" + _.escape(headers[j].substring(0, 20)) +
+                            "' is invalid. Must contain at least one letter or number. Only letters, numbers, and _-.()/:#@&+ are allowed.").show();
+                        return;
+                    }
+                    if (headers[j].length > 64) {
+                        $err.text("Column header '" + _.escape(headers[j].substring(0, 20)) +
+                            "...' is too long (" + headers[j].length + " chars, max 64).").show();
+                        return;
+                    }
+                }
+                payload = {
+                    action: "create_csv",
+                    detection_rule: ruleName,
+                    csv_file: csvName,
+                    headers: headers,
+                    app_context: selectedApp
+                };
+            }
+
+            if (S.reasonGates.require_reason_csv_creation) {
+                showApprovalReasonPopup("Create " + csvName, function (reason) {
+                    payload.approval_reason = reason;
+                    submitCreateCsv(payload, csvName, headers, selectedApp);
+                });
+                return;
+            }
+
+            submitCreateCsv(payload, csvName, headers, selectedApp);
+        }
+
+        function submitCreateCsv(payload, csvName, headers, selectedApp) {
+            $modal.find("#wl-create-csv-ok").addClass("disabled").text("Creating...");
+
+            restPost(payload)
+            .done(function (resp) {
+                $modal.remove();
+                if (resp.request_id) {
+                    showMsg(
+                        "Your request to create CSV <strong>" + _.escape(csvName) +
+                        "</strong> has been submitted for admin approval.",
+                        "info"
+                    );
+                    return;
+                }
+                var appNote = selectedApp !== defaultApp
+                    ? " in app <strong>" + _.escape(selectedApp) + "</strong>"
+                    : "";
+                var rowNote = importedRows && importedRows.length
+                    ? " with " + importedRows.length + " imported row(s)"
+                    : "";
+                showMsg(
+                    "CSV <strong>" + _.escape(csvName) + "</strong> created with " +
+                    headers.length + " column(s)" + rowNote + " for <strong>" +
+                    _.escape(ruleName) + "</strong>" + appNote + ".",
+                    "info"
+                );
+                _actions.onCsvCreated(ruleName, csvName);
+            })
+            .fail(function (xhr) {
+                var errMsg = "Failed to create CSV.";
+                try {
+                    var r = JSON.parse(xhr.responseText);
+                    if (r.error) { errMsg = r.error; }
+                } catch (ignored) {}
+                $modal.find("#wl-create-csv-error").text(errMsg).show();
+                $modal.find("#wl-create-csv-ok").removeClass("disabled").text("Create");
+            });
+        }
+
+        $modal.on("click", "#wl-create-csv-ok", function () {
+            if (!$(this).hasClass("disabled")) { validateAndCreate(); }
+        });
+        $modal.on("click", "#wl-create-csv-cancel", function () { $modal.remove(); });
+        $modal.on("keydown", function (e) {
+            if (e.key === "Escape") { $modal.remove(); }
+        });
+
+        $modal.on("change", "#wl-create-csv-app", function () {
+            var sel = $(this).val();
+            $modal.find("#wl-create-csv-app-warn").toggle(sel !== defaultApp);
         });
     }
 
+    // ══════════════════════════════════════════════════════════════════
+    // GROUP B: Generic Prompt Modals
+    // ══════════════════════════════════════════════════════════════════
+
+    // ── Remove Row modal (single or bulk) ───────────────────────────
+
+    function showRemoveRowModal(title, bodyHtml, onConfirm, opts) {
+        $(".wl-modal-overlay").remove();
+
+        var o = opts || {};
+        var reasonLabel = o.reasonLabel || "Reason for removal";
+        var placeholder = o.placeholder || "Why is this row being removed?";
+        var confirmText = o.confirmText || "Remove";
+        var confirmClass = o.confirmClass || "btn-danger";
+
+        var html =
+            '<div class="wl-modal-overlay">' +
+                '<div class="wl-modal">' +
+                    '<div class="wl-modal-header">' + title + '</div>' +
+                    '<div class="wl-modal-body">' +
+                        bodyHtml + '<br>' +
+                        '<label class="wl-modal-label">' + reasonLabel + ' <span style="color:#e74c3c">*</span></label>' +
+                        '<textarea id="wl-rmrow-reason" class="wl-modal-input" rows="2" ' +
+                            'maxlength="500" placeholder="' + _.escape(placeholder) + '"></textarea>' +
+                        '<div class="wl-char-counter" data-for="wl-rmrow-reason">0 / 500</div>' +
+                    '</div>' +
+                    '<div class="wl-modal-actions">' +
+                        '<span class="btn ' + confirmClass + '" id="wl-rmrow-ok" style="opacity:0.5;pointer-events:none">' + _.escape(confirmText) + '</span> ' +
+                        '<span class="btn" id="wl-rmrow-cancel">Cancel</span>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+
+        var $modal = $(html);
+        $("body").append($modal);
+
+        $modal.on("input", "#wl-rmrow-reason", function () {
+            var hasReason = $.trim($(this).val()).length > 0;
+            $modal.find("#wl-rmrow-ok").css({
+                opacity: hasReason ? 1 : 0.5,
+                "pointer-events": hasReason ? "auto" : "none"
+            });
+        });
+
+        $modal.on("click", "#wl-rmrow-ok", function () {
+            var reason = $.trim($modal.find("#wl-rmrow-reason").val());
+            if (!reason) { return; }
+            if (C.NON_ASCII_RE.test(reason)) {
+                $modal.find("#wl-rmrow-reason").addClass("wl-input-error");
+                showMsg(C.ASCII_ERROR_MSG, "error");
+                return;
+            }
+            $modal.remove();
+            if (onConfirm) { onConfirm(reason); }
+        });
+        $modal.on("click", "#wl-rmrow-cancel", function () { $modal.remove(); });
+        $modal.on("click", function (e) {
+            if ($(e.target).hasClass("wl-modal-overlay")) { $modal.remove(); }
+        });
+        $modal.on("keydown", "#wl-rmrow-reason", function (e) {
+            if (e.which === 13 && !e.shiftKey) {
+                e.preventDefault();
+                $modal.find("#wl-rmrow-ok").trigger("click");
+            }
+        });
+
+        setTimeout(function () { $modal.find("#wl-rmrow-reason").focus(); }, 100);
+    }
+
+    // ── Remove Column modal ─────────────────────────────────────────
+
+    function showRemoveColumnModal(colName, onConfirm) {
+        $(".wl-modal-overlay").remove();
+
+        var html =
+            '<div class="wl-modal-overlay">' +
+                '<div class="wl-modal">' +
+                    '<div class="wl-modal-header">Remove Column</div>' +
+                    '<div class="wl-modal-body">' +
+                        'Remove column <strong>' + _.escape(colName) + '</strong>?<br><br>' +
+                        'This will delete this column and all its data from every row.<br><br>' +
+                        '<label class="wl-modal-label">Reason for removal <span style="color:#e74c3c">*</span></label>' +
+                        '<textarea id="wl-rmcol-reason" class="wl-modal-input" rows="2" ' +
+                            'maxlength="500" placeholder="Why is this column being removed?"></textarea>' +
+                        '<div class="wl-char-counter" data-for="wl-rmcol-reason">0 / 500</div>' +
+                    '</div>' +
+                    '<div class="wl-modal-actions">' +
+                        '<span class="btn btn-danger" id="wl-rmcol-ok" style="opacity:0.5;pointer-events:none">Remove</span> ' +
+                        '<span class="btn" id="wl-rmcol-cancel">Cancel</span>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+
+        var $modal = $(html);
+        $("body").append($modal);
+
+        $modal.on("input", "#wl-rmcol-reason", function () {
+            var hasReason = $.trim($(this).val()).length > 0;
+            $modal.find("#wl-rmcol-ok").css({
+                opacity: hasReason ? 1 : 0.5,
+                "pointer-events": hasReason ? "auto" : "none"
+            });
+        });
+
+        $modal.on("click", "#wl-rmcol-ok", function () {
+            var reason = $.trim($modal.find("#wl-rmcol-reason").val());
+            if (!reason) { return; }
+            if (C.NON_ASCII_RE.test(reason)) {
+                $modal.find("#wl-rmcol-reason").addClass("wl-input-error");
+                showMsg(C.ASCII_ERROR_MSG, "error");
+                return;
+            }
+            $modal.remove();
+            if (onConfirm) { onConfirm(reason); }
+        });
+        $modal.on("click", "#wl-rmcol-cancel", function () { $modal.remove(); });
+        $modal.on("click", function (e) {
+            if ($(e.target).hasClass("wl-modal-overlay")) { $modal.remove(); }
+        });
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // GROUP C: Approval Action Modals
+    // ══════════════════════════════════════════════════════════════════
+
+    // ── Approve confirmation ────────────────────────────────────────
+
+    function showApproveConfirmModal(requestId) {
+        $(".wl-modal-overlay").remove();
+        var $modal = $(
+            '<div class="wl-modal-overlay">' +
+                '<div class="wl-modal">' +
+                    '<div class="wl-modal-header">Approve Request</div>' +
+                    '<div class="wl-modal-body">' +
+                        '<p>Approve this request? The action will be executed immediately.</p>' +
+                        '<p>Request ID: <strong>' + _.escape(requestId) + '</strong></p>' +
+                    '</div>' +
+                    '<div class="wl-modal-actions">' +
+                        '<span class="btn btn-success" id="wl-approve-ok">Approve</span> ' +
+                        '<span class="btn" id="wl-approve-cancel">Cancel</span>' +
+                    '</div>' +
+                '</div>' +
+            '</div>'
+        );
+        $("body").append($modal);
+
+        $modal.on("click", "#wl-approve-ok", function () {
+            $modal.remove();
+            var $btn = $(".wl-approve-btn").filter(function () { return $(this).data("id") === requestId; });
+            $btn.text("Approving\u2026").css("pointer-events", "none");
+            restPost({
+                action: "process_approval",
+                request_id: requestId,
+                decision: "approve"
+            }).done(function (data) {
+                if (data.error) {
+                    showMsg(_.escape(data.error), "error");
+                    $btn.text("Approve").css("pointer-events", "auto");
+                } else {
+                    showMsg(_.escape(data.message || "Request approved and executed."), "success");
+                    _actions.reloadCsv();
+                }
+            }).fail(function (xhr) {
+                var err = "Failed to process approval.";
+                try { err = JSON.parse(xhr.responseText).error || err; } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
+                showMsg(_.escape(err), "error");
+                $btn.text("Approve").css("pointer-events", "auto");
+            });
+        });
+
+        $modal.on("click", "#wl-approve-cancel", function () { $modal.remove(); });
+        $modal.on("click", function (e) {
+            if ($(e.target).hasClass("wl-modal-overlay")) { $modal.remove(); }
+        });
+    }
+
+    // ── Reject with reason ──────────────────────────────────────────
+
+    function showRejectReasonModal(requestId) {
+        $(".wl-modal-overlay").remove();
+        var $modal = $(
+            '<div class="wl-modal-overlay">' +
+                '<div class="wl-modal">' +
+                    '<div class="wl-modal-header">Reject Request</div>' +
+                    '<div class="wl-modal-body">' +
+                        '<p>Request ID: <strong>' + _.escape(requestId) + '</strong></p>' +
+                        '<label class="wl-modal-label">Reason for rejection ' +
+                            '<span style="color:#e74c3c">*</span></label>' +
+                        '<textarea id="wl-inline-reject-reason" class="wl-modal-input" rows="3" ' +
+                            'maxlength="500" placeholder="Why is this request being rejected?"></textarea>' +
+                        '<div class="wl-char-counter" data-for="wl-inline-reject-reason">0 / 500</div>' +
+                    '</div>' +
+                    '<div class="wl-modal-actions">' +
+                        '<span class="btn btn-danger" id="wl-inline-reject-ok" ' +
+                            'style="opacity:0.5;pointer-events:none">Reject</span> ' +
+                        '<span class="btn" id="wl-inline-reject-cancel">Cancel</span>' +
+                    '</div>' +
+                '</div>' +
+            '</div>'
+        );
+        $("body").append($modal);
+
+        $modal.on("input", "#wl-inline-reject-reason", function () {
+            var hasReason = $.trim($(this).val()).length > 0;
+            $modal.find("#wl-inline-reject-ok").css({
+                opacity: hasReason ? 1 : 0.5,
+                "pointer-events": hasReason ? "auto" : "none"
+            });
+        });
+
+        $modal.on("click", "#wl-inline-reject-ok", function () {
+            var reason = $.trim($modal.find("#wl-inline-reject-reason").val());
+            if (!reason) { return; }
+            if (C.NON_ASCII_RE.test(reason)) {
+                $modal.find("#wl-inline-reject-reason").addClass("wl-input-error");
+                showMsg(C.ASCII_ERROR_MSG, "error");
+                return;
+            }
+            $modal.remove();
+            var $btn = $(".wl-reject-btn").filter(function () { return $(this).data("id") === requestId; });
+            $btn.text("Rejecting\u2026").css("pointer-events", "none");
+            restPost({
+                action: "process_approval",
+                request_id: requestId,
+                decision: "reject",
+                rejection_reason: reason
+            }).done(function (data) {
+                if (data.error) {
+                    showMsg(_.escape(data.error), "error");
+                    $btn.text("Reject").css("pointer-events", "auto");
+                } else {
+                    showMsg(_.escape(data.message || "Request rejected."), "success");
+                    _actions.reloadCsv();
+                }
+            }).fail(function (xhr) {
+                var err = "Failed to reject request.";
+                try { err = JSON.parse(xhr.responseText).error || err; } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
+                showMsg(_.escape(err), "error");
+                $btn.text("Reject").css("pointer-events", "auto");
+            });
+        });
+
+        $modal.on("click", "#wl-inline-reject-cancel", function () { $modal.remove(); });
+        $modal.on("click", function (e) {
+            if ($(e.target).hasClass("wl-modal-overlay")) { $modal.remove(); }
+        });
+
+        setTimeout(function () { $modal.find("#wl-inline-reject-reason").focus(); }, 100);
+    }
+
+    // ── Cancel own request ──────────────────────────────────────────
+
+    function showCancelRequestModal(requestId) {
+        $(".wl-modal-overlay").remove();
+        var $modal = $(
+            '<div class="wl-modal-overlay">' +
+                '<div class="wl-modal">' +
+                    '<div class="wl-modal-header">Cancel Request</div>' +
+                    '<div class="wl-modal-body">' +
+                        '<p>Request ID: <strong>' + _.escape(requestId) + '</strong></p>' +
+                        '<label class="wl-modal-label">Reason for cancellation ' +
+                            '<span style="color:#e74c3c">*</span></label>' +
+                        '<textarea id="wl-inline-cancel-reason" class="wl-modal-input" rows="3" ' +
+                            'maxlength="500" placeholder="Why are you cancelling this request?"></textarea>' +
+                        '<div class="wl-char-counter" data-for="wl-inline-cancel-reason">0 / 500</div>' +
+                    '</div>' +
+                    '<div class="wl-modal-actions">' +
+                        '<span class="btn" id="wl-inline-cancel-ok" ' +
+                            'style="background:#f39c12;color:#fff;opacity:0.5;pointer-events:none">Cancel Request</span> ' +
+                        '<span class="btn" id="wl-inline-cancel-dismiss">Close</span>' +
+                    '</div>' +
+                '</div>' +
+            '</div>'
+        );
+        $("body").append($modal);
+
+        $modal.on("input", "#wl-inline-cancel-reason", function () {
+            var hasReason = $.trim($(this).val()).length > 0;
+            $modal.find("#wl-inline-cancel-ok").css({
+                opacity: hasReason ? 1 : 0.5,
+                "pointer-events": hasReason ? "auto" : "none"
+            });
+        });
+
+        $modal.on("click", "#wl-inline-cancel-ok", function () {
+            var reason = $.trim($modal.find("#wl-inline-cancel-reason").val());
+            if (!reason) { return; }
+            if (C.NON_ASCII_RE.test(reason)) {
+                $modal.find("#wl-inline-cancel-reason").addClass("wl-input-error");
+                showMsg(C.ASCII_ERROR_MSG, "error");
+                return;
+            }
+            $modal.remove();
+            var $btn = $(".wl-cancel-request-btn").filter(function () { return $(this).data("id") === requestId; });
+            $btn.text("Cancelling\u2026").css("pointer-events", "none");
+            restPost({
+                action: "cancel_request",
+                request_id: requestId,
+                cancellation_reason: reason
+            }).done(function (data) {
+                if (data.error) {
+                    showMsg(_.escape(data.error), "error");
+                    $btn.text("Cancel Request").css("pointer-events", "auto");
+                } else {
+                    showMsg(_.escape(data.message || "Request cancelled."), "success");
+                    _actions.reloadCsv();
+                }
+            }).fail(function (xhr) {
+                var err = "Failed to cancel request.";
+                try { err = JSON.parse(xhr.responseText).error || err; } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
+                showMsg(_.escape(err), "error");
+                $btn.text("Cancel Request").css("pointer-events", "auto");
+            });
+        });
+
+        $modal.on("click", "#wl-inline-cancel-dismiss", function () { $modal.remove(); });
+        $modal.on("click", function (e) {
+            if ($(e.target).hasClass("wl-modal-overlay")) { $modal.remove(); }
+        });
+
+        setTimeout(function () { $modal.find("#wl-inline-cancel-reason").focus(); }, 100);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
     // Public API
+    // ══════════════════════════════════════════════════════════════════
+
     return {
-        init: init,
-        showAddRowModal: showAddRowModal,
-        showRemoveModal: showRemoveModal,
-        showEditModal: showEditModal,
-        showConfirmModal: showConfirmModal
+        init:                     init,
+        // Group A: Entity CRUD
+        showRemoveModal:          showRemoveModal,
+        showNewRuleModal:         showNewRuleModal,
+        showApprovalReasonPopup:  showApprovalReasonPopup,
+        showCreateCsvModal:       showCreateCsvModal,
+        // Group B: Generic prompts
+        showRemoveRowModal:       showRemoveRowModal,
+        showRemoveColumnModal:    showRemoveColumnModal,
+        // Group C: Approval actions
+        showApproveConfirmModal:  showApproveConfirmModal,
+        showRejectReasonModal:    showRejectReasonModal,
+        showCancelRequestModal:   showCancelRequestModal
     };
 });

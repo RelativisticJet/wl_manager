@@ -13,11 +13,12 @@ require([
     "underscore",
     "splunkjs/mvc",
     "splunkjs/mvc/utils",
+    "app/wl_manager/modules/wl_constants",
     "app/wl_manager/modules/wl_rest",
     "app/wl_manager/modules/wl_ui",
     "app/wl_manager/modules/wl_debug",
     "splunkjs/mvc/simplexml/ready!"
-], function ($, _, mvc, utils, REST, UI, Debug) {
+], function ($, _, mvc, utils, C, REST, UI, Debug) {
     "use strict";
 
     // Activate debug interceptor (remove for production)
@@ -600,6 +601,11 @@ require([
         $modal.on("click", "#wl-cancel-ok", function () {
             var reason = $.trim($modal.find("#wl-cancel-reason").val());
             if (!reason) { return; }
+            if (C.NON_ASCII_RE.test(reason)) {
+                $modal.find("#wl-cancel-reason").addClass("wl-input-error");
+                showCpAlert("Validation Error", C.ASCII_ERROR_MSG, "error");
+                return;
+            }
             $modal.remove();
             restPost({
                 action: "cancel_request",
@@ -657,6 +663,11 @@ require([
         $modal.on("click", "#wl-reject-ok", function () {
             var reason = $.trim($modal.find("#wl-reject-reason").val());
             if (!reason) { return; }
+            if (C.NON_ASCII_RE.test(reason)) {
+                $modal.find("#wl-reject-reason").addClass("wl-input-error");
+                showCpAlert("Validation Error", C.ASCII_ERROR_MSG, "error");
+                return;
+            }
             $modal.remove();
             restPost({
                 action: isDual ? "process_dual_approval" : "process_approval",
@@ -1585,6 +1596,12 @@ require([
 
         $(".wl-cp-reset-analyst").on("click", function () {
             var analyst = $(this).data("analyst");
+            if (analyst === cpCurrentUser) {
+                showCpAlert("Error",
+                    "Cannot reset your own daily usage. Ask another admin or superadmin.",
+                    "error");
+                return;
+            }
             showCpConfirm("Reset Usage",
                 "Reset daily usage counters for " + analyst + "?",
                 "Reset",
@@ -1598,8 +1615,10 @@ require([
                         }
                         loadAnalystUsage(true);
                     })
-                    .fail(function () {
-                        showCpAlert("Error", "Failed to reset usage.", "error");
+                    .fail(function (xhr) {
+                        var err = "Failed to reset usage.";
+                        try { err = JSON.parse(xhr.responseText).error || err; } catch (e) { /* ignore */ }
+                        showCpAlert("Error", err, "error");
                     });
                 }
             );
