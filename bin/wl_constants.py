@@ -457,6 +457,7 @@ _SAFE_COLNAME_RE = re.compile(r"^(?=.*[a-zA-Z0-9])[a-zA-Z0-9_\-\.()/:#@&+]+$")
 Allows alphanumerics, underscore, hyphen, dot, parentheses, colon, slash, @, #, &, +.
 Requires at least one alphanumeric character."""
 
-_SANITIZE_RE = re.compile(r'[^\w\s.,;:!?\'"()\-/@#&+=\[\]{}%$\n\r]', re.UNICODE)
+_SANITIZE_RE = re.compile(r'[^a-zA-Z0-9_ \t.,;:!?\'"()\-/@#&+=\[\]{}%$\n\r]')
 """Regex pattern for sanitizing user-provided text fields (reasons, descriptions, comments).
-Strips control characters, backticks, backslashes, and other dangerous characters."""
+ASCII-only: strips all non-ASCII characters (including Cyrillic, CJK, etc.),
+control characters, backticks, backslashes, and other dangerous characters."""

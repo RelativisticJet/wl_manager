@@ -1,0 +1,14 @@
+{
+  "item_type": "csv",
+  "name": "DR_TEST_5.csv",
+  "deleted_by": "analyst2",
+  "deleted_at": 1775229046,
+  "deleted_at_human": "2026-04-03 15:10:46 UTC",
+  "comment": "requesting to remove DR_TEST_5.csv",
+  "expiry_ts": 1777821046,
+  "expiry_human": "2026-05-03 15:10:46 UTC",
+  "retention_days": 30,
+  "rule_name": "DR_TEST_5",
+  "app_context": "wl_manager",
+  "original_path": "/opt/splunk/etc/apps/wl_manager/lookups/DR_TEST_5.csv"
+}

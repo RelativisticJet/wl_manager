@@ -18,6 +18,7 @@ from typing import Optional, Tuple
 
 __all__ = [
     "sanitize_text",
+    "validate_ascii_text",
     "is_safe_filename",
     "safe_realpath",
     "build_csv_path",
@@ -63,6 +64,19 @@ def sanitize_text(text: str, max_length: int = 500) -> str:
         cleaned = cleaned[:max_length]
 
     return cleaned
+
+
+_NON_ASCII_RE = re.compile(r'[^\x00-\x7F]')
+
+
+def validate_ascii_text(text):
+    """Return an error string if text contains non-ASCII characters, else None."""
+    if not text or not isinstance(text, str):
+        return None
+    match = _NON_ASCII_RE.search(text)
+    if match:
+        return "Only ASCII characters are allowed in text fields"
+    return None
 
 
 def is_safe_filename(name: str, allowed_extensions: Tuple[str, ...] = (".csv",)) -> bool:

@@ -1,5 +1,4 @@
 service_account,cloud_provider,api_endpoint,threshold,Comment,expiration
 svc-data-pipeline,AWS,s3:GetObject,50000,Data lake ingestion pipeline - high volume expected,
 svc-backup-sync,Azure,blob.core.windows.net,100000,Cross-region backup replication,
-app-frontend-cdn,AWS,cloudfront:GetDistribution,80000,CDN cache invalidation during deployment,2026-04-05
 svc-log-shipper,GCP,logging.googleapis.com,200000,Centralized log collection service,
