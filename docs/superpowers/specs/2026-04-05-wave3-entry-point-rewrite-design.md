@@ -247,7 +247,8 @@ Approval workflow submission (3 submit functions), pending state management (loc
 - `wl_ui` (for `showMsg`, `formatDailyLimitMsg`)
 
 ### State proxy access
-Reads/writes: `currentRows`, `currentHeaders`, `originalRows`, `selectedCsv`, `selectedApp`, `selectedRule`, `loadedMtime`, `csvLocked`, `saving`, `pendingBulkEditCount`, `pendingFilterActive`, `pendingFilterIndices`, `pendingApprovals` (new), `isAdmin` (new)
+Reads/writes (existing props): `currentRows`, `currentHeaders`, `originalRows`, `selectedCsv`, `selectedApp`, `selectedRule`, `loadedMtime`, `csvLocked`, `saving`, `pendingBulkEditCount`, `pendingFilterActive`, `pendingFilterIndices`
+Reads/writes (new props added in Wave 3): `pendingApprovals`, `isAdmin`
 
 ### Callbacks via `actions`
 - `syncInputs()` — from Table
@@ -285,7 +286,7 @@ function ($, _, REST, UI) {
 ```
 
 ### What stays in entry point
-- `doColumnRemoveWithGateCheck()` (~30 lines) — orchestration across ApprovalUI + Save + Modals
+- `doColumnRemoveWithGateCheck()` (source lines 792-822, ~30 lines) — orchestration across ApprovalUI + Save + Modals
 
 ## Step 7: `wl_save.js` (~530 lines) — NEW MODULE
 
@@ -331,7 +332,9 @@ Full save pipeline — all 5 save functions, undo system, comment validation mod
 - `wl_constants` (for `NON_ASCII_RE`, `ASCII_ERROR_MSG`)
 
 ### State proxy access
-Reads/writes: `currentRows`, `currentHeaders`, `originalRows`, `originalHeaders`, `selectedCsv`, `selectedApp`, `selectedRule`, `loadedMtime`, `loadedPendingCount`, `saving`, `csvLocked`, `pendingBulkEditCount`, `expireColumn`, `searchQuery`
+Reads/writes (existing props): `currentRows`, `currentHeaders`, `originalRows`, `originalHeaders`, `selectedCsv`, `selectedApp`, `selectedRule`, `loadedMtime`, `loadedPendingCount`, `saving`, `csvLocked`, `pendingBulkEditCount`, `expireColumn`, `searchQuery`
+
+Note: Save and ApprovalUI access different subsets of the proxy. Neither module writes the other's props. No cross-module state conflicts.
 
 ### Callbacks via `actions`
 - `syncInputs()` — from Table
@@ -391,10 +394,31 @@ Both are tightly coupled to the save lifecycle:
 | **Total** | **~1530** | |
 
 ### State proxy additions (2 new properties)
+
 ```javascript
 prop("pendingApprovals", function () { return pendingApprovals; }, function (v) { pendingApprovals = v; });
 prop("isAdmin",          function () { return isAdmin; },          function (v) { isAdmin = v; });
 ```
+
+Note: The existing 18 properties (`currentHeaders`, `originalHeaders`, `currentRows`, `originalRows`, `selectedRule`, `selectedCsv`, `selectedApp`, `expireColumn`, `searchQuery`, `csvLocked`, `saving`, `loadedMtime`, `pendingBulkEditCount`, `pendingFilterActive`, `pendingFilterIndices`, `mappingData`, `reasonGates`, `allRules`) are carried forward unchanged from Wave 2.
+
+### Admin detection timing fix
+
+The admin role detection IIFE (line 84-94) calls `applyPendingHighlighting()` asynchronously. After Wave 3, this function lives in `ApprovalUI` module. The call must use a late-binding trampoline to ensure it resolves at call-time (after all inits complete):
+
+```javascript
+(function detectAdminRole() {
+    restGet({ action: "get_approval_queue" })
+    .done(function () {
+        isAdmin = true;
+        if (pendingApprovals.length) {
+            ApprovalUI.applyPendingHighlighting();  // safe: async callback fires after all inits
+        }
+    });
+})();
+```
+
+This is safe because: (1) the IIFE fires an async REST call, (2) the `.done()` callback executes on a future event loop tick, (3) all module inits run synchronously before the first event loop yield. The callback will always fire after `ApprovalUI.init()` completes.
 
 ### Require array (final)
 ```javascript
@@ -539,6 +563,8 @@ Step 8: Entry point cleanup                remove dead code, final wiring
 **1. Circular callback chains**
 `Save.doSave()` → `ApprovalUI.submitApprovalRequest()` → `loadCsv()` → `ApprovalUI.applyPendingHighlighting()` → indirectly `Save.startChangeMonitoring()`.
 **Mitigation**: All cross-module calls go through late-binding trampolines. No Wave 3 module imports another directly. Circular references structurally impossible at AMD level.
+**Runtime safety**: The chain is safe because each link is async (REST `.done()` callbacks). `doSave` returns immediately after posting; `submitApprovalRequest`'s `.done()` calls `loadCsv`; `loadCsv`'s `.done()` calls `applyPendingHighlighting` + `startChangeMonitoring`. No two steps execute in the same synchronous call stack, so no re-entrancy or state race is possible.
+**Test case**: After Step 7, test: edit 2+ rows → Save → verify approval submission → verify CSV reloads → verify pending highlighting appears → verify change monitoring restarts. This exercises the full circular chain.
 
 **2. State proxy property count (20 properties)**
 **Mitigation**: ~40 lines of boilerplate. Acceptable vs separate state module (Phase 5 failure). No action unless >30 properties.
