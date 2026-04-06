@@ -76,6 +76,9 @@ require([
     var csvLocked        = false;  // true when ANY pending approval exists — entire file locked
     var isAdmin          = false;  // true if current user has admin/sc_admin/wl_admin role
     var pendingBulkEditCount = 0;  // tracks unsaved Bulk Edit changes (for correct limit classification)
+    var pendingFilterActive  = false; // true when approval-highlight filter is active
+    var pendingFilterIndices = null;  // array of row indices to highlight, or null
+    var additionPreviewData = null;   // { headers, rowKeys } for row-addition approval preview
 
     // ── Dark theme (module handles body class; WM adds panel class) ──
     if (UI.detectDarkTheme()) {
@@ -92,7 +95,7 @@ require([
             // If CSV was already loaded & locked before this check completed,
             // re-render the approval bar now that we know user is admin
             if (isAdmin && pendingApprovals.length) {
-                applyPendingHighlighting();
+                ApprovalUI.applyPendingHighlighting();
             }
         });
     })();
@@ -197,12 +200,12 @@ require([
             doSaveBulkRemoval:         function () { return doSaveBulkRemoval.apply(null, arguments); },
             doSaveColumnAddition:      function () { return doSaveColumnAddition.apply(null, arguments); },
             doColumnRemoveWithGateCheck: function () { return doColumnRemoveWithGateCheck.apply(null, arguments); },
-            submitApprovalRequest:     function () { return submitApprovalRequest.apply(null, arguments); },
+            submitApprovalRequest:     function () { return ApprovalUI.submitApprovalRequest.apply(null, arguments); },
             exportCsv:                 function () { return CsvIO.exportCsv(); },
             importCsv:                 function () { return CsvIO.importCsv.apply(null, arguments); },
             loadVersions:              function () { return loadVersions.apply(null, arguments); },
             clearUndo:                 function () { return clearUndo(); },
-            applyPendingCssHighlighting: function () { return applyPendingCssHighlighting(); },
+            applyPendingCssHighlighting: function () { return ApprovalUI.applyPendingCssHighlighting(); },
             formatLocalDateTime:       function () { return DatePicker.formatLocalDateTime.apply(null, arguments); },
             handleSaveError:           function () { return handleSaveError.apply(null, arguments); }
         }
@@ -872,6 +875,10 @@ require([
     // (showApproveConfirmModal, showRejectReasonModal, showRemoveColumnModal
     //  → extracted to modules/wl_modals.js)
 
+    // Pending column removal — stored so doSave() can include the reason
+    // and the auto-save timer can fire after the 10-second undo window.
+    var pendingColRemoval = null; // { colName, reason, prevRows, prevOriginal, prevHeaders, prevOrigHeaders }
+
     function doSaveColumnRemoval(colName, reason) {
         syncInputs();
 
@@ -888,15 +895,70 @@ require([
         var prevHeaders = currentHeaders.slice();
         var prevOrigHeaders = originalHeaders.slice();
 
-        // Remove from headers
+        // Remove locally (not saved yet)
         var idx = currentHeaders.indexOf(colName);
         if (idx !== -1) { currentHeaders.splice(idx, 1); }
-
-        // Remove from all rows
         currentRows.forEach(function (row) { delete row[colName]; });
 
         refreshTable();
-        showMsg("Removing column and saving&hellip;", "info");
+
+        // Store pending removal for auto-save / doSave() inclusion
+        pendingColRemoval = {
+            colName: colName, reason: reason,
+            prevRows: prevRows, prevOriginal: prevOriginal,
+            prevHeaders: prevHeaders, prevOrigHeaders: prevOrigHeaders
+        };
+
+        // Show undo bar — auto-save fires when countdown ends
+        showColumnRemovalUndoBar(colName);
+    }
+
+    function showColumnRemovalUndoBar(colName) {
+        clearUndo();
+        var desc = 'Column removed: <strong>' + _.escape(colName) +
+                   '</strong> — auto-saves when countdown ends';
+
+        var $bar = $table.find("#wl-undo-bar");
+        $bar.html(
+            '<div class="wl-undo">' +
+            '<span>' + desc + '</span> ' +
+            '<button class="btn btn-small" id="btn-undo">Undo</button> ' +
+            '<span class="wl-undo-countdown" id="undo-countdown">10s</span>' +
+            '</div>'
+        );
+
+        var secondsLeft = 10;
+        undoTimer = setInterval(function () {
+            secondsLeft--;
+            $bar.find("#undo-countdown").text(secondsLeft + "s");
+            if (secondsLeft <= 0) {
+                clearUndo();
+                commitPendingColumnRemoval();
+            }
+        }, 1000);
+
+        $bar.off("click", "#btn-undo").on("click", "#btn-undo", function () {
+            undoColumnRemoval();
+        });
+    }
+
+    function undoColumnRemoval() {
+        if (!pendingColRemoval) { return; }
+        // Restore local state — no server call, no audit event
+        currentHeaders = pendingColRemoval.prevHeaders.slice();
+        currentRows = pendingColRemoval.prevRows.map(function (r) { return $.extend({}, r); });
+        pendingColRemoval = null;
+        clearUndo();
+        refreshTable();
+        showMsg("Column removal undone.", "info");
+    }
+
+    function commitPendingColumnRemoval() {
+        if (!pendingColRemoval) { return; }
+        var pcr = pendingColRemoval;
+        pendingColRemoval = null;
+
+        showMsg("Saving column removal&hellip;", "info");
 
         restPost({
             action:          "save_csv",
@@ -905,24 +967,25 @@ require([
             detection_rule:  selectedRule || "",
             headers:         currentHeaders,
             rows:            currentRows,
-            comment:         reason || "Column removal",
+            comment:         pcr.reason || "Column removal",
             removal_reasons: [],
-            column_removal_reasons: [{ column: colName, reason: reason }],
+            column_removal_reasons: [{ column: pcr.colName, reason: pcr.reason }],
             expected_mtime:  loadedMtime
         })
         .done(function (data) {
             if (data.error) {
                 showMsg(_.escape(data.error), "error");
-                currentHeaders = prevHeaders;
-                originalHeaders = prevOrigHeaders;
-                currentRows = prevRows.map(function (r) { return $.extend({}, r); });
-                originalRows = prevOriginal.map(function (r) { return $.extend({}, r); });
+                // Restore local state on save failure
+                currentHeaders = pcr.prevHeaders;
+                originalHeaders = pcr.prevOrigHeaders;
+                currentRows = pcr.prevRows.map(function (r) { return $.extend({}, r); });
+                originalRows = pcr.prevOriginal.map(function (r) { return $.extend({}, r); });
                 refreshTable();
                 return;
             }
 
             var diffInfo = data.diff || {};
-            var msg = 'Column <strong>' + _.escape(colName) + '</strong> removed and saved.';
+            var msg = 'Column <strong>' + _.escape(pcr.colName) + '</strong> removed and saved.';
             if (diffInfo.edited_count > 0) {
                 msg += " " + diffInfo.edited_count + " row(s) also edited.";
             }
@@ -930,21 +993,17 @@ require([
             originalRows = currentRows.map(function (r) { return $.extend({}, r); });
             originalHeaders = currentHeaders.slice();
             if (data.file_mtime) { loadedMtime = data.file_mtime; }
-
-            // Show undo bar for column removal
-            showUndoBar(null, prevRows, prevOriginal, colName, prevHeaders, prevOrigHeaders);
             if (diffInfo.text_diff && diffInfo.text_diff.length) {
                 renderDiff(diffInfo);
             }
-
             loadVersions(selectedCsv, selectedApp);
         })
         .fail(function (xhr) {
             handleSaveError(xhr, "Failed to save after column removal.");
-            currentHeaders = prevHeaders;
-            originalHeaders = prevOrigHeaders;
-            currentRows = prevRows.map(function (r) { return $.extend({}, r); });
-            originalRows = prevOriginal.map(function (r) { return $.extend({}, r); });
+            currentHeaders = pcr.prevHeaders;
+            originalHeaders = pcr.prevOrigHeaders;
+            currentRows = pcr.prevRows.map(function (r) { return $.extend({}, r); });
+            originalRows = pcr.prevOriginal.map(function (r) { return $.extend({}, r); });
             refreshTable();
         });
     }
@@ -1001,30 +1060,25 @@ require([
         });
     }
 
+    // Row removal undo — saves the pre-removal snapshot back to server
     function doUndo() {
         if (!undoState) { return; }
 
-        // Restore rows to the state before removal
-        currentRows = undoState.prevRows.map(function (r) { return $.extend({}, r); });
+        // Build payload from snapshot WITHOUT modifying in-memory state.
+        // State is only updated on success (via reloadCsvQuiet).
+        var undoRows = undoState.prevRows.map(function (r) { return $.extend({}, r); });
 
-        // Restore headers if this was a column removal undo
-        if (undoState.prevHeaders) {
-            currentHeaders = undoState.prevHeaders.slice();
-        }
-
-        var wasColumnUndo = !!undoState.prevHeaders;
         clearUndo();
         showMsg("Saving undo&hellip;", "info");
 
-        // Save the restored state back to the server
         restPost({
             action:          "save_csv",
             csv_file:        selectedCsv,
             app_context:     selectedApp,
             detection_rule:  selectedRule || "",
             headers:         currentHeaders,
-            rows:            currentRows,
-            comment:         wasColumnUndo ? "Undo column removal" : "Undo row removal",
+            rows:            undoRows,
+            comment:         "Undo row removal",
             removal_reasons: [],
             expected_mtime:  loadedMtime
         })
@@ -1277,7 +1331,7 @@ require([
             // Build locked state BEFORE rendering so buildRow() can check it
             pendingApprovals = data.pending_approvals || [];
             loadedPendingCount = pendingApprovals.length;
-            buildLockedState();
+            ApprovalUI.buildLockedState();
             renderTable(data.headers || [], data.rows || []);
             loadVersions(csvFile, appContext);
             loadedMtime = data.file_mtime || null;
@@ -1285,7 +1339,7 @@ require([
             Presence.startPresenceMonitoring();
             // Apply pending approval CSS highlighting + banner
             if (pendingApprovals.length) {
-                applyPendingHighlighting();
+                ApprovalUI.applyPendingHighlighting();
             }
             // Load server-side column widths
             restGet({ action: "get_col_widths", csv_file: csvFile, app: appContext || "" })
@@ -1417,6 +1471,16 @@ require([
             // Include bulk edit marker so backend classifies edits correctly
             if (pendingBulkEditCount > 0) {
                 savePayload._bulk_edit_count = pendingBulkEditCount;
+            }
+            // Include pending column removal reason if user clicks Save
+            // during the 10-second undo countdown
+            if (pendingColRemoval) {
+                savePayload.column_removal_reasons = [{
+                    column: pendingColRemoval.colName,
+                    reason: pendingColRemoval.reason
+                }];
+                pendingColRemoval = null;
+                clearUndo();
             }
             restPost(savePayload)
             .done(function (data) {

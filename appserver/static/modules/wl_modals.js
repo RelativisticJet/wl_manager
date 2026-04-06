@@ -1227,9 +1227,18 @@ define([
                 S.pendingBulkEditCount += changedCount;
                 $modal.remove();
                 _actions.refreshTable();
-                showMsg("Bulk edit: set <strong>" + _.escape(col) + "</strong> to &ldquo;" +
-                        _.escape(val) + "&rdquo; on " + changedCount + " row(s). " +
-                        "Click <strong>Save Changes</strong> to persist.", "success");
+                var editDesc;
+                if (val === "" && S.expireColumn && col === S.expireColumn) {
+                    editDesc = "Bulk edit: cleared <strong>" + _.escape(col) +
+                               "</strong> (set to permanent) on " + changedCount + " row(s).";
+                } else if (val === "") {
+                    editDesc = "Bulk edit: cleared <strong>" + _.escape(col) +
+                               "</strong> column on " + changedCount + " row(s).";
+                } else {
+                    editDesc = "Bulk edit: set <strong>" + _.escape(col) + "</strong> to &ldquo;" +
+                               _.escape(val) + "&rdquo; on " + changedCount + " row(s).";
+                }
+                showMsg(editDesc + " Click <strong>Save Changes</strong> to persist.", "success");
             }
 
             // Check approval gate

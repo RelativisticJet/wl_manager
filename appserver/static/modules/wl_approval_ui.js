@@ -1,9 +1,7 @@
 define([
-  'jquery',
-  'underscore',
-  '../app/wl_rest',
-  '../app/wl_ui'
-], function($, _, Rest, UI) {
+  "jquery",
+  "underscore"
+], function ($, _) {
 
   // ============================================================
   // MODULE-LEVEL PRIVATE STATE
@@ -18,8 +16,7 @@ define([
   var additionPreviewPage = 0;
   var additionPreviewData = null; // { headers, rowKeys }
   var PREVIEW_PAGE_SIZE = 10;
-  var pendingFilterActive = false;
-  var pendingFilterIndices = null;
+  // pendingFilterActive / pendingFilterIndices live in _state (shared with wl_table.js)
 
   // ============================================================
   // EXTRACTED APPROVAL FUNCTIONS (with _state and _actions proxies)
@@ -163,8 +160,15 @@ function submitBulkEditApproval(col, val, rowIndices, changedCount, reason) {
             return visHeaders.map(function (h) { return _state.currentRows[idx][h] || ""; });
         });
 
-        var displayVal = val.length > 100 ? val.substring(0, 100) + "..." : val;
-        var description = "Bulk edit " + changedCount + " rows — set '" + col + "' to '" + displayVal + "'";
+        var description;
+        if (val === "" && _state.expireColumn && col === _state.expireColumn) {
+            description = "Bulk edit " + changedCount + " rows - clear '" + col + "' (set to permanent)";
+        } else if (val === "") {
+            description = "Bulk edit " + changedCount + " rows - clear '" + col + "' column";
+        } else {
+            var displayVal = val.length > 100 ? val.substring(0, 100) + "..." : val;
+            description = "Bulk edit " + changedCount + " rows - set '" + col + "' to '" + displayVal + "'";
+        }
 
         _actions.showMsg("Submitting bulk edit approval request&hellip;", "info");
 
@@ -259,7 +263,7 @@ function submitInlineMultiEditApproval(changedCount, reason) {
 }
 
 function buildLockedState() {
-        csvLocked = _state.pendingApprovals.length > 0;
+        _state.csvLocked = _state.pendingApprovals.length > 0;
 }
 
 /**
@@ -344,9 +348,6 @@ function getPendingRowIndices(pa) {
         return indices;
 }
 
-var pendingFilterActive = false;  // tracks whether we're filtering to show only requested rows
-var pendingFilterIndices = null;  // array of row indices when filter is active
-
 function applyPendingHighlighting() {
         buildLockedState();
         if (!_state.pendingApprovals.length) { return; }
@@ -360,7 +361,7 @@ function applyPendingHighlighting() {
         _$table.find("#btn-remove-selected").addClass("wl-btn-locked").prop("disabled", true);
         _$table.find(".wl-import-btn").addClass("wl-btn-locked");
         _$table.find("#btn-import").prop("disabled", true);
-        $revertSelect.prop("disabled", true);
+        _$revertSelect.prop("disabled", true);
 
         // Show lock banner
         var descriptions = _state.pendingApprovals.map(function (pa) {
@@ -450,10 +451,10 @@ function bindApprovalActions() {
             var pa = _state.pendingApprovals[idx];
             if (!pa) return;
 
-            if (pendingFilterActive) {
+            if (_state.pendingFilterActive) {
                 // Remove filter — show all rows
-                pendingFilterActive = false;
-                pendingFilterIndices = null;
+                _state.pendingFilterActive = false;
+                _state.pendingFilterIndices = null;
                 additionPreviewData = null;
                 $("#wl-addition-preview").remove();
                 $(this).text("Show Requested Rows");
@@ -463,7 +464,7 @@ function bindApprovalActions() {
             } else if (pa.action_type === "bulk_row_addition") {
                 // For additions, rows don't exist in CSV yet —
                 // show a read-only preview from the stored payload
-                pendingFilterActive = true;
+                _state.pendingFilterActive = true;
                 $(this).text("Show All Rows");
                 showAdditionPreview(pa);
             } else {
@@ -473,8 +474,8 @@ function bindApprovalActions() {
                     _actions.showMsg("No matching rows found in current CSV.", "info");
                     return;
                 }
-                pendingFilterActive = true;
-                pendingFilterIndices = matchedIndices;
+                _state.pendingFilterActive = true;
+                _state.pendingFilterIndices = matchedIndices;
                 $(this).text("Show All Rows");
                 _actions.resetPage();
                 _actions.refreshTable();
@@ -496,10 +497,6 @@ function bindApprovalActions() {
  * Show a read-only preview table of rows requested to be added.
  * These rows exist in the stored payload but not yet in the CSV.
  */
-var additionPreviewPage = 0;
-var additionPreviewData = null; // { headers, rowKeys }
-var PREVIEW_PAGE_SIZE = 10;
-
 function showAdditionPreview(pa) {
         var hl = pa.pending_highlight || {};
         additionPreviewData = {
@@ -621,11 +618,11 @@ function renderAdditionPreview() {
     showAdditionPreview: showAdditionPreview,
     renderAdditionPreview: renderAdditionPreview,
 
-    // State accessors for filter flags
-    getPendingFilterActive: function() { return pendingFilterActive; },
-    setPendingFilterActive: function(val) { pendingFilterActive = val; },
-    getPendingFilterIndices: function() { return pendingFilterIndices; },
-    setPendingFilterIndices: function(val) { pendingFilterIndices = val; },
+    // State accessors for filter flags (pendingFilter* use _state proxy)
+    getPendingFilterActive: function() { return _state.pendingFilterActive; },
+    setPendingFilterActive: function(val) { _state.pendingFilterActive = val; },
+    getPendingFilterIndices: function() { return _state.pendingFilterIndices; },
+    setPendingFilterIndices: function(val) { _state.pendingFilterIndices = val; },
     getAdditionPreviewPage: function() { return additionPreviewPage; },
     setAdditionPreviewPage: function(val) { additionPreviewPage = val; }
   };
