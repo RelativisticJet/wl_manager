@@ -170,6 +170,9 @@ define(["jquery"], function ($) {
         },
         showDatePicker: showDatePicker,
         closeDatePicker: closeDatePicker,
-        formatLocalDateTime: formatLocalDateTime
+        formatLocalDateTime: formatLocalDateTime,
+        formatDateForPicker: formatDateForPicker,
+        formatUTCDateTime: formatUTCDateTime,
+        padTwo: padTwo
     };
 });
