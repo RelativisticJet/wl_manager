@@ -356,8 +356,10 @@ function applyPendingHighlighting() {
 
         // Lock all controls — entire CSV is locked
         _$table.find("#btn-save").addClass("wl-btn-locked").prop("disabled", true);
+        _$table.find("#btn-discard").addClass("wl-btn-locked").prop("disabled", true);
         _$table.find("#btn-add-row").addClass("wl-btn-locked").prop("disabled", true);
         _$table.find("#btn-add-col").addClass("wl-btn-locked").prop("disabled", true);
+        _$table.find("#btn-bulk-edit").addClass("wl-btn-locked").prop("disabled", true);
         _$table.find("#btn-remove-selected").addClass("wl-btn-locked").prop("disabled", true);
         _$table.find(".wl-import-btn").addClass("wl-btn-locked");
         _$table.find("#btn-import").prop("disabled", true);
