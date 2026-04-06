@@ -1517,6 +1517,7 @@ define([
         clearSelections:    function () { selectedIdxSet = {}; },
         getSelectedIndices: function () { return Object.keys(selectedIdxSet).map(Number); },
         getSelectedCount:   function () { return Object.keys(selectedIdxSet).length; },
+        trackCellEdit:      trackCellEdit,
         hasEditHistory:     function () { return editHistory.length > 0; },
         applyColWidths:     function (w) {
             colWidths = w;
