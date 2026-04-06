@@ -322,18 +322,21 @@ define([
             html += '</div>';
         }
 
-        // Action buttons
+        // Action buttons — disable editing controls when CSV is locked by pending approvals
+        var lk = S.csvLocked;
+        var lkCls = lk ? ' wl-btn-locked' : '';
+        var lkAttr = lk ? ' disabled="disabled"' : '';
         html += '<div class="wl-buttons">';
-        html += '<button class="btn btn-primary" id="btn-add-row">+ Add Row</button> ';
-        html += '<button class="btn btn-primary" id="btn-add-col">+ Add Column</button> ';
-        html += '<button class="btn btn-primary" id="btn-bulk-edit" disabled="disabled">Bulk Edit</button> ';
-        html += '<button class="btn btn-danger" id="btn-remove-selected" disabled="disabled">Remove Selected</button> ';
-        html += '<button class="btn btn-success" id="btn-save">Save Changes</button> ';
-        html += '<button class="btn"             id="btn-discard">Discard Changes</button>';
+        html += '<button class="btn btn-primary' + lkCls + '" id="btn-add-row"' + lkAttr + '>+ Add Row</button> ';
+        html += '<button class="btn btn-primary' + lkCls + '" id="btn-add-col"' + lkAttr + '>+ Add Column</button> ';
+        html += '<button class="btn btn-primary' + lkCls + '" id="btn-bulk-edit" disabled="disabled">Bulk Edit</button> ';
+        html += '<button class="btn btn-danger' + lkCls + '" id="btn-remove-selected" disabled="disabled">Remove Selected</button> ';
+        html += '<button class="btn btn-success' + lkCls + '" id="btn-save"' + lkAttr + '>Save Changes</button> ';
+        html += '<button class="btn' + lkCls + '"             id="btn-discard"' + lkAttr + '>Discard Changes</button>';
         html += '<span class="wl-buttons-right">';
         html += '<button class="btn" id="btn-export" title="Download current CSV">Export CSV</button> ';
-        html += '<label class="btn wl-import-btn" title="Upload CSV to merge rows">';
-        html += 'Import CSV <input type="file" id="btn-import" accept=".csv" style="display:none" />';
+        html += '<label class="btn' + (lk ? ' wl-btn-locked' : '') + ' wl-import-btn" title="Upload CSV to merge rows">';
+        html += 'Import CSV <input type="file" id="btn-import" accept=".csv"' + lkAttr + ' style="display:none" />';
         html += '</label>';
         html += '</span>';
         html += "</div>";
@@ -831,6 +834,7 @@ define([
 
         // Discard
         $table.off("click.wl", "#btn-discard").on("click.wl", "#btn-discard", function () {
+            if (S.csvLocked) { return; } // CSV locked by pending approval
             S.currentHeaders = S.originalHeaders.slice();
             S.currentRows = S.originalRows.map(function (r) { return $.extend({}, r); });
             S.searchQuery = "";
