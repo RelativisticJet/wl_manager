@@ -223,9 +223,6 @@ require([
         }
     });
 
-    // ── CSV I/O module alias ──
-    var csvEscape = CsvIO.csvEscape;
-
     // ── Diff module init ──
     Diff.init({ $diff: $diff });
     var renderDiff = Diff.renderDiff;
@@ -2561,151 +2558,7 @@ require([
         }, 100);
     }
 
-    // ══════════════════════════════════════════════════════════════════
-    // Export Audit Trail as CSV
-    // ══════════════════════════════════════════════════════════════════
-
-    function exportAuditCsv() {
-        showMsg("Fetching audit data&hellip;", "info");
-
-        // Mirror the Action Log panel query from audit.xml, filtered by current CSV/rule.
-        // Escape SPL metacharacters to prevent search injection.
-        function splEscape(val) {
-            return val.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-        }
-        var filterParts = '';
-        if (selectedCsv) filterParts += ' csv_file="' + splEscape(selectedCsv) + '"';
-        if (selectedRule) filterParts += ' detection_rule="' + splEscape(selectedRule) + '"';
-        var searchQuery = 'search index=wl_audit sourcetype=wl_audit' + filterParts + ' | head 10000' +
-            ' | stats values(value{}) as value values(*) as * by action csv_file analyst timestamp' +
-            ' | sort -timestamp' +
-            ' | eval timestamp=strftime(timestamp, "%d-%m-%Y %H:%M:%S GMT%:::z")' +
-            ' | eval action_label=case(' +
-            '     action=="row_removed_multiple", "removed",' +
-            '     action=="row_removed",          "removed",' +
-            '     action=="auto_removed",         "auto removed",' +
-            '     action=="row_edited",           "edited",' +
-            '     action=="row_added",            "added",' +
-            '     action=="revert",               "reverted",' +
-            '     action=="column_removed",       "removed column",' +
-            '     action=="column_added",         "added column",' +
-            '     action=="row_reordered",        "reordered row",' +
-            '     action=="column_reordered",     "reordered column",' +
-            '     action=="column_renamed",       "renamed column",' +
-            '     action=="audit_exported",       "exported audit",' +
-            '     action=="csv_exported",         "exported CSV",' +
-            '     action=="csv_imported",         "imported CSV"' +
-            '   )' +
-            ' | eval row_change_count=case(' +
-            '     action=="row_removed_multiple", removed_row_count,' +
-            '     action=="row_removed",          removed_row_count,' +
-            '     action=="auto_removed",         removed_row_count,' +
-            '     action=="row_edited",           edited_row_count,' +
-            '     action=="row_added",            added_row_count,' +
-            '     action=="row_reordered",        1' +
-            '   )' +
-            ' | eval column_change_count=case(' +
-            '     action=="column_removed",       column_count,' +
-            '     action=="column_added",         column_count,' +
-            '     action=="column_reordered",     1,' +
-            '     action=="column_renamed",       column_count' +
-            '   )' +
-            ' | eval col_names=mvjoin(\'columns{}\', ", ")' +
-            ' | eval summary=case(' +
-            '     action_label="reverted",' +
-            '       "User ".analyst." ".action_label." ".csv_file." ".reverted_from_version." ".row_count_before." row(s) version to ".reverted_to_version." ".row_count_after." row(s) version (which became the latest in the record ".new_record_version.") at ".timestamp,' +
-            '     action=="column_removed",' +
-            '       "User ".analyst." ".action_label." ".col_names." from ".csv_file." (".column_change_count." column(s), detection rule - ".detection_rule.") at ".timestamp,' +
-            '     action=="column_added",' +
-            '       "User ".analyst." ".action_label." ".col_names." to ".csv_file." (".column_change_count." column(s), detection rule - ".detection_rule.") at ".timestamp,' +
-            '     action=="row_reordered",' +
-            '       "User ".analyst." ".action_label." in ".csv_file." from position #".row_number_before." to #".row_number_after." (detection rule - ".detection_rule.") at ".timestamp,' +
-            '     action=="column_reordered",' +
-            '       "User ".analyst." ".action_label." \'".column_name."\' in ".csv_file." from position #".column_number_before." to #".column_number_after." (detection rule - ".detection_rule.") at ".timestamp,' +
-            '     action=="column_renamed",' +
-            '       "User ".analyst." ".action_label." \'".column_renamed_before."\' to \'".column_renamed_after."\' in ".csv_file." (detection rule - ".detection_rule.") at ".timestamp,' +
-            '     action=="audit_exported",' +
-            '       "User ".analyst." ".if(status=="success","successfully","unsuccessfully")." exported ".export_file." audit file containing ".event_count." event(s) for ".csv_file." (detection rule - ".detection_rule.") at ".timestamp,' +
-            '     action=="csv_exported",' +
-            '       "User ".analyst." ".if(status=="success","successfully","unsuccessfully")." exported ".export_file." containing ".row_count." row(s) for ".csv_file." (detection rule - ".detection_rule.") at ".timestamp,' +
-            '     action=="csv_imported",' +
-            '       "User ".analyst." ".if(status=="success","successfully","unsuccessfully")." ".import_mode." ".export_file." into ".csv_file." (".imported_row_count." row(s), detection rule - ".detection_rule.") at ".timestamp,' +
-            '     1==1,' +
-            '       "User ".analyst." ".action_label." ".row_change_count." row(s) from ".csv_file." (detection rule - ".detection_rule.") at ".timestamp' +
-            '   )' +
-            ' | eval value=mvjoin(value, " | ")' +
-            ' | table timestamp action analyst csv_file detection_rule comment row_remove_reason row_change_count column_change_count status export_file import_mode value summary';
-
-        $.ajax({
-            url: Splunk.util.make_url("/splunkd/__raw/services/search/jobs"),
-            type: "POST",
-            data: {
-                search: searchQuery,
-                output_mode: "json",
-                exec_mode: "oneshot",
-                count: 10000
-            },
-            dataType: "json"
-        })
-        .done(function (data) {
-            var results = data.results || [];
-            if (!results.length) {
-                showMsg("No audit events found.", "info");
-                return;
-            }
-
-            var headers = ["timestamp", "action", "analyst", "csv_file", "detection_rule",
-                           "comment", "row_remove_reason", "row_change_count", "column_change_count",
-                           "status", "export_file", "import_mode", "value", "summary"];
-            var lines = [headers.map(csvEscape).join(",")];
-            results.forEach(function (row) {
-                var vals = headers.map(function (h) {
-                    var v = row[h];
-                    if (Array.isArray(v)) v = v.join(" | ");
-                    return csvEscape(v || "");
-                });
-                lines.push(vals.join(","));
-            });
-
-            var blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
-            var link = document.createElement("a");
-            link.href = URL.createObjectURL(blob);
-            var exportName = "wl_audit_export_" +
-                (selectedCsv ? selectedCsv.replace(/\.csv$/i, "") + "_" : "") +
-                new Date().toISOString().slice(0, 10) + ".csv";
-            link.download = exportName;
-            link.click();
-            URL.revokeObjectURL(link.href);
-
-            showMsg("Exported <strong>" + results.length + "</strong> audit events" +
-                (selectedCsv ? " for " + _.escape(selectedCsv) : "") + ".", "success");
-            restPost({
-                action: "log_event",
-                event_action: "audit_exported",
-                csv_file: selectedCsv || "",
-                detection_rule: selectedRule || "",
-                app_context: selectedApp,
-                status: "success",
-                export_file: link.download,
-                event_count: results.length,
-                comment: ""
-            });
-        })
-        .fail(function () {
-            showMsg("Failed to export audit data.", "error");
-            restPost({
-                action: "log_event",
-                event_action: "audit_exported",
-                csv_file: selectedCsv || "",
-                detection_rule: selectedRule || "",
-                app_context: selectedApp,
-                status: "failure",
-                export_file: "",
-                event_count: 0,
-                comment: "Search query failed"
-            });
-        });
-    }
+    // (exportAuditCsv → extracted to modules/wl_csv_io.js)
 
     // ══════════════════════════════════════════════════════════════════
     // Real-time Collaboration Indicators (user presence)
@@ -2751,7 +2604,7 @@ require([
 
     // Bind Audit Export button
     $table.on("click.wl", "#btn-audit-export", function () {
-        exportAuditCsv();
+        CsvIO.exportAuditCsv();
     });
 
     // Sync Bulk Edit button when checkbox selection changes
