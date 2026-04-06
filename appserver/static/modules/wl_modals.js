@@ -8,6 +8,7 @@
  *   Group B  — Generic prompt modals: showRemoveRowModal, showRemoveColumnModal
  *   Group C  — Approval action modals: showApproveConfirmModal,
  *              showRejectReasonModal, showCancelRequestModal
+ *   Group D  — Bulk edit modal: showBulkEditModal
  *
  * Public API:
  *   init(config)                             — wire state proxy, DOM, callbacks
@@ -20,6 +21,7 @@
  *   showApproveConfirmModal(requestId)       — approve request confirmation
  *   showRejectReasonModal(requestId)         — reject request with reason
  *   showCancelRequestModal(requestId)        — cancel own request with reason
+ *   showBulkEditModal()                      — bulk edit selected rows
  */
 define([
     "jquery",
@@ -27,8 +29,9 @@ define([
     "app/wl_manager/modules/wl_constants",
     "app/wl_manager/modules/wl_rest",
     "app/wl_manager/modules/wl_ui",
-    "app/wl_manager/modules/wl_csv_io"
-], function ($, _, C, REST, UI, CsvIO) {
+    "app/wl_manager/modules/wl_csv_io",
+    "app/wl_manager/modules/wl_datepicker"
+], function ($, _, C, REST, UI, CsvIO, DatePicker) {
     "use strict";
 
     // ── Shared state proxy (set by init) ────────────────────────────
@@ -42,6 +45,8 @@ define([
     var restPost = REST.restPost;
     var showMsg  = UI.showMsg;
     var IMPORT_MAX_FILE_SIZE = C.IMPORT_MAX_FILE_SIZE;
+    var MAX_CELL_CHARS       = C.MAX_CELL_CHARS;
+    var formatDailyLimitMsg  = UI.formatDailyLimitMsg;
 
     // ══════════════════════════════════════════════════════════════════
     // Init
@@ -1061,6 +1066,228 @@ define([
     }
 
     // ══════════════════════════════════════════════════════════════════
+    // GROUP D: Bulk Edit Modal
+    // ══════════════════════════════════════════════════════════════════
+
+    function showBulkEditModal() {
+        var selectedCount = _actions.getSelectedCount();
+        if (selectedCount === 0) {
+            showMsg("Select rows first using the checkboxes.", "warning");
+            return;
+        }
+
+        $(".wl-modal-overlay").remove();
+
+        var visibleHeaders = S.currentHeaders.filter(function (h) { return h.charAt(0) !== "_"; });
+        var colOptions = visibleHeaders.map(function (h) {
+            return '<option value="' + _.escape(h) + '">' + _.escape(h) + '</option>';
+        }).join("");
+
+        var datePickerHtml =
+            '<div id="wl-bulk-expires-picker" style="display:none">' +
+                '<div class="wl-dp-presets" style="margin-bottom:6px">' +
+                    '<button class="btn btn-small wl-bulk-dp-preset" data-days="7">7 Days</button>' +
+                    '<button class="btn btn-small wl-bulk-dp-preset" data-days="30">30 Days</button>' +
+                    '<button class="btn btn-small wl-bulk-dp-preset" data-days="182">6 Months</button>' +
+                    '<button class="btn btn-small wl-bulk-dp-preset" data-days="365">1 Year</button>' +
+                '</div>' +
+                '<div style="display:flex;gap:8px;align-items:flex-end">' +
+                    '<div style="flex:1">' +
+                        '<label class="wl-dp-label">Date</label>' +
+                        '<input type="date" id="wl-bulk-dp-date" class="wl-dp-date" style="width:100%" />' +
+                    '</div>' +
+                    '<div style="flex:0 0 80px">' +
+                        '<label class="wl-dp-label">Time (24h)</label>' +
+                        '<input type="text" id="wl-bulk-dp-time" class="wl-dp-time" value="00:00" ' +
+                            'placeholder="HH:MM" maxlength="5" style="width:100%" />' +
+                    '</div>' +
+                '</div>' +
+                '<button class="btn btn-small wl-bulk-dp-clear" style="margin-top:6px">Clear (Permanent)</button>' +
+            '</div>';
+
+        var html =
+            '<div class="wl-modal-overlay">' +
+                '<div class="wl-modal">' +
+                    '<div class="wl-modal-header">Bulk Edit</div>' +
+                    '<div class="wl-modal-body">' +
+                        '<p>Apply the same value to <strong>' + selectedCount + '</strong> selected row(s).</p>' +
+                        '<label class="wl-dp-label">Column:</label>' +
+                        '<select id="wl-bulk-col" class="wl-select" style="width:100%;margin-bottom:8px">' +
+                        colOptions + '</select>' +
+                        '<label class="wl-dp-label" id="wl-bulk-val-label">New value:</label>' +
+                        '<input type="text" id="wl-bulk-val" class="wl-input" ' +
+                            'maxlength="' + MAX_CELL_CHARS + '" ' +
+                            'placeholder="Value to apply" style="width:100%" />' +
+                        datePickerHtml +
+                    '</div>' +
+                    '<div class="wl-modal-actions">' +
+                        '<span class="btn btn-primary" id="wl-bulk-apply">Apply</span> ' +
+                        '<span class="btn" id="wl-bulk-cancel">Cancel</span>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+
+        var $modal = $(html);
+        $("body").append($modal);
+
+        var padTwo            = DatePicker.padTwo;
+        var formatDateForPkr  = DatePicker.formatDateForPicker;
+        var formatUTCDateTime = DatePicker.formatUTCDateTime;
+
+        // Toggle between text input and date picker based on column selection
+        function updateBulkValueInput() {
+            var col = $modal.find("#wl-bulk-col").val();
+            var isExpires = (S.expireColumn && col === S.expireColumn);
+            if (isExpires) {
+                $modal.find("#wl-bulk-val, #wl-bulk-val-label").hide();
+                $modal.find("#wl-bulk-expires-picker").show();
+                var now = new Date();
+                $modal.find("#wl-bulk-dp-date").val(formatDateForPkr(now));
+                $modal.find("#wl-bulk-dp-time").val(padTwo(now.getHours()) + ":" + padTwo(now.getMinutes()));
+            } else {
+                $modal.find("#wl-bulk-val, #wl-bulk-val-label").show();
+                $modal.find("#wl-bulk-expires-picker").hide();
+            }
+        }
+        $modal.on("change", "#wl-bulk-col", updateBulkValueInput);
+        updateBulkValueInput();
+
+        // Date picker preset buttons
+        $modal.on("click", ".wl-bulk-dp-preset", function () {
+            var days = parseInt($(this).data("days"), 10);
+            var future = new Date();
+            future.setDate(future.getDate() + days);
+            $modal.find("#wl-bulk-dp-date").val(formatDateForPkr(future));
+            $modal.find("#wl-bulk-dp-time").val(padTwo(future.getHours()) + ":" + padTwo(future.getMinutes()));
+        });
+
+        // Clear button — set expiration to empty (permanent)
+        $modal.on("click", ".wl-bulk-dp-clear", function () {
+            $modal.find("#wl-bulk-dp-date").val("");
+            $modal.find("#wl-bulk-dp-time").val("00:00");
+        });
+
+        $modal.on("click", "#wl-bulk-apply", function () {
+            var col = $modal.find("#wl-bulk-col").val();
+            var val;
+            var isExpires = (S.expireColumn && col === S.expireColumn);
+
+            if (isExpires) {
+                var d = $modal.find("#wl-bulk-dp-date").val();
+                var t = ($modal.find("#wl-bulk-dp-time").val() || "00:00").trim();
+                if (!d) {
+                    val = "";
+                } else {
+                    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) {
+                        $modal.find("#wl-bulk-dp-time").css("border-color", "#e74c3c");
+                        return;
+                    }
+                    $modal.find("#wl-bulk-dp-time").css("border-color", "");
+                    var tp = t.split(":");
+                    var localDate = new Date(
+                        parseInt(d.substr(0, 4), 10), parseInt(d.substr(5, 2), 10) - 1,
+                        parseInt(d.substr(8, 2), 10), parseInt(tp[0], 10), parseInt(tp[1], 10)
+                    );
+                    val = formatUTCDateTime(localDate) + " UTC";
+                }
+            } else {
+                val = $modal.find("#wl-bulk-val").val();
+            }
+
+            if (!col) { return; }
+
+            _actions.syncInputs();
+
+            var selectedIdxs = _actions.getSelectedIndices();
+            var wouldChange = 0;
+            selectedIdxs.forEach(function (idx) {
+                if (S.currentRows[idx] && (S.currentRows[idx][col] || "") !== val) {
+                    wouldChange++;
+                }
+            });
+
+            if (wouldChange === 0) {
+                $modal.remove();
+                showMsg("No changes — all selected rows already have that value.", "info");
+                return;
+            }
+
+            function applyBulkEditLocally() {
+                var changedCount = 0;
+                selectedIdxs.forEach(function (idx) {
+                    if (S.currentRows[idx]) {
+                        var oldVal = S.currentRows[idx][col] || "";
+                        if (oldVal !== val) {
+                            _actions.trackCellEdit(idx, col, oldVal, val);
+                            S.currentRows[idx][col] = val;
+                            changedCount++;
+                        }
+                    }
+                });
+                S.pendingBulkEditCount += changedCount;
+                $modal.remove();
+                _actions.refreshTable();
+                showMsg("Bulk edit: set <strong>" + _.escape(col) + "</strong> to &ldquo;" +
+                        _.escape(val) + "&rdquo; on " + changedCount + " row(s). " +
+                        "Click <strong>Save Changes</strong> to persist.", "success");
+            }
+
+            // Check approval gate
+            restPost({
+                action: "check_approval_gate",
+                gate_action: "bulk_row_edit",
+                csv_file: S.selectedCsv,
+                app_context: S.selectedApp,
+                selected_count: wouldChange
+            }).done(function (gateData) {
+                if (gateData.requires_approval) {
+                    $modal.remove();
+                    showRemoveRowModal(
+                        "Submit for Approval",
+                        "Bulk editing <strong>" + wouldChange + "</strong> row(s) requires admin approval.<br>" +
+                            "Reason: " + _.escape(gateData.reason) + "<br><br>" +
+                            "Your request will be submitted for review.",
+                        function (reason) {
+                            _actions.submitBulkEditApproval(col, val, selectedIdxs.slice(), wouldChange, reason);
+                        },
+                        {
+                            reasonLabel: "Reason for bulk edit",
+                            placeholder: "Why are these rows being edited?",
+                            confirmText: "Submit",
+                            confirmClass: "btn-primary"
+                        }
+                    );
+                } else if (gateData.daily_limit && !gateData.daily_limit.allowed) {
+                    $modal.remove();
+                    showMsg(formatDailyLimitMsg(gateData.daily_limit), "error");
+                } else {
+                    applyBulkEditLocally();
+                }
+            }).fail(function () {
+                $modal.remove();
+                showMsg("Unable to verify approval gate. Please try again.", "error");
+            });
+        });
+
+        $modal.on("click", "#wl-bulk-cancel", function () { $modal.remove(); });
+        $modal.on("click", function (e) {
+            if ($(e.target).hasClass("wl-modal-overlay")) { $modal.remove(); }
+        });
+        $modal.on("keydown", "#wl-bulk-val, #wl-bulk-dp-time", function (e) {
+            if (e.which === 13) { e.preventDefault(); $modal.find("#wl-bulk-apply").trigger("click"); }
+        });
+
+        setTimeout(function () {
+            var isExpires = (S.expireColumn && $modal.find("#wl-bulk-col").val() === S.expireColumn);
+            if (isExpires) {
+                $modal.find("#wl-bulk-dp-date").focus();
+            } else {
+                $modal.find("#wl-bulk-val").focus();
+            }
+        }, 100);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
     // Public API
     // ══════════════════════════════════════════════════════════════════
 
@@ -1077,6 +1304,8 @@ define([
         // Group C: Approval actions
         showApproveConfirmModal:  showApproveConfirmModal,
         showRejectReasonModal:    showRejectReasonModal,
-        showCancelRequestModal:   showCancelRequestModal
+        showCancelRequestModal:   showCancelRequestModal,
+        // Group D: Bulk edit
+        showBulkEditModal:        showBulkEditModal
     };
 });
