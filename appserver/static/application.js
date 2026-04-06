@@ -34,16 +34,21 @@ require(["jquery", "splunkjs/mvc/utils"], function ($, utils) {
     // Stop observing after 5s to avoid performance impact
     setTimeout(function () { observer.disconnect(); }, 5000);
 
-    // Check if admin
+    // Check if admin (using get_user_info — no 403 for non-admins)
     $.ajax({
-        url: utils.make_url("/splunkd/__raw/services/custom/wl_manager") + "?output_mode=json",
-        type: "POST",
-        contentType: "application/json",
-        data: JSON.stringify({ action: "get_approval_queue" }),
-        dataType: "json"
-    }).done(function () {
-        console.log("[wl_manager] admin detected — showing Control Panel nav");
-        observer.disconnect();
-        showControlPanelNav();
+        url: utils.make_url("/splunkd/__raw/services/custom/wl_manager") +
+             "?action=get_user_info&output_mode=json",
+        type: "GET",
+        dataType: "json",
+        headers: {
+            "X-Splunk-Form-Key": (document.cookie.match(/splunkweb_csrf_token_8000=([^;]+)/) || [])[1] || "",
+            "X-Requested-With": "XMLHttpRequest"
+        }
+    }).done(function (data) {
+        if (data.is_admin) {
+            console.log("[wl_manager] admin detected — showing Control Panel nav");
+            observer.disconnect();
+            showControlPanelNav();
+        }
     });
 });

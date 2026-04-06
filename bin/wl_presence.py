@@ -89,7 +89,10 @@ def report_presence(csv_file: str, user: str, last_activity: Optional[float] = N
             "idle_minutes": idle_min,
         })
 
-    return ({"presence": presence_list}, "")
+    # active_users: flat list of usernames (frontend renderPresenceBar expects string array)
+    active_users = [p["user"] for p in presence_list]
+
+    return ({"presence": presence_list, "active_users": active_users}, "")
 
 
 def get_presence(csv_file: str) -> Tuple[Dict, str]:

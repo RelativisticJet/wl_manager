@@ -85,12 +85,12 @@ require([
     // Detect admin role
     // ══════════════════════════════════════════════════════════════════
     (function detectAdminRole() {
-        restGet({ action: "get_approval_queue" })
-        .done(function () {
-            isAdmin = true;
+        restGet({ action: "get_user_info" })
+        .done(function (data) {
+            isAdmin = data.is_admin || false;
             // If CSV was already loaded & locked before this check completed,
             // re-render the approval bar now that we know user is admin
-            if (pendingApprovals.length) {
+            if (isAdmin && pendingApprovals.length) {
                 applyPendingHighlighting();
             }
         });
@@ -1815,6 +1815,7 @@ require([
             loadVersions(csvFile, appContext);
             loadedMtime = data.file_mtime || null;
             startChangeMonitoring();
+            Presence.startPresenceMonitoring();
             // Apply pending approval CSS highlighting + banner
             if (pendingApprovals.length) {
                 applyPendingHighlighting();
@@ -2815,12 +2816,7 @@ require([
         }
     });
 
-    // Start presence monitoring whenever CSV is loaded
-    var origLoadCsv = loadCsv;
-    loadCsv = function (csvFile, appContext) {
-        origLoadCsv(csvFile, appContext);
-        Presence.startPresenceMonitoring();
-    };
+    // (Presence monitoring started inside loadCsv .done() handler — after renderTable)
 
     // Stop presence on page unload
     $(window).on("beforeunload", function () {
