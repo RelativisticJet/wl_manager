@@ -2984,33 +2984,51 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         elif not is_safe_filename(csv_file):
             return self._resp(400, {"error": "Invalid CSV file name"})
 
-        # Check for existing pending request by same user for same target + action
+        # Block if ANY pending request exists for this CSV (by any user, any action type).
+        # A locked CSV cannot accept new submissions — existing requests must be resolved first.
         detection_rule = payload.get("detection_rule", "")
         queue = _expire_pending_approvals()  # Lock acquired below for write
         _rule_only = {"create_rule", "remove_rule"}
         for item in queue:
-            if item["status"] != "pending" or item["analyst"] != user:
+            if item["status"] != "pending":
                 continue
-            if item["action_type"] != action_type:
-                continue
-            # For rule operations, match on detection_rule (csv_file is always __rule_operation__)
             if action_type in _rule_only:
-                if item.get("detection_rule", "") == detection_rule:
-                    return self._resp(409, {
-                        "error": "You already have a pending {} request "
-                                 "for detection rule '{}'. "
-                                 "Wait for it to be processed.".format(
-                                     action_type.replace("_", " "),
-                                     detection_rule)
-                    })
+                # Rule operations: block if same detection_rule has a pending request
+                if item.get("detection_rule", "") == detection_rule and item["action_type"] in _rule_only:
+                    if item["analyst"] == user:
+                        return self._resp(200, {
+                            "error": "You already have a pending {} request "
+                                     "for detection rule '{}'. "
+                                     "Wait for it to be processed.".format(
+                                         item["action_type"].replace("_", " "),
+                                         detection_rule)
+                        })
+                    else:
+                        return self._resp(200, {
+                            "error": "A pending {} request by {} exists "
+                                     "for detection rule '{}'. "
+                                     "It must be resolved first.".format(
+                                         item["action_type"].replace("_", " "),
+                                         item["analyst"], detection_rule)
+                        })
             else:
+                # CSV operations: block if same csv_file has ANY pending request
                 if item.get("csv_file") == csv_file:
-                    return self._resp(409, {
-                        "error": "You already have a pending {} request "
-                                 "for this CSV. "
-                                 "Wait for it to be processed.".format(
-                                     action_type.replace("_", " "))
-                    })
+                    if item["analyst"] == user:
+                        return self._resp(200, {
+                            "error": "You already have a pending {} request "
+                                     "for this CSV. "
+                                     "Wait for it to be processed.".format(
+                                         item["action_type"].replace("_", " "))
+                        })
+                    else:
+                        return self._resp(200, {
+                            "error": "This CSV is locked by a pending {} request "
+                                     "from {}. It must be resolved before new "
+                                     "requests can be submitted.".format(
+                                         item["action_type"].replace("_", " "),
+                                         item["analyst"])
+                        })
 
         # Check daily limit BEFORE allowing the request to be submitted.
         # Map approval action types to their daily-limit counter key.

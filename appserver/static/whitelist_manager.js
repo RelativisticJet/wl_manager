@@ -1101,6 +1101,7 @@ require([
             undoTimer = null;
         }
         undoState = null;
+        pendingColRemoval = null;
         var $bar = $table.find("#wl-undo-bar");
         if ($bar.length) { $bar.empty(); }
     }
