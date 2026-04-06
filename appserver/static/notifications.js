@@ -50,9 +50,9 @@ require([
     var isAdmin = false;
     var adminCheckDone = false;
     function detectAdmin() {
-        restGet({ action: "get_approval_queue" })
-        .done(function () {
-            isAdmin = true;
+        restGet({ action: "get_user_info" })
+        .done(function (data) {
+            isAdmin = data.is_admin || false;
             adminCheckDone = true;
         })
         .fail(function () {

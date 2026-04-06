@@ -814,6 +814,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         "report_presence": (None, "_action_report_presence"),
         "get_presence": (None, "_action_get_presence"),
 
+        # User info (role detection without 403 probing)
+        "get_user_info": (None, "_action_get_user_info"),
+
         # Approval & Queue (read-only)
         "get_pending_approvals": (None, "_action_get_pending_approvals"),
         "get_request_csv": (ADMIN_ROLES, "_action_get_request_csv"),
@@ -1349,6 +1352,17 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     def _action_get_apps(self, request, query, user, roles):
         """GET action wrapper for get_apps."""
         return self._get_apps()
+
+    def _action_get_user_info(self, request, query, user, roles):
+        """GET action: return current user's role tier and username (no 403 probing)."""
+        is_admin = bool(roles & ADMIN_ROLES)
+        is_superadmin = bool(roles & SUPERADMIN_ROLES)
+        return self._resp(200, {
+            "username": user,
+            "is_admin": is_admin,
+            "is_superadmin": is_superadmin,
+            "roles": sorted(roles),
+        })
 
     def _action_report_presence(self, request, query, user, roles):
         """GET action wrapper for report_presence."""
