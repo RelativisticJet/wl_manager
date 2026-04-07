@@ -707,7 +707,7 @@ define([
                 "Remove Row",
                 "Remove row <strong>#" + (idx + 1) + "</strong>?<br>" +
                     '<span style="font-size:12px;color:var(--wl-text-secondary)">' + preview + '</span><br><br>' +
-                    "This action will be saved immediately and logged in the audit trail.",
+                    "You will have 10 seconds to undo before this is saved.",
                 function (reason) {
                     syncInputs();
                     var removedRow = $.extend({}, row);
