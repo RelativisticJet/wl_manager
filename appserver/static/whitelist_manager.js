@@ -32,10 +32,11 @@ require([
     "app/wl_manager/modules/wl_diff",
     "app/wl_manager/modules/wl_datepicker",
     "app/wl_manager/modules/wl_approval_ui",
+    "app/wl_manager/modules/wl_save",
     "app/wl_manager/modules/wl_presence",
     "app/wl_manager/modules/wl_debug",
     "splunkjs/mvc/simplexml/ready!"
-], function ($, _, mvc, utils, C, REST, UI, Table, Versions, Modals, CsvIO, Diff, DatePicker, ApprovalUI, Presence, Debug) {
+], function ($, _, mvc, utils, C, REST, UI, Table, Versions, Modals, CsvIO, Diff, DatePicker, ApprovalUI, Save, Presence, Debug) {
     "use strict";
 
     // Activate debug interceptor (remove for production)
@@ -63,15 +64,13 @@ require([
     var selectedApp     = "";
     var allRules        = [];
     var mappingData     = [];
-    var undoTimer       = null;     // timeout id for undo bar
-    var undoState       = null;     // {row, reason, prevRows, prevOriginal}
     var saving           = false;   // debounce flag to prevent rapid saves
     var MAX_CELL_CHARS   = C.MAX_CELL_CHARS;
     var expireColumn     = "";      // name of the expiration column (e.g. "Expires", "expiry", "termination_date")
     var searchQuery      = "";      // current search/filter text for the CSV table
     var loadedMtime      = null;    // file mtime when CSV was loaded/saved (for external change detection)
     var loadedPendingCount = 0;    // pending approval count when CSV was loaded (for lock-state polling)
-    var changeCheckTimer = null;    // setInterval ID for external change polling
+    // (undoTimer, undoState, changeCheckTimer → module-private in wl_save.js)
     var pendingApprovals = [];      // pending approval items for current CSV (from server)
     var csvLocked        = false;  // true when ANY pending approval exists — entire file locked
     var isAdmin          = false;  // true if current user has admin/sc_admin/wl_admin role
@@ -183,6 +182,7 @@ require([
         prop("allRules",             function () { return allRules; },             function (v) { allRules = v; });
         prop("pendingApprovals",     function () { return pendingApprovals; },     function (v) { pendingApprovals = v; });
         prop("isAdmin",              function () { return isAdmin; },              function (v) { isAdmin = v; });
+        prop("loadedPendingCount",   function () { return loadedPendingCount; },   function (v) { loadedPendingCount = v; });
     })(_tableState);
 
     Table.init({
@@ -195,19 +195,19 @@ require([
         },
         actions: {
             showRemoveRowModal:        function () { return showRemoveRowModal.apply(null, arguments); },
-            doSave:                    function () { return doSave(); },
-            doSaveRemoval:             function () { return doSaveRemoval.apply(null, arguments); },
-            doSaveBulkRemoval:         function () { return doSaveBulkRemoval.apply(null, arguments); },
-            doSaveColumnAddition:      function () { return doSaveColumnAddition.apply(null, arguments); },
+            doSave:                    function () { return Save.doSave(); },
+            doSaveRemoval:             function () { return Save.doSaveRemoval.apply(null, arguments); },
+            doSaveBulkRemoval:         function () { return Save.doSaveBulkRemoval.apply(null, arguments); },
+            doSaveColumnAddition:      function () { return Save.doSaveColumnAddition.apply(null, arguments); },
             doColumnRemoveWithGateCheck: function () { return doColumnRemoveWithGateCheck.apply(null, arguments); },
             submitApprovalRequest:     function () { return ApprovalUI.submitApprovalRequest.apply(null, arguments); },
             exportCsv:                 function () { return CsvIO.exportCsv(); },
             importCsv:                 function () { return CsvIO.importCsv.apply(null, arguments); },
             loadVersions:              function () { return loadVersions.apply(null, arguments); },
-            clearUndo:                 function () { return clearUndo(); },
+            clearUndo:                 function () { return Save.clearUndo(); },
             applyPendingCssHighlighting: function () { return ApprovalUI.applyPendingCssHighlighting(); },
             formatLocalDateTime:       function () { return DatePicker.formatLocalDateTime.apply(null, arguments); },
-            handleSaveError:           function () { return handleSaveError.apply(null, arguments); }
+            handleSaveError:           function () { return Save.handleSaveError.apply(null, arguments); }
         }
     });
 
@@ -242,7 +242,7 @@ require([
         state:  _tableState,
         actions: {
             onDismiss:            function () { $ruleClear.trigger("click"); },
-            stopChangeMonitoring: function () { stopChangeMonitoring(); }
+            stopChangeMonitoring: function () { Save.stopChangeMonitoring(); }
         }
     });
 
@@ -256,7 +256,7 @@ require([
         actions: {
             renderDiff:     function () { return Diff.renderDiff.apply(null, arguments); },
             reloadCsvQuiet: function () { return reloadCsvQuiet.apply(null, arguments); },
-            handleSaveError: function () { return handleSaveError.apply(null, arguments); },
+            handleSaveError: function () { return Save.handleSaveError.apply(null, arguments); },
             loadCsv:        function () { return loadCsv.apply(null, arguments); }
         }
     });
@@ -279,7 +279,7 @@ require([
                     $csvDisplay.text("-- Select a Detection Rule first --")
                         .addClass("wl-disabled");
                     $csvList.empty().removeClass("wl-open");
-                    stopChangeMonitoring();
+                    Save.stopChangeMonitoring();
                     $searchGroup.hide();
                     Versions.hide();
                     $table.html('<p class="wl-muted">Select a detection rule and CSV file above.</p>');
@@ -287,7 +287,7 @@ require([
                 } else if (!isRule && name === selectedCsv) {
                     selectedCsv = "";
                     selectedApp = "";
-                    stopChangeMonitoring();
+                    Save.stopChangeMonitoring();
                     $searchGroup.hide();
                     Versions.hide();
                     $table.html('<p class="wl-muted">Select a detection rule and CSV file above.</p>');
@@ -366,33 +366,26 @@ require([
         }
     });
 
-    // ══════════════════════════════════════════════════════════════════
-    // Conflict handling (optimistic locking)
-    // ══════════════════════════════════════════════════════════════════
-    function handleSaveError(xhr, fallbackMsg) {
-        var err = fallbackMsg || "Save failed.";
-        try {
-            var resp = JSON.parse(xhr.responseText);
-            err = resp.error || err;
-            // On 409 conflict, update mtime so external change modal
-            // doesn't also fire, and offer to reload
-            if (xhr.status === 409 && resp.current_mtime) {
-                loadedMtime = resp.current_mtime;
-            }
-        } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
-        // Escape server error to prevent XSS
-        var safeErr = _.escape(err);
-        if (xhr.status === 409) {
-            showMsg(safeErr + ' <span class="wl-link" id="wl-conflict-reload">Click to reload.</span>', "error");
-            $msg.off("click", "#wl-conflict-reload").on("click", "#wl-conflict-reload", function () {
-                loadCsv(selectedCsv, selectedApp);
-            });
-        } else {
-            showMsg(safeErr, "error");
+    // ── Save module init ──
+    Save.init({
+        $table: $table,
+        $msg:   $msg,
+        state:  _tableState,
+        actions: {
+            syncInputs:                    function () { return syncInputs(); },
+            refreshTable:                  function () { return refreshTable(); },
+            loadCsv:                       function () { return loadCsv.apply(null, arguments); },
+            reloadCsvQuiet:                function () { return reloadCsvQuiet.apply(null, arguments); },
+            loadVersions:                  function () { return Versions.loadVersions.apply(null, arguments); },
+            renderDiff:                    function () { return Diff.renderDiff.apply(null, arguments); },
+            submitApprovalRequest:         function () { return ApprovalUI.submitApprovalRequest.apply(null, arguments); },
+            submitInlineMultiEditApproval: function () { return ApprovalUI.submitInlineMultiEditApproval.apply(null, arguments); },
+            showRemoveRowModal:            function () { return Modals.showRemoveRowModal.apply(null, arguments); },
+            handleCsvRemoved:              function () { return Presence.handleCsvRemoved.apply(null, arguments); }
         }
-    }
+    });
 
-    // showMsg, formatDailyLimitMsg → wl_ui.js module (aliased above)
+    // (handleSaveError → extracted to modules/wl_save.js)
 
     // ══════════════════════════════════════════════════════════════════
     // Searchable Detection Rule Dropdown
@@ -562,12 +555,12 @@ require([
         $csvDisplay.text("-- Select a Detection Rule first --").addClass("wl-disabled");
         $csvList.empty().removeClass("wl-open");
         updateUrlParams();
-        stopChangeMonitoring();
+        Save.stopChangeMonitoring();
         loadedMtime = null;
         loadedPendingCount = 0;
         $searchGroup.hide();
         Versions.hide();
-        clearUndo();
+        Save.clearUndo();
         pendingApprovals = [];
         $("#wl-approval-actions").remove();
         $table.html('<p class="wl-muted">Select a detection rule and CSV file above.</p>');
@@ -590,7 +583,7 @@ require([
         $ruleSearch.val(rule);
         $ruleClear.show();
         renderRuleList(allRules);
-        clearUndo();
+        Save.clearUndo();
         pendingApprovals = [];
         $("#wl-approval-actions").remove();
         updateUrlParams();
@@ -607,7 +600,7 @@ require([
             csvDisabled = true;
             selectedCsv = "";
             selectedApp = "";
-            stopChangeMonitoring();
+            Save.stopChangeMonitoring();
             loadedMtime = null;
             loadedPendingCount = 0;
             $searchGroup.hide();
@@ -725,12 +718,12 @@ require([
     }
 
     function onCsvSelected(csvFile, appCtx) {
-        stopChangeMonitoring();
+        Save.stopChangeMonitoring();
         loadedMtime = null;
         loadedPendingCount = 0;
         selectedCsv = csvFile || "";
         selectedApp = appCtx || "";
-        clearUndo();
+        Save.clearUndo();
         updateUrlParams();
         // Update selected highlight in dropdown
         $csvList.find(".wl-csv-item").removeClass("wl-selected");
@@ -767,70 +760,7 @@ require([
     // ══════════════════════════════════════════════════════════════════
 
 
-    function doSaveColumnAddition(colName) {
-        syncInputs();
-
-        // Snapshot state for undo
-        var prevRows = currentRows.map(function (r) { return $.extend({}, r); });
-        var prevOriginal = originalRows.map(function (r) { return $.extend({}, r); });
-        var prevHeaders = currentHeaders.slice();
-        var prevOrigHeaders = originalHeaders.slice();
-
-        // Insert before metadata columns (those starting with "_")
-        var insertIdx = currentHeaders.length;
-        for (var i = 0; i < currentHeaders.length; i++) {
-            if (currentHeaders[i].charAt(0) === "_") { insertIdx = i; break; }
-        }
-        currentHeaders.splice(insertIdx, 0, colName);
-
-        // Add empty value for the new column to all rows
-        currentRows.forEach(function (row) { row[colName] = ""; });
-
-        refreshTable();
-        showMsg("Adding column and saving&hellip;", "info");
-
-        restPost({
-            action:          "save_csv",
-            csv_file:        selectedCsv,
-            app_context:     selectedApp,
-            detection_rule:  selectedRule || "",
-            headers:         currentHeaders,
-            rows:            currentRows,
-            comment:         "Column addition",
-            removal_reasons: [],
-            expected_mtime:  loadedMtime
-        })
-        .done(function (data) {
-            if (data.error) {
-                showMsg(_.escape(data.error), "error");
-                currentHeaders = prevHeaders;
-                originalHeaders = prevOrigHeaders;
-                currentRows = prevRows.map(function (r) { return $.extend({}, r); });
-                originalRows = prevOriginal.map(function (r) { return $.extend({}, r); });
-                refreshTable();
-                return;
-            }
-
-            showMsg('Column <strong>' + _.escape(colName) + '</strong> added and saved.', "success");
-            originalRows = currentRows.map(function (r) { return $.extend({}, r); });
-            originalHeaders = currentHeaders.slice();
-            if (data.file_mtime) { loadedMtime = data.file_mtime; }
-
-            if (data.diff && data.diff.text_diff && data.diff.text_diff.length) {
-                renderDiff(data.diff);
-            }
-
-            loadVersions(selectedCsv, selectedApp);
-        })
-        .fail(function (xhr) {
-            handleSaveError(xhr, "Failed to save after column addition.");
-            currentHeaders = prevHeaders;
-            originalHeaders = prevOrigHeaders;
-            currentRows = prevRows.map(function (r) { return $.extend({}, r); });
-            originalRows = prevOriginal.map(function (r) { return $.extend({}, r); });
-            refreshTable();
-        });
-    }
+    // (doSaveColumnAddition → extracted to modules/wl_save.js)
 
     // (showRemoveRowModal → extracted to modules/wl_modals.js)
 
@@ -860,13 +790,13 @@ require([
                 );
             } else {
                 showRemoveColumnModal(colName, function (reason) {
-                    doSaveColumnRemoval(colName, reason);
+                    Save.doSaveColumnRemoval(colName, reason);
                 });
             }
         }).fail(function () {
             // Fallback to normal flow if gate check fails
             showRemoveColumnModal(colName, function (reason) {
-                doSaveColumnRemoval(colName, reason);
+                Save.doSaveColumnRemoval(colName, reason);
             });
         });
     }
@@ -875,426 +805,13 @@ require([
     // (showApproveConfirmModal, showRejectReasonModal, showRemoveColumnModal
     //  → extracted to modules/wl_modals.js)
 
-    // Pending column removal — stored so doSave() can include the reason
-    // and the auto-save timer can fire after the 10-second undo window.
-    var pendingColRemoval = null; // { colName, reason, prevRows, prevOriginal, prevHeaders, prevOrigHeaders }
+    // (doSaveColumnRemoval, column removal undo → extracted to modules/wl_save.js)
 
-    function doSaveColumnRemoval(colName, reason) {
-        syncInputs();
+    // (Undo system → extracted to modules/wl_save.js)
 
-        // Prevent removing the last visible column
-        var visibleCount = currentHeaders.filter(function (h) { return h.charAt(0) !== "_"; }).length;
-        if (visibleCount <= 1) {
-            showMsg("Cannot remove the last column.", "error");
-            return;
-        }
+    // (External change detection → extracted to modules/wl_save.js)
 
-        // Snapshot state for undo
-        var prevRows = currentRows.map(function (r) { return $.extend({}, r); });
-        var prevOriginal = originalRows.map(function (r) { return $.extend({}, r); });
-        var prevHeaders = currentHeaders.slice();
-        var prevOrigHeaders = originalHeaders.slice();
-
-        // Remove locally (not saved yet)
-        var idx = currentHeaders.indexOf(colName);
-        if (idx !== -1) { currentHeaders.splice(idx, 1); }
-        currentRows.forEach(function (row) { delete row[colName]; });
-
-        refreshTable();
-
-        // Store pending removal for auto-save / doSave() inclusion
-        pendingColRemoval = {
-            colName: colName, reason: reason,
-            prevRows: prevRows, prevOriginal: prevOriginal,
-            prevHeaders: prevHeaders, prevOrigHeaders: prevOrigHeaders
-        };
-
-        // Show undo bar — auto-save fires when countdown ends
-        showColumnRemovalUndoBar(colName);
-    }
-
-    function showColumnRemovalUndoBar(colName) {
-        clearUndo();
-        var desc = 'Column removed: <strong>' + _.escape(colName) +
-                   '</strong> — auto-saves when countdown ends';
-
-        var $bar = $table.find("#wl-undo-bar");
-        $bar.html(
-            '<div class="wl-undo">' +
-            '<span>' + desc + '</span> ' +
-            '<button class="btn btn-small" id="btn-undo">Undo</button> ' +
-            '<span class="wl-undo-countdown" id="undo-countdown">10s</span>' +
-            '</div>'
-        );
-
-        var secondsLeft = 10;
-        undoTimer = setInterval(function () {
-            secondsLeft--;
-            $bar.find("#undo-countdown").text(secondsLeft + "s");
-            if (secondsLeft <= 0) {
-                clearUndo();
-                commitPendingColumnRemoval();
-            }
-        }, 1000);
-
-        $bar.off("click", "#btn-undo").on("click", "#btn-undo", function () {
-            undoColumnRemoval();
-        });
-    }
-
-    function undoColumnRemoval() {
-        if (!pendingColRemoval) { return; }
-        // Restore local state — no server call, no audit event
-        currentHeaders = pendingColRemoval.prevHeaders.slice();
-        currentRows = pendingColRemoval.prevRows.map(function (r) { return $.extend({}, r); });
-        pendingColRemoval = null;
-        clearUndo();
-        refreshTable();
-        showMsg("Column removal undone.", "info");
-    }
-
-    function commitPendingColumnRemoval() {
-        if (!pendingColRemoval) { return; }
-        var pcr = pendingColRemoval;
-        pendingColRemoval = null;
-
-        showMsg("Saving column removal&hellip;", "info");
-
-        restPost({
-            action:          "save_csv",
-            csv_file:        selectedCsv,
-            app_context:     selectedApp,
-            detection_rule:  selectedRule || "",
-            headers:         currentHeaders,
-            rows:            currentRows,
-            comment:         pcr.reason || "Column removal",
-            removal_reasons: [],
-            column_removal_reasons: [{ column: pcr.colName, reason: pcr.reason }],
-            expected_mtime:  loadedMtime
-        })
-        .done(function (data) {
-            if (data.error) {
-                showMsg(_.escape(data.error), "error");
-                // Restore local state on save failure
-                currentHeaders = pcr.prevHeaders;
-                originalHeaders = pcr.prevOrigHeaders;
-                currentRows = pcr.prevRows.map(function (r) { return $.extend({}, r); });
-                originalRows = pcr.prevOriginal.map(function (r) { return $.extend({}, r); });
-                refreshTable();
-                return;
-            }
-
-            var diffInfo = data.diff || {};
-            var msg = 'Column <strong>' + _.escape(pcr.colName) + '</strong> removed and saved.';
-            if (diffInfo.edited_count > 0) {
-                msg += " " + diffInfo.edited_count + " row(s) also edited.";
-            }
-            showMsg(msg, "success");
-            originalRows = currentRows.map(function (r) { return $.extend({}, r); });
-            originalHeaders = currentHeaders.slice();
-            if (data.file_mtime) { loadedMtime = data.file_mtime; }
-            if (diffInfo.text_diff && diffInfo.text_diff.length) {
-                renderDiff(diffInfo);
-            }
-            loadVersions(selectedCsv, selectedApp);
-        })
-        .fail(function (xhr) {
-            handleSaveError(xhr, "Failed to save after column removal.");
-            currentHeaders = pcr.prevHeaders;
-            originalHeaders = pcr.prevOrigHeaders;
-            currentRows = pcr.prevRows.map(function (r) { return $.extend({}, r); });
-            originalRows = pcr.prevOriginal.map(function (r) { return $.extend({}, r); });
-            refreshTable();
-        });
-    }
-
-    // ══════════════════════════════════════════════════════════════════
-    // Undo removal (10-second window)
-    // ══════════════════════════════════════════════════════════════════
-
-    function showUndoBar(removedRow, prevRows, prevOriginal, removedColName, prevHeaders, prevOrigHeaders) {
-        clearUndo();
-
-        var desc;
-        if (removedColName) {
-            desc = 'Column removed: <strong>' + _.escape(removedColName) + '</strong>';
-        } else {
-            var rowDesc = [];
-            currentHeaders.forEach(function (h) {
-                if (h.charAt(0) !== "_" && removedRow[h]) {
-                    rowDesc.push(removedRow[h]);
-                }
-            });
-            var descText = rowDesc.slice(0, 3).join(", ");
-            if (rowDesc.length > 3) { descText += "..."; }
-            desc = 'Row removed: <strong>' + _.escape(descText) + '</strong>';
-        }
-
-        undoState = {
-            prevRows: prevRows,
-            prevOriginal: prevOriginal,
-            prevHeaders: prevHeaders || null,
-            prevOrigHeaders: prevOrigHeaders || null
-        };
-
-        var $bar = $table.find("#wl-undo-bar");
-        $bar.html(
-            '<div class="wl-undo">' +
-            '<span>' + desc + '</span> ' +
-            '<button class="btn btn-small" id="btn-undo">Undo</button> ' +
-            '<span class="wl-undo-countdown" id="undo-countdown">10s</span>' +
-            '</div>'
-        );
-
-        var secondsLeft = 10;
-        undoTimer = setInterval(function () {
-            secondsLeft--;
-            $bar.find("#undo-countdown").text(secondsLeft + "s");
-            if (secondsLeft <= 0) {
-                clearUndo();
-            }
-        }, 1000);
-
-        $bar.off("click", "#btn-undo").on("click", "#btn-undo", function () {
-            doUndo();
-        });
-    }
-
-    // Row removal undo — saves the pre-removal snapshot back to server
-    function doUndo() {
-        if (!undoState) { return; }
-
-        // Build payload from snapshot WITHOUT modifying in-memory state.
-        // State is only updated on success (via reloadCsvQuiet).
-        var undoRows = undoState.prevRows.map(function (r) { return $.extend({}, r); });
-
-        clearUndo();
-        showMsg("Saving undo&hellip;", "info");
-
-        restPost({
-            action:          "save_csv",
-            csv_file:        selectedCsv,
-            app_context:     selectedApp,
-            detection_rule:  selectedRule || "",
-            headers:         currentHeaders,
-            rows:            undoRows,
-            comment:         "Undo row removal",
-            removal_reasons: [],
-            expected_mtime:  loadedMtime
-        })
-        .done(function (data) {
-            if (data.error) {
-                showMsg(_.escape(data.error), "error");
-                return;
-            }
-            showMsg("Removal undone and saved.", "success");
-            reloadCsvQuiet();
-        })
-        .fail(function (xhr) {
-            handleSaveError(xhr, "Failed to undo removal.");
-        });
-    }
-
-    function clearUndo() {
-        if (undoTimer) {
-            clearInterval(undoTimer);
-            undoTimer = null;
-        }
-        undoState = null;
-        pendingColRemoval = null;
-        var $bar = $table.find("#wl-undo-bar");
-        if ($bar.length) { $bar.empty(); }
-    }
-
-    // ══════════════════════════════════════════════════════════════════
-    // External change detection (poll file mtime every 5s)
-    // ══════════════════════════════════════════════════════════════════
-
-    function startChangeMonitoring() {
-        stopChangeMonitoring();
-        if (!selectedCsv || !loadedMtime) { return; }
-        changeCheckTimer = setInterval(checkForExternalChanges, 5000);
-    }
-
-    function stopChangeMonitoring() {
-        if (changeCheckTimer) { clearInterval(changeCheckTimer); changeCheckTimer = null; }
-    }
-
-    function checkForExternalChanges() {
-        if (!selectedCsv || !loadedMtime || saving) { return; }
-        restGet({
-            action:   "check_csv_status",
-            csv_file: selectedCsv,
-            app:      selectedApp || ""
-        })
-        .done(function (data) {
-            // Lock state changed — auto-reload (no modal needed)
-            var newPending = data.pending_count !== undefined ? data.pending_count : 0;
-            if (newPending !== loadedPendingCount) {
-                loadCsv(selectedCsv, selectedApp);
-                return;
-            }
-            // File content changed — show conflict modal
-            if (data.file_mtime && data.file_mtime !== loadedMtime) {
-                stopChangeMonitoring();
-                showExternalChangeModal();
-            }
-        })
-        .fail(function (xhr) {
-            if (xhr.status === 404) {
-                Presence.handleCsvRemoved(selectedCsv);
-            }
-        });
-    }
-
-    function hasUnsavedChanges() {
-        if (currentHeaders.length !== originalHeaders.length) { return true; }
-        for (var i = 0; i < currentHeaders.length; i++) {
-            if (currentHeaders[i] !== originalHeaders[i]) { return true; }
-        }
-        if (currentRows.length !== originalRows.length) { return true; }
-        for (var r = 0; r < currentRows.length; r++) {
-            for (var h = 0; h < currentHeaders.length; h++) {
-                var hdr = currentHeaders[h];
-                if ((currentRows[r][hdr] || "") !== (originalRows[r][hdr] || "")) { return true; }
-            }
-        }
-        return false;
-    }
-
-    function showExternalChangeModal() {
-        $(".wl-modal-overlay").remove();
-
-        var unsaved = hasUnsavedChanges();
-        var warning = unsaved
-            ? '<p style="color:var(--wl-warn-text,#e65100);margin-top:8px">' +
-              '<strong>Warning:</strong> You have unsaved changes that will be lost if you reload.</p>'
-            : '';
-
-        var html =
-            '<div class="wl-modal-overlay">' +
-                '<div class="wl-modal">' +
-                    '<div class="wl-modal-header">CSV File Changed Externally</div>' +
-                    '<div class="wl-modal-body">' +
-                        'The file <strong>' + _.escape(selectedCsv) + '</strong> has been modified ' +
-                        'outside of Whitelist Manager (possibly by another analyst or application).' +
-                        warning +
-                    '</div>' +
-                    '<div class="wl-modal-actions">' +
-                        '<span class="btn btn-primary" id="wl-extchg-reload">Reload CSV</span> ' +
-                        '<span class="btn" id="wl-extchg-keep">Keep editing</span>' +
-                    '</div>' +
-                '</div>' +
-            '</div>';
-
-        var $modal = $(html);
-        $("body").append($modal);
-
-        $modal.on("click", "#wl-extchg-reload", function () {
-            $modal.remove();
-            loadCsv(selectedCsv, selectedApp);
-        });
-        $modal.on("click", "#wl-extchg-keep", function () {
-            $modal.remove();
-            // Update mtime so prompt doesn't immediately reappear
-            restGet({
-                action:   "check_csv_status",
-                csv_file: selectedCsv,
-                app:      selectedApp || ""
-            })
-            .done(function (data) {
-                loadedMtime = data.file_mtime || loadedMtime;
-                startChangeMonitoring();
-            });
-        });
-    }
-
-    // ══════════════════════════════════════════════════════════════════
-    // Comment validation
-    // ══════════════════════════════════════════════════════════════════
-
-    function getAuditComment(callback) {
-        var hasCommentCol = currentHeaders.indexOf("Comment") !== -1;
-
-        $table.find(".wl-input").removeClass("wl-input-error");
-
-        if (hasCommentCol) {
-            var emptyFound = false;
-            $table.find("tbody tr").each(function () {
-                $(this).find('.wl-input[data-header="Comment"]').each(function () {
-                    if (!$(this).val().trim()) {
-                        $(this).addClass("wl-input-error");
-                        emptyFound = true;
-                    }
-                });
-            });
-
-            if (emptyFound) {
-                showMsg("Comment field cannot be empty.", "error");
-                return;
-            }
-
-            callback({ valid: true, comment: "" });
-            return;
-        }
-
-        // Show styled modal for audit comment
-        $(".wl-modal-overlay").remove();
-        var html =
-            '<div class="wl-modal-overlay">' +
-            '<div class="wl-modal" style="max-width:480px">' +
-                '<h3 style="margin-top:0">Audit Comment Required</h3>' +
-                '<p style="font-size:13px;color:var(--wl-text-secondary,#888);margin:0 0 12px">' +
-                    'This CSV does not have a "Comment" column.<br>' +
-                    'Please provide a reason for this change (max 500 chars).<br>' +
-                    '<em>This will be recorded in the audit trail only, not saved in the CSV.</em>' +
-                '</p>' +
-                '<textarea id="wl-audit-comment-input" rows="3" maxlength="500" ' +
-                    'style="width:100%;box-sizing:border-box;font-family:inherit;' +
-                    'font-size:13px;padding:6px 8px;border:1px solid var(--wl-border);' +
-                    'border-radius:3px;background:var(--wl-bg-input);color:var(--wl-text);' +
-                    'resize:vertical" placeholder="Reason for this change\u2026"></textarea>' +
-                '<div class="wl-char-counter" data-for="wl-audit-comment-input">0 / 500</div>' +
-                '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">' +
-                    '<span class="btn btn-primary" id="wl-audit-comment-ok" ' +
-                        'style="cursor:pointer">OK</span>' +
-                    '<span class="btn" id="wl-audit-comment-cancel" ' +
-                        'style="cursor:pointer">Cancel</span>' +
-                '</div>' +
-            '</div></div>';
-
-        $("body").append(html);
-        setTimeout(function () { $("#wl-audit-comment-input").focus(); }, 100);
-
-        $(".wl-modal-overlay").on("click", "#wl-audit-comment-cancel", function () {
-            $(".wl-modal-overlay").remove();
-        });
-        $(".wl-modal-overlay").on("click", function (e) {
-            if ($(e.target).hasClass("wl-modal-overlay")) {
-                $(".wl-modal-overlay").remove();
-            }
-        });
-        $(".wl-modal-overlay").on("click", "#wl-audit-comment-ok", function () {
-            var comment = ($("#wl-audit-comment-input").val() || "").trim();
-            if (!comment) {
-                $("#wl-audit-comment-input").css("border-color", "#e74c3c")
-                    .attr("placeholder", "A reason is required!");
-                return;
-            }
-            if (C.NON_ASCII_RE.test(comment)) {
-                $("#wl-audit-comment-input").css("border-color", "#e74c3c");
-                showMsg(C.ASCII_ERROR_MSG, "error");
-                return;
-            }
-            if (comment.length > 500) {
-                comment = comment.substring(0, 500);
-                showMsg("Comment truncated to 500 characters.", "warning");
-            }
-            $(".wl-modal-overlay").remove();
-            callback({ valid: true, comment: comment });
-        });
-    }
-
+    // (getAuditComment → extracted to modules/wl_save.js)
 
     // ══════════════════════════════════════════════════════════════════
     // Load CSV content from REST
@@ -1336,7 +853,7 @@ require([
             renderTable(data.headers || [], data.rows || []);
             loadVersions(csvFile, appContext);
             loadedMtime = data.file_mtime || null;
-            startChangeMonitoring();
+            Save.startChangeMonitoring();
             Presence.startPresenceMonitoring();
             // Apply pending approval CSS highlighting + banner
             if (pendingApprovals.length) {
@@ -1390,7 +907,7 @@ require([
                 renderTable(data.headers || [], data.rows || []);
                 loadVersions(selectedCsv, selectedApp);
                 if (data.file_mtime) { loadedMtime = data.file_mtime; }
-                startChangeMonitoring();
+                Save.startChangeMonitoring();
             }
         })
         .fail(function (xhr) {
@@ -1403,354 +920,7 @@ require([
         });
     }
 
-    // ══════════════════════════════════════════════════════════════════
-    // Save CSV (full save — Save Changes button)
-    // ══════════════════════════════════════════════════════════════════
-    function doSave() {
-        if (saving) { return; }
-        if (csvLocked) {
-            showMsg("This CSV is locked by a pending approval request.", "error");
-            return;
-        }
-
-        syncInputs();
-
-        // Remove completely empty rows before saving
-        var visHeaders = currentHeaders.filter(function (h) { return h.charAt(0) !== "_"; });
-        var beforeCount = currentRows.length;
-        currentRows = currentRows.filter(function (row) {
-            return visHeaders.some(function (h) { return (row[h] || "").trim() !== ""; });
-        });
-        if (currentRows.length < beforeCount) {
-            refreshTable();
-        }
-
-        if (!selectedCsv) {
-            showMsg("No CSV file selected.", "error");
-            return;
-        }
-
-        // ── Pre-save gate: estimate edits and additions to check limits ──
-        var editedCount = 0;
-        var addedCount = Math.max(0, currentRows.length - originalRows.length);
-        visHeaders.forEach(function () {}); // reuse visHeaders from above
-        var origKeySet = {};
-        originalRows.forEach(function (row) {
-            var key = visHeaders.map(function (h) { return row[h] || ""; }).join("||");
-            origKeySet[key] = true;
-        });
-        currentRows.forEach(function (row, idx) {
-            if (idx < originalRows.length) {
-                var changed = visHeaders.some(function (h) {
-                    return (row[h] || "") !== (originalRows[idx][h] || "");
-                });
-                if (changed) { editedCount++; }
-            }
-        });
-
-        // If either inline edits or additions exceed thresholds, the backend
-        // will block the save with a 403.  Show a clear frontend message first.
-        function proceedWithSave() {
-            getAuditComment(function (result) {
-            if (!result) { return; }
-
-            saving = true;
-            $table.find("#btn-save").prop("disabled", true).text("Saving...");
-            showMsg("Saving&hellip;", "info");
-
-            var savePayload = {
-                action:          "save_csv",
-                csv_file:        selectedCsv,
-                app_context:     selectedApp,
-                detection_rule:  selectedRule || "",
-                headers:         currentHeaders,
-                rows:            currentRows,
-                comment:         result.comment,
-                removal_reasons: [],
-                expected_mtime:  loadedMtime
-            };
-            // Include bulk edit marker so backend classifies edits correctly
-            if (pendingBulkEditCount > 0) {
-                savePayload._bulk_edit_count = pendingBulkEditCount;
-            }
-            // Include pending column removal reason if user clicks Save
-            // during the 10-second undo countdown
-            if (pendingColRemoval) {
-                savePayload.column_removal_reasons = [{
-                    column: pendingColRemoval.colName,
-                    reason: pendingColRemoval.reason
-                }];
-                pendingColRemoval = null;
-                clearUndo();
-            }
-            restPost(savePayload)
-            .done(function (data) {
-                if (data.error) {
-                    saving = false;
-                    showMsg(_.escape(data.error), "error");
-                    currentRows = originalRows.map(function (r) { return $.extend({}, r); });
-                    refreshTable();
-                    return;
-                }
-
-                var diffInfo = data.diff || {};
-                var totalRowChanges = (diffInfo.added_count || 0) +
-                                      (diffInfo.removed_count || 0) +
-                                      (diffInfo.edited_count || 0);
-                var colsAdded   = (diffInfo.added_columns   || []).length;
-                var colsRemoved = (diffInfo.removed_columns || []).length;
-
-                if (totalRowChanges > 0 || colsAdded > 0 || colsRemoved > 0) {
-                    var parts = [];
-                    if (diffInfo.added_count)   { parts.push("Added: <strong>" + diffInfo.added_count + "</strong> row(s)"); }
-                    if (diffInfo.removed_count) { parts.push("Removed: <strong>" + diffInfo.removed_count + "</strong> row(s)"); }
-                    if (diffInfo.edited_count)  { parts.push("Edited: <strong>" + diffInfo.edited_count + "</strong> row(s)"); }
-                    if (colsAdded)   { parts.push("Columns added: <strong>" + colsAdded + "</strong>"); }
-                    if (colsRemoved) { parts.push("Columns removed: <strong>" + colsRemoved + "</strong>"); }
-                    showMsg("Saved successfully. " + parts.join(", ") + ".", "success");
-                } else {
-                    showMsg("No changes detected.", "info");
-                }
-
-                if (diffInfo.text_diff && diffInfo.text_diff.length) {
-                    renderDiff(diffInfo);
-                }
-
-                // Clear search after successful save so all rows are visible
-                searchQuery = "";
-
-                // Reload CSV from server to pick up backend-stamped metadata
-                // (e.g. _review_status=pending, _added_by, _added_at)
-                reloadCsvQuiet(function () {
-                    saving = false;
-                });
-            })
-            .fail(function (xhr) {
-                saving = false;
-                pendingBulkEditCount = 0; // Reset on save failure
-                handleSaveError(xhr, "Failed to save CSV.");
-                currentRows = originalRows.map(function (r) { return $.extend({}, r); });
-                currentHeaders = originalHeaders.slice();
-                refreshTable();
-            });
-            }); // end getAuditComment callback
-        }
-
-        // Pre-save checks:
-        //  - Bulk Edit edits   → check "bulk_row_edit" approval gate + daily limit
-        //  - Inline row edits  → check "row_edit" daily limit (no approval gate)
-        //  - Inline row adds   → check "bulk_row_addition" approval gate
-        var needsGateCheck = false;
-        var gateAction = "";
-        var gateCount = 0;
-
-        if (addedCount > 0) {
-            // Row additions still use the approval gate for large batches
-            needsGateCheck = true;
-            gateAction = "bulk_row_addition";
-            gateCount = addedCount;
-        } else if (editedCount >= 2) {
-            // 2+ row edits = bulk edit (matches server-side is_bulk_edit
-            // = edited_count >= 2) — check bulk_row_edit gate + limit
-            // regardless of whether the Bulk Edit button was used
-            needsGateCheck = true;
-            gateAction = "bulk_row_edit";
-            gateCount = editedCount;
-        } else if (editedCount > 0) {
-            // Single inline edit — daily limit check only, no approval gate
-            needsGateCheck = true;
-            gateAction = "inline_row_edit";
-            gateCount = editedCount;
-        }
-
-        if (needsGateCheck) {
-            restPost({
-                action: "check_approval_gate",
-                gate_action: gateAction,
-                csv_file: selectedCsv,
-                app_context: selectedApp,
-                selected_count: gateCount
-            }).done(function (gateData) {
-                if (gateData.requires_approval) {
-                    // Show reason modal and submit for approval
-                    var actionDesc = gateAction === "bulk_row_edit"
-                        ? "Editing <strong>" + gateCount + "</strong> row(s)"
-                        : "Adding <strong>" + gateCount + "</strong> row(s)";
-                    showRemoveRowModal(
-                        "Submit for Approval",
-                        actionDesc + " requires admin approval.<br>" +
-                            "Reason: " + _.escape(gateData.reason) + "<br><br>" +
-                            "Your request will be submitted for review.",
-                        function (reason) {
-                            if (gateAction === "bulk_row_addition") {
-                                ApprovalUI.submitApprovalRequest("bulk_row_addition", reason, null, null);
-                            } else if (gateAction === "bulk_row_edit") {
-                                // Submit full save payload for approval
-                                // (inline multi-row edits don't have a single col/val)
-                                ApprovalUI.submitInlineMultiEditApproval(gateCount, reason);
-                            }
-                        },
-                        {
-                            reasonLabel: gateAction === "bulk_row_edit" ? "Reason for bulk edit" : "Reason for adding rows",
-                            placeholder: gateAction === "bulk_row_edit" ? "Why are these rows being edited?" : "Why are these rows being added?",
-                            confirmText: "Submit",
-                            confirmClass: "btn-primary"
-                        }
-                    );
-                } else if (gateData.daily_limit && !gateData.daily_limit.allowed) {
-                    showMsg(formatDailyLimitMsg(gateData.daily_limit),
-                        "error"
-                    );
-                } else {
-                    proceedWithSave();
-                }
-            }).fail(function () {
-                // Fail-closed: block save if gate check fails
-                showMsg("Unable to verify approval gate. Please try again.", "error");
-            });
-        } else {
-            proceedWithSave();
-        }
-    }
-
-    // ══════════════════════════════════════════════════════════════════
-    // Save for row removal — auto-triggered, with undo support
-    // ══════════════════════════════════════════════════════════════════
-    function doSaveRemoval(removedRow, reason, rowNumber, prevRows, prevOriginal) {
-        if (!selectedCsv) {
-            showMsg("No CSV file selected.", "error");
-            return;
-        }
-
-        showMsg("Removing row and saving&hellip;", "info");
-
-        var rmPayload = {
-            action:          "save_csv",
-            csv_file:        selectedCsv,
-            app_context:     selectedApp,
-            detection_rule:  selectedRule || "",
-            headers:         currentHeaders,
-            rows:            currentRows,
-            comment:         "Row removal",
-            removal_reasons: [{ row: removedRow, reason: reason, row_number: rowNumber }],
-            expected_mtime:  loadedMtime
-        };
-        // If unsaved bulk edits are included in currentRows, mark them
-        // so the backend classifies them as bulk_row_edit (not row_edit)
-        if (pendingBulkEditCount > 0) {
-            rmPayload._bulk_edit_count = pendingBulkEditCount;
-        }
-        restPost(rmPayload)
-        .done(function (data) {
-            if (data.error) {
-                showMsg(_.escape(data.error), "error");
-                currentRows = prevRows.map(function (r) { return $.extend({}, r); });
-                originalRows = prevOriginal.map(function (r) { return $.extend({}, r); });
-                refreshTable();
-                return;
-            }
-
-            var diffInfo = data.diff || {};
-            var rmMsg = "Row removed and saved successfully.";
-            if (diffInfo.edited_count > 0) {
-                rmMsg = "Row removed and " + diffInfo.edited_count + " row(s) edited. Saved successfully.";
-            }
-            showMsg(rmMsg, "success");
-            originalRows = currentRows.map(function (r) { return $.extend({}, r); });
-            originalHeaders = currentHeaders.slice();
-            pendingBulkEditCount = 0; // Bulk edits (if any) were committed with the removal
-            if (data.file_mtime) { loadedMtime = data.file_mtime; }
-            refreshTable(); // Re-render to clear stale edit highlights
-
-            // Show undo bar for 10 seconds
-            showUndoBar(removedRow, prevRows, prevOriginal);
-            if (diffInfo.text_diff && diffInfo.text_diff.length) {
-                renderDiff(diffInfo);
-            }
-
-            // Refresh version list
-            loadVersions(selectedCsv, selectedApp);
-        })
-        .fail(function (xhr) {
-            pendingBulkEditCount = 0; // Reset on failure too (rows are restored)
-            handleSaveError(xhr, "Failed to save after removal.");
-            currentRows = prevRows.map(function (r) { return $.extend({}, r); });
-            originalRows = prevOriginal.map(function (r) { return $.extend({}, r); });
-            refreshTable();
-        });
-    }
-
-    // ══════════════════════════════════════════════════════════════════
-    // Save for bulk removal — multiple rows at once
-    // ══════════════════════════════════════════════════════════════════
-    function doSaveBulkRemoval(removedEntries, reason, prevRows, prevOriginal) {
-        if (!selectedCsv) {
-            showMsg("No CSV file selected.", "error");
-            return;
-        }
-
-        showMsg("Removing " + removedEntries.length + " row(s) and saving&hellip;", "info");
-
-        // Build bulk_removal payload with row numbers for audit
-        var bulkRemoval = removedEntries.map(function (entry) {
-            return {
-                row_number: entry.row_number,
-                row: entry.row,
-                reason: reason
-            };
-        });
-
-        var bulkRmPayload = {
-            action:          "save_csv",
-            csv_file:        selectedCsv,
-            app_context:     selectedApp,
-            detection_rule:  selectedRule || "",
-            headers:         currentHeaders,
-            rows:            currentRows,
-            comment:         "Bulk removal (" + removedEntries.length + " rows)",
-            removal_reasons: [],
-            bulk_removal:    bulkRemoval,
-            expected_mtime:  loadedMtime
-        };
-        if (pendingBulkEditCount > 0) {
-            bulkRmPayload._bulk_edit_count = pendingBulkEditCount;
-        }
-        restPost(bulkRmPayload)
-        .done(function (data) {
-            if (data.error) {
-                showMsg(_.escape(data.error), "error");
-                currentRows = prevRows.map(function (r) { return $.extend({}, r); });
-                originalRows = prevOriginal.map(function (r) { return $.extend({}, r); });
-                refreshTable();
-                return;
-            }
-
-            var diffInfo = data.diff || {};
-            var bulkMsg = removedEntries.length + " row(s) removed and saved successfully.";
-            if (diffInfo.edited_count > 0) {
-                bulkMsg = removedEntries.length + " row(s) removed and " + diffInfo.edited_count + " row(s) edited. Saved successfully.";
-            }
-            showMsg(bulkMsg, "success");
-            originalRows = currentRows.map(function (r) { return $.extend({}, r); });
-            originalHeaders = currentHeaders.slice();
-            pendingBulkEditCount = 0; // Bulk edits (if any) were committed with the removal
-            if (data.file_mtime) { loadedMtime = data.file_mtime; }
-            refreshTable(); // Re-render to clear stale edit highlights
-            if (diffInfo.text_diff && diffInfo.text_diff.length) {
-                renderDiff(diffInfo);
-            }
-
-            // Refresh version list
-            loadVersions(selectedCsv, selectedApp);
-        })
-        .fail(function (xhr) {
-            pendingBulkEditCount = 0; // Reset on failure too (rows are restored)
-            handleSaveError(xhr, "Failed to save after bulk removal.");
-            currentRows = prevRows.map(function (r) { return $.extend({}, r); });
-            originalRows = prevOriginal.map(function (r) { return $.extend({}, r); });
-            refreshTable();
-        });
-    }
+    // (doSave, doSaveRemoval, doSaveBulkRemoval → extracted to modules/wl_save.js)
 
     // (renderDiff → extracted to modules/wl_diff.js)
 
@@ -1799,7 +969,7 @@ require([
         if ((e.ctrlKey || e.metaKey) && e.which === 83) {
             e.preventDefault();
             if (selectedCsv && !saving) {
-                doSave();
+                Save.doSave();
             }
             return;
         }
@@ -1966,7 +1136,7 @@ require([
 
     // Stop presence on page unload
     $(window).on("beforeunload", function () {
-        stopChangeMonitoring();
+        Save.stopChangeMonitoring();
         Presence.stopPresenceMonitoring();
     });
 
