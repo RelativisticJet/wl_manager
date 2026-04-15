@@ -432,6 +432,21 @@ def main():
         "csv_hash_interval_seconds": CSV_HASH_INTERVAL,
     })
 
+    # Baseline the lookups directory mode so a later chmod (a class of
+    # insider DoS attack that would silently break CSV integrity
+    # monitoring) is detectable from inside the watcher's own access
+    # rights — no external auditd/inotify/privileged hooks required.
+    try:
+        baseline_lookups_mode = os.stat(LOOKUPS_DIR).st_mode & 0o777
+    except OSError:
+        baseline_lookups_mode = None  # will re-probe on first loop
+    # Suppression for the unreadable-dir case: if the directory stays
+    # unreadable, we'd emit at every FAST_INTERVAL tick (~2s) until the
+    # admin fixes it. Throttle to once per 5 minutes so the alert channel
+    # doesn't drown. First-transition alert still fires immediately.
+    lookups_dir_unreadable_last_emit = 0.0
+    LOOKUPS_DIR_UNREADABLE_SUPPRESS_SECONDS = 300
+
     last_heartbeat = time.monotonic()
     last_csv_full_hash = time.monotonic()
     last_csv_mapping_refresh = time.monotonic()
@@ -440,6 +455,56 @@ def main():
     while _running:
         time.sleep(FAST_INTERVAL)
         now = time.monotonic()
+
+        # ── Lookups directory integrity (chmod DoS detection) ──
+        # If an attacker chmods the lookups directory to block our read
+        # access, CSV hashing silently starts failing — the watcher
+        # would lose integrity visibility without any external signal.
+        # Detect this from inside our own access: a stat on the dir
+        # either fails with PermissionError (lockdown of directory) or
+        # returns a different mode than the baseline (permission edit).
+        # Either condition is a CRITICAL alert that Splunk can surface
+        # before the next CSV hash fails silently.
+        try:
+            current_lookups_mode = os.stat(LOOKUPS_DIR).st_mode & 0o777
+            if baseline_lookups_mode is None:
+                # Recover from a failed baseline on first loop.
+                baseline_lookups_mode = current_lookups_mode
+            elif current_lookups_mode != baseline_lookups_mode:
+                _emit({
+                    "action": "fim_lookups_dir_mode_changed",
+                    "severity": "CRITICAL",
+                    "monitored_path": LOOKUPS_DIR,
+                    "old_mode": "{:04o}".format(baseline_lookups_mode),
+                    "new_mode": "{:04o}".format(current_lookups_mode),
+                    "details": "Lookups directory permissions changed — "
+                               "possible attempt to DoS CSV integrity "
+                               "monitoring by removing read access",
+                })
+                # Adopt the new mode so we don't spam alerts every tick.
+                # The first event is the signal; persistence is recorded
+                # in the audit index timeline.
+                baseline_lookups_mode = current_lookups_mode
+        except PermissionError:
+            if (now - lookups_dir_unreadable_last_emit
+                    >= LOOKUPS_DIR_UNREADABLE_SUPPRESS_SECONDS):
+                _emit({
+                    "action": "fim_lookups_dir_unreadable",
+                    "severity": "CRITICAL",
+                    "monitored_path": LOOKUPS_DIR,
+                    "details": "Watcher cannot stat the lookups directory "
+                               "— attacker may have chmod'd to DoS CSV "
+                               "integrity monitoring. Subsequent CSV hash "
+                               "computations will fail silently until the "
+                               "directory is readable again. This alert "
+                               "is throttled to once per 5 minutes while "
+                               "the condition persists.",
+                })
+                lookups_dir_unreadable_last_emit = now
+        except OSError:
+            # Transient OS issue (e.g. inode lookup race). Silent —
+            # not an attack signal.
+            pass
 
         # ── Static file monitoring (code + sentinels) ──
         for path in STATIC_PATHS:

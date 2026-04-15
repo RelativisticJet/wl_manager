@@ -1558,6 +1558,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # FIM Deploy Window (read-only status)
         "get_deploy_window_status": (SUPERADMIN_ROLES, "_action_get_deploy_window_status"),
+
+        # Install-time capability probes (tell admins whether optional
+        # _audit-dependent features will work in this deployment)
+        "probe_audit_access": (ADMIN_ROLES, "_action_probe_audit_access"),
     }
 
     POST_ACTIONS = {
@@ -2139,6 +2143,104 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "is_admin": is_admin,
             "is_superadmin": is_superadmin,
             "roles": sorted(roles),
+        })
+
+    def _action_probe_audit_access(self, request, query, user, roles):
+        """GET action: probe whether the current session can read _audit.
+
+        Used at install time to determine whether the optional
+        insider-threat attribution features (wl_csv_modification_attribution
+        and wl_saved_search_timebomb_monitor) will produce useful results
+        if enabled. Probing via the session key that made the REST call —
+        this is exactly the privilege context the scheduled searches will
+        run in (nobody role in the wl_manager namespace).
+
+        Response shape:
+          {
+            "audit_index_accessible": true/false,
+            "probe_method": "rest_api" | "splunk_search",
+            "diagnostic": "<human-readable reason>",
+            "optional_features": {
+              "wl_csv_modification_attribution": "available" | "unavailable",
+              "wl_saved_search_timebomb_monitor": "available" | "unavailable",
+            },
+            "recommendation": "<what to do next>"
+          }
+        """
+        session_key = request.get("system_authtoken", "") or \
+            request.get("session", {}).get("authtoken", "")
+        accessible = False
+        diagnostic = "probe not attempted"
+        method = "rest_api"
+
+        if not session_key:
+            diagnostic = ("No session key available to probe. This is "
+                          "unusual for a REST handler — probe result "
+                          "should be considered inconclusive.")
+        else:
+            try:
+                import splunk.rest
+                # Ask Splunk for the _audit index metadata. A user with
+                # read access to the index gets a 200 + a content body
+                # describing the index. A user without access gets 404
+                # (index not visible in their namespace) or 403.
+                status, content = splunk.rest.simpleRequest(
+                    "/services/data/indexes/_audit",
+                    sessionKey=session_key,
+                    getargs={"output_mode": "json"},
+                    raiseAllErrors=False,
+                )
+                status_code = getattr(status, "status", 0)
+                if status_code == 200:
+                    accessible = True
+                    diagnostic = ("_audit index is visible to this "
+                                  "session (HTTP 200 from REST probe).")
+                elif status_code in (403, 404):
+                    accessible = False
+                    diagnostic = ("_audit index is NOT accessible to "
+                                  "this session (HTTP {} from REST "
+                                  "probe). Your Splunk admin has not "
+                                  "granted read access to this app's "
+                                  "role context. Contact them if you "
+                                  "want to enable the optional "
+                                  "insider-threat attribution features."
+                                  .format(status_code))
+                else:
+                    accessible = False
+                    diagnostic = ("Probe returned HTTP {} — treating "
+                                  "as inaccessible. Check splunkd.log "
+                                  "for details.".format(status_code))
+            except Exception as exc:  # noqa: BLE001
+                accessible = False
+                diagnostic = ("Probe raised exception: {}. Treating "
+                              "as inaccessible.".format(
+                                  str(exc)[:200]))
+
+        feature_state = "available" if accessible else "unavailable"
+        recommendation = (
+            "Enable wl_csv_modification_attribution and "
+            "wl_saved_search_timebomb_monitor in savedsearches.conf "
+            "(set disabled = false) to activate insider-threat "
+            "attribution features."
+        ) if accessible else (
+            "Optional insider-threat attribution features remain "
+            "disabled. The core CSV integrity alert "
+            "(wl_csv_external_modification_alert) is NOT affected and "
+            "continues to work. To unlock attribution, ask your Splunk "
+            "admin to grant _audit index read to the app's role context "
+            "(typically the wl_superadmin and wl_admin roles need a "
+            "srchIndexesAllowed entry that includes _audit)."
+        )
+
+        return self._resp(200, {
+            "audit_index_accessible": accessible,
+            "probe_method": method,
+            "diagnostic": diagnostic,
+            "optional_features": {
+                "wl_csv_modification_attribution": feature_state,
+                "wl_saved_search_timebomb_monitor": feature_state,
+            },
+            "recommendation": recommendation,
         })
 
     def _action_report_presence(self, request, query, user, roles):
