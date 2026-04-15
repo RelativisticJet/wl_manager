@@ -1451,8 +1451,16 @@ def _expire_pending_approvals():
 
 
 def _get_pending_for_csv(csv_file):
-    """Return pending approval items for a specific CSV file."""
-    queue = _expire_pending_approvals()
+    """Return pending approval items for a specific CSV file.
+
+    Read-only: uses in-memory expire but does NOT persist. Persisting here
+    would write outside the approval-queue outer lock and could clobber
+    concurrent submits (see TOCTOU fix, build 572). Expired entries are
+    still correctly filtered out for the caller; on-disk status is refreshed
+    whenever the next submit/process runs inside the outer lock.
+    """
+    queue = _read_approval_queue()
+    queue = expire_pending_approvals(queue)
     return [item for item in queue
             if item.get("csv_file") == csv_file and item.get("status") == "pending"]
 
@@ -4596,8 +4604,17 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # below right before the append (authoritative check — prevents
         # TOCTOU race where two concurrent submits both pass the outside
         # check and both append).
+        #
+        # IMPORTANT: this early-exit check must NOT write the queue. Using the
+        # read+write wrapper _expire_pending_approvals() here caused a TOCTOU
+        # race: two concurrent submits both ran the wrapper before either took
+        # the outer lock, so the second writer's stale read-back clobbered the
+        # first's appended entry. Read-only expire keeps the UX fast-fail while
+        # letting the authoritative write happen exclusively inside the outer
+        # _approval_queue_lock() at line 4744.
         detection_rule = payload.get("detection_rule", "")
-        queue = _expire_pending_approvals()
+        queue = _read_approval_queue()
+        queue = expire_pending_approvals(queue)
         conflict_err = _approval_conflict_error(
             queue, action_type, user, csv_file, detection_rule)
         if conflict_err:
@@ -6353,8 +6370,14 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         })
 
     def _get_approval_queue_action(self):
-        """Return the full approval queue for the Control Panel."""
-        queue = _expire_pending_approvals()
+        """Return the full approval queue for the Control Panel.
+
+        Read-only: uses in-memory expire. Persisting here would write
+        outside the approval-queue outer lock and could clobber concurrent
+        submits (see TOCTOU fix, build 572).
+        """
+        queue = _read_approval_queue()
+        queue = expire_pending_approvals(queue)
         sorted_queue = sorted(
             queue, key=lambda x: x.get("timestamp", 0), reverse=True
         )
