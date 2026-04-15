@@ -535,6 +535,31 @@ def main():
     # with lockdown_active and promote severity to CRITICAL when true.
     _refresh_lockdown_state()
 
+    # Detect missing passAuth: when run as a Splunk scripted input with
+    # `passAuth = true` set in inputs.conf (the default we ship), splunkd
+    # writes a session key to stdin. If we started non-interactively but
+    # got no session key, someone has changed inputs.conf to drop
+    # passAuth — which disables KV baseline sync. The watcher still
+    # functions with filesystem-only state, but KV/FS divergence
+    # detection is degraded. Emit one alert per run so operators can
+    # see the misconfiguration in their dashboards.
+    if not session_key and not sys.stdin.isatty():
+        _emit({
+            "action": "fim_scripted_input_no_session_key",
+            "severity": "HIGH",
+            "details": "Scripted input started without a session key. "
+                       "Either passAuth was removed from inputs.conf or "
+                       "splunkd failed to pass the token. KV-store "
+                       "baseline sync is disabled in this mode — the "
+                       "filesystem baseline remains the single source of "
+                       "truth, which weakens the dual-store tamper "
+                       "detection. Fix by restoring "
+                       "'passAuth = true' in default/inputs.conf (or "
+                       "local/inputs.conf override) for the "
+                       "[script://$SPLUNK_HOME/etc/apps/wl_manager/bin/"
+                       "wl_fim.py] stanza.",
+        })
+
     key = _derive_hmac_key()
 
     deploy_active, deploy_details = _read_deploy_window(key)

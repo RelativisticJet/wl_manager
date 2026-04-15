@@ -1562,6 +1562,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # Install-time capability probes (tell admins whether optional
         # _audit-dependent features will work in this deployment)
         "probe_audit_access": (ADMIN_ROLES, "_action_probe_audit_access"),
+        "probe_server_info_access": (ADMIN_ROLES, "_action_probe_server_info_access"),
+        "probe_list_users_access": (ADMIN_ROLES, "_action_probe_list_users_access"),
     }
 
     POST_ACTIONS = {
@@ -2240,6 +2242,274 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 "wl_csv_modification_attribution": feature_state,
                 "wl_saved_search_timebomb_monitor": feature_state,
             },
+            "recommendation": recommendation,
+        })
+
+    def _action_probe_server_info_access(self, request, query, user, roles):
+        """GET action: probe whether the /services/server/info endpoint
+        is reachable, and whether the etc/instance.cfg filesystem fallback
+        works. Tells admins at install time which GUID-resolution path
+        this deployment will use.
+
+        Why we need the server GUID:
+          The GUID is the only per-instance secret we can reliably derive
+          an HMAC key from. Every tamper-resistant state file in the app
+          (cooldown counters, FIM baseline, deploy-window token, emergency
+          lockdown) is HMAC-signed with SHA-256(salt || GUID). Without
+          the GUID we cannot verify that these files haven't been edited
+          by an attacker — so the app fails closed on signature failures.
+
+        Resolution paths, in order:
+          1. REST /services/server/info  (requires list_server capability,
+             typically granted to the 'admin' role or any role with the
+             'list_all_roles' inherited cap chain)
+          2. Read /opt/splunk/etc/instance.cfg directly (requires filesystem
+             read of the Splunk etc/ directory — usually available to the
+             splunk process user that runs the app)
+
+          The app tries REST first (cleaner), falls back to filesystem. If
+          BOTH fail, HMAC key derivation returns None and all signed state
+          operations fail closed with a clear error.
+
+        Response shape:
+          {
+            "rest_api_accessible": true/false,
+            "instance_cfg_readable": true/false,
+            "resolution_path": "rest" | "instance_cfg" | "none",
+            "guid_resolved": true/false,
+            "diagnostic": "<human-readable>",
+            "recommendation": "<what to do next>",
+          }
+        """
+        session_key = request.get("system_authtoken", "") or \
+            request.get("session", {}).get("authtoken", "")
+        rest_ok = False
+        rest_diag = "not attempted"
+        cfg_ok = False
+        cfg_diag = "not attempted"
+        guid = None
+
+        # Path 1: REST
+        if session_key:
+            try:
+                import splunk.rest
+                status, content = splunk.rest.simpleRequest(
+                    "/services/server/info",
+                    sessionKey=session_key,
+                    getargs={"output_mode": "json"},
+                    raiseAllErrors=False,
+                )
+                status_code = getattr(status, "status", 0)
+                if status_code == 200:
+                    data = json.loads(content)
+                    entries = data.get("entry", [])
+                    if entries:
+                        guid = entries[0].get("content", {}).get("guid")
+                        if guid:
+                            rest_ok = True
+                            rest_diag = ("HTTP 200, GUID resolved via "
+                                         "REST endpoint.")
+                        else:
+                            rest_diag = ("HTTP 200 but no guid field in "
+                                         "response — unusual.")
+                    else:
+                        rest_diag = "HTTP 200 but empty entries array."
+                elif status_code in (403, 404):
+                    rest_diag = ("HTTP {} from /services/server/info "
+                                 "— this session lacks list_server "
+                                 "capability.".format(status_code))
+                else:
+                    rest_diag = ("HTTP {} — treating as inaccessible."
+                                 .format(status_code))
+            except Exception as exc:  # noqa: BLE001
+                rest_diag = "REST exception: {}".format(str(exc)[:200])
+        else:
+            rest_diag = "No session key available to probe REST."
+
+        # Path 2: filesystem fallback
+        cfg_path = os.path.join(SPLUNK_HOME, "etc", "instance.cfg")
+        try:
+            if not os.path.isfile(cfg_path):
+                cfg_diag = ("instance.cfg does not exist at {}."
+                            .format(cfg_path))
+            else:
+                with open(cfg_path, "r", encoding="utf-8") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if line.startswith("guid"):
+                            parts = line.split("=", 1)
+                            if len(parts) == 2:
+                                fs_guid = parts[1].strip()
+                                if fs_guid:
+                                    cfg_ok = True
+                                    cfg_diag = ("Read successfully from "
+                                                "instance.cfg.")
+                                    if not guid:
+                                        guid = fs_guid
+                                    break
+                if not cfg_ok:
+                    cfg_diag = ("instance.cfg readable but no guid= "
+                                "line found.")
+        except PermissionError:
+            cfg_diag = ("PermissionError reading instance.cfg — "
+                        "filesystem perms deny this.")
+        except OSError as exc:
+            cfg_diag = "OSError: {}".format(str(exc)[:200])
+
+        if rest_ok:
+            path = "rest"
+            recommendation = (
+                "HMAC key derivation uses the REST endpoint — clean "
+                "install path. No action needed."
+            )
+        elif cfg_ok:
+            path = "instance_cfg"
+            recommendation = (
+                "HMAC key derivation falls back to reading "
+                "/opt/splunk/etc/instance.cfg directly. This works but "
+                "means the app cannot self-heal if the GUID rotates "
+                "between process restarts. If possible, ask your Splunk "
+                "admin to grant list_server capability to the role used "
+                "by this app (typically wl_admin / wl_superadmin) so "
+                "the cleaner REST path is used."
+            )
+        else:
+            path = "none"
+            recommendation = (
+                "CRITICAL: no GUID resolution path works. HMAC-signed "
+                "state (cooldown counters, FIM baseline, deploy window, "
+                "emergency lockdown) will fail closed on every write "
+                "and read. The app will be partially unusable. You MUST "
+                "either (a) grant list_server capability to the app's "
+                "role, or (b) ensure the splunk process user can read "
+                "/opt/splunk/etc/instance.cfg. See INSTALLATION.md for "
+                "details."
+            )
+
+        return self._resp(200, {
+            "rest_api_accessible": rest_ok,
+            "instance_cfg_readable": cfg_ok,
+            "resolution_path": path,
+            "guid_resolved": bool(guid),
+            "diagnostic": {
+                "rest": rest_diag,
+                "instance_cfg": cfg_diag,
+            },
+            "recommendation": recommendation,
+        })
+
+    def _action_probe_list_users_access(self, request, query, user, roles):
+        """GET action: probe whether /services/authentication/users is
+        accessible to enumerate users for notification fanout.
+
+        Why we need it:
+          Approval-queue notifications are fanned out to all users whose
+          role is in ADMIN_ROLES (wl_admin, admin, sc_admin). We discover
+          this list by calling /services/authentication/users and
+          filtering by role membership. Superadmin-to-superadmin
+          notifications (admin-limit-change, dual-unlock signals) work
+          the same way for SUPERADMIN_ROLES.
+
+          This REST endpoint requires the list_users capability, which
+          many enterprise Splunk deployments restrict to core-platform
+          admins as a policy baseline.
+
+        Failure mode if restricted:
+          Without list_users access, get_admin_users() falls back to
+          hardcoded ['admin'] and get_superadmin_users() falls back to
+          []. This silently breaks all notification fanout to custom
+          wl_admin / wl_superadmin users — they will MISS new-request
+          alerts, lockdown warnings, and admin-limit-change notices.
+          The built-in 'admin' user still gets approval notifications
+          but custom admins do not.
+
+        Fallback mechanism:
+          If the probe reveals list_users is denied, admins can create
+          `local/notification_users.conf` in the app directory listing
+          users by role — the handler will use that list instead of
+          the REST enumeration. See INSTALLATION.md for format.
+
+        Response shape:
+          {
+            "rest_api_accessible": true/false,
+            "fallback_config_present": true/false,
+            "diagnostic": "<human-readable>",
+            "recommendation": "<what to do next>",
+          }
+        """
+        session_key = request.get("system_authtoken", "") or \
+            request.get("session", {}).get("authtoken", "")
+        accessible = False
+        diagnostic = "probe not attempted"
+
+        if not session_key:
+            diagnostic = ("No session key available to probe. Probe "
+                          "result should be considered inconclusive.")
+        else:
+            try:
+                import splunk.rest
+                status, content = splunk.rest.simpleRequest(
+                    "/services/authentication/users",
+                    sessionKey=session_key,
+                    getargs={"output_mode": "json", "count": "1"},
+                    raiseAllErrors=False,
+                )
+                status_code = getattr(status, "status", 0)
+                if status_code == 200:
+                    accessible = True
+                    diagnostic = ("HTTP 200 from /services/"
+                                  "authentication/users — user "
+                                  "enumeration works for this session.")
+                elif status_code in (403, 404):
+                    accessible = False
+                    diagnostic = ("HTTP {} — this session lacks "
+                                  "list_users capability. Notifications "
+                                  "to custom admin/superadmin users will "
+                                  "fall back to the built-in 'admin' "
+                                  "user unless a fallback config is set "
+                                  "up.".format(status_code))
+                else:
+                    diagnostic = ("HTTP {} — treating as inaccessible."
+                                  .format(status_code))
+            except Exception as exc:  # noqa: BLE001
+                diagnostic = ("Probe raised exception: {}. Treating "
+                              "as inaccessible.".format(
+                                  str(exc)[:200]))
+
+        fallback_path = os.path.join(
+            APPS_DIR, APP_NAME, "local", "notification_users.conf")
+        fallback_present = os.path.isfile(fallback_path)
+
+        if accessible:
+            recommendation = (
+                "User enumeration via REST works. Notification fanout "
+                "will discover all custom admin/superadmin users "
+                "automatically. No action needed."
+            )
+        elif fallback_present:
+            recommendation = (
+                "REST enumeration is blocked but local/"
+                "notification_users.conf is present — the handler will "
+                "use that list for notification fanout. Review and "
+                "maintain the conf file as users are added/removed."
+            )
+        else:
+            recommendation = (
+                "REST enumeration is blocked AND no fallback config is "
+                "set up. Approval-queue notifications will only reach "
+                "the built-in 'admin' user; custom wl_admin / "
+                "wl_superadmin users will MISS notifications silently. "
+                "Either (a) ask your Splunk admin to grant list_users "
+                "capability to the app's role, or (b) create "
+                "local/notification_users.conf with explicit user "
+                "lists. See INSTALLATION.md for format."
+            )
+
+        return self._resp(200, {
+            "rest_api_accessible": accessible,
+            "fallback_config_present": fallback_present,
+            "fallback_config_path": fallback_path,
+            "diagnostic": diagnostic,
             "recommendation": recommendation,
         })
 
