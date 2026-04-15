@@ -2244,7 +2244,26 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         })
 
     def _action_get_notifications(self, request, query, user, roles):
-        """GET action wrapper for get_notifications."""
+        """GET action wrapper for get_notifications.
+
+        For superadmins, also drains any pending FIM alert-queue entries
+        into this user's notification list (deduplicating by fim_id).
+        The queue is written by wl_fim.py and wl_fim_watch.py whenever a
+        HIGH/CRITICAL event is emitted. This gives superadmins a real-time
+        red-banner signal for CSV integrity / insider-threat events
+        without requiring a Splunk alert email/webhook.
+        """
+        # Ingest pending FIM alerts for superadmins before reading the
+        # user's notification list — so any newly-queued events show up
+        # in the returned payload.
+        if bool(roles & SUPERADMIN_ROLES):
+            try:
+                self._ingest_fim_alerts_for_user(user)
+            except Exception as exc:  # noqa: BLE001
+                # Never let notification ingest break the bell —
+                # the audit index remains the authoritative record.
+                _logger.error("FIM alert ingest failed: %s", exc)
+
         data = _read_notifications()
         user_notifs = data.get(user, [])
         unread_count = sum(1 for n in user_notifs if not n.get("read", True))
@@ -2252,6 +2271,114 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "notifications": user_notifs,
             "unread_count": unread_count,
         })
+
+    def _ingest_fim_alerts_for_user(self, user):
+        """Drain the FIM alert queue into this user's notification list.
+
+        Read-only on the queue file (we don't remove entries — multiple
+        superadmins poll independently and each needs to see every alert
+        once). Dedupes by fim_id stored inside each user's existing
+        notifications, so this is idempotent: called on every poll but
+        only adds net-new entries.
+
+        Prunes queue entries older than FIM_ALERT_QUEUE_MAX_AGE_DAYS
+        opportunistically when the queue grows past the size threshold.
+        """
+        queue_path = os.path.join(
+            OWN_LOOKUPS, VERSIONS_DIR, "_fim_alert_queue.jsonl")
+        if not os.path.isfile(queue_path):
+            return
+
+        # Read all queue entries. JSONL format — one event per line.
+        try:
+            with open(queue_path, "r", encoding="utf-8") as fh:
+                lines = fh.readlines()
+        except OSError:
+            return
+
+        # Opportunistic prune: if the queue has grown large, rewrite it
+        # with only recent entries. 7 days is generous — superadmins are
+        # expected to poll much more frequently than that.
+        max_age_days = 7
+        max_lines = 500
+        now = int(time.time())
+        cutoff = now - (max_age_days * 86400)
+
+        if len(lines) > max_lines:
+            kept = []
+            for line in lines:
+                try:
+                    ev = json.loads(line)
+                    if ev.get("timestamp", 0) >= cutoff:
+                        kept.append(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+            try:
+                with open(queue_path, "w", encoding="utf-8") as fh:
+                    fh.writelines(kept)
+                lines = kept
+            except OSError:
+                pass  # Next prune attempt will retry
+
+        # Load existing notifications so we can dedupe by fim_id.
+        data = _read_notifications()
+        existing = data.get(user, [])
+        seen_ids = {n.get("fim_id") for n in existing if n.get("fim_id")}
+
+        added = False
+        for line in lines:
+            try:
+                ev = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            fim_id = ev.get("id")
+            if not fim_id or fim_id in seen_ids:
+                continue
+            # Skip entries older than our retention window even if they
+            # survived pruning.
+            if ev.get("timestamp", 0) < cutoff:
+                continue
+
+            severity = ev.get("severity", "INFO")
+            action = ev.get("action", "unknown")
+            path = ev.get("path", "")
+            lockdown = ev.get("lockdown_active", False)
+            parts = [severity]
+            if lockdown:
+                parts.append("LOCKDOWN ACTIVE")
+            parts.append(action)
+            if path:
+                # Show only the basename for readability
+                parts.append(os.path.basename(path))
+            prefix = " | ".join(parts)
+            message = ("{}: {}. Review the Audit dashboard — File "
+                       "Integrity Monitor Alerts panel."
+                       .format(prefix, ev.get("details", "")[:200]))
+
+            notif = {
+                "id": "notif_fim_{}_{}".format(
+                    fim_id, int(time.time() * 1000000)),
+                "type": "fim_alert",
+                "message": message,
+                "related_request_id": None,
+                "timestamp": ev.get("timestamp", now),
+                "read": False,
+                "fim_id": fim_id,
+                "fim_severity": severity,
+                "fim_lockdown_active": lockdown,
+            }
+            existing.insert(0, notif)
+            seen_ids.add(fim_id)
+            added = True
+
+        if added:
+            # Trim and persist using the same rules as _add_notification
+            cutoff_notif = now - (NOTIFICATION_MAX_AGE_DAYS * 86400)
+            existing = [n for n in existing
+                        if n.get("timestamp", 0) >= cutoff_notif]
+            existing = existing[:MAX_NOTIFICATIONS_PER_USER]
+            data[user] = existing
+            _write_notifications(data)
 
     def _action_get_trash_config(self, request, query, user, roles):
         """GET action wrapper for get_trash_config (admin-only)."""
