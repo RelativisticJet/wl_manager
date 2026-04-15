@@ -135,10 +135,10 @@ def _write_approval_queue(queue: List[Dict]) -> Tuple[bool, str]:
     temp_path = str(path) + ".tmp"
 
     try:
-        with open(temp_path, "w", encoding="utf-8") as fh:
-            with file_lock(path, timeout=10):
+        with file_lock(path, timeout=10):
+            with open(temp_path, "w", encoding="utf-8") as fh:
                 json.dump(queue, fh, indent=2)
-        os.replace(temp_path, path)
+            os.replace(temp_path, path)
         return (True, "")
     except (OSError, IOError, Exception) as e:
         # Clean up temp file on error
