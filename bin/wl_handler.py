@@ -25,6 +25,8 @@ import sys
 import json
 import csv
 import difflib
+import hashlib
+import hmac
 import re
 import traceback
 import logging
@@ -73,6 +75,7 @@ from wl_constants import (
     APPROVAL_COLUMN_NONEMPTY_THRESHOLD, APPROVAL_BULK_ADD_THRESHOLD,
     APPROVAL_REVERT_ROW_THRESHOLD, APPROVAL_REVERT_COLUMN_THRESHOLD,
     _CONTROL_CHAR_RE, _SAFE_COLNAME_RE, _SANITIZE_RE,
+    COOLDOWN_HMAC_SALT, FIM_HMAC_SALT,
     get_splunk_home, get_detection_rules_path, get_approval_queue_path,
 )
 
@@ -110,6 +113,7 @@ from wl_rbac import (
     get_user,
     get_roles,
     get_admin_users,
+    get_superadmin_users,
 )
 
 # ---------------------------------------------------------------------------
@@ -122,7 +126,9 @@ from wl_presence import report_presence, get_presence, cleanup_presence, reset_p
 # ---------------------------------------------------------------------------
 from wl_csv import (
     read_csv, write_csv, compute_diff, get_expire_column, remove_expired_rows,
-    get_column_widths, set_column_widths, save_csv_pipeline, create_csv_pipeline
+    get_column_widths, set_column_widths, save_csv_pipeline, create_csv_pipeline,
+    update_csv_expected_hash, remove_csv_expected_hash,
+    bootstrap_csv_expected_hashes,
 )
 
 # Layer 3: Detection Rules Registry (imported from wl_rules module)
@@ -233,13 +239,78 @@ def _write_approval_queue(queue):
 
 @contextmanager
 def _approval_queue_lock():
-    """Context manager for approval queue operations (backward compatibility).
+    """Serialize read-modify-write cycles on the approval queue.
 
-    The new wl_approval module uses file_lock internally from wl_filelock,
-    so explicit locking in the handler is no longer needed. This is kept
-    for backward compatibility with existing code.
+    wl_approval._write_approval_queue() only locks the write itself, which
+    is insufficient for callers that do read → check-for-conflict → append
+    → write (e.g. _submit_approval's CSV-lock check, _process_approval's
+    status transition). Without this lock, two processes can both pass the
+    conflict check before either writes — TOCTOU race that leads to
+    duplicate pending requests or double-processed approvals.
+
+    Locks on a sibling ".rmw.lock" path (NOT the queue.json itself) so
+    callers inside this lock can still use the regular
+    _write_approval_queue() which takes its own flock on queue.json.
+    fcntl.flock is not reentrant across file descriptors in the same
+    process, so nesting two locks on the same path would deadlock.
+
+    IMPORTANT: callers inside this lock MUST NOT invoke read+write
+    helpers (like _expire_pending_approvals) that perform their own
+    unconditional writes — use inline read + in-memory expire instead,
+    then a single _write_approval_queue() at the end. Extra writes
+    inside the critical section leave a wider window where concurrent
+    readers outside the outer lock can observe transient state.
     """
-    yield  # No-op: wl_approval handles locking internally
+    from wl_approval import _get_approval_queue_path
+    from wl_filelock import file_lock
+    rmw_lock_path = _get_approval_queue_path() + ".rmw.lock"
+    with file_lock(rmw_lock_path, timeout=10):
+        yield
+
+
+def _approval_conflict_error(queue, action_type, user, csv_file, detection_rule):
+    """Return an error string if the queue already has a pending conflict,
+    or None if the submission is free to proceed.
+
+    Rule operations (create_rule/remove_rule) conflict on detection_rule.
+    All other operations conflict on csv_file. A CSV with any pending
+    request is locked until the request is resolved.
+
+    Callable both inside and outside the approval-queue file lock; the
+    outside call is an early-exit UX optimization, the inside call is
+    the authoritative TOCTOU guard.
+    """
+    _rule_only = {"create_rule", "remove_rule"}
+    for item in queue:
+        if item.get("status") != "pending":
+            continue
+        if action_type in _rule_only:
+            if (item.get("detection_rule", "") == detection_rule
+                    and item.get("action_type") in _rule_only):
+                if item.get("analyst") == user:
+                    return ("You already have a pending {} request "
+                            "for detection rule '{}'. "
+                            "Wait for it to be processed.".format(
+                                item["action_type"].replace("_", " "),
+                                detection_rule))
+                return ("A pending {} request by {} exists "
+                        "for detection rule '{}'. "
+                        "It must be resolved first.".format(
+                            item["action_type"].replace("_", " "),
+                            item.get("analyst", ""), detection_rule))
+        else:
+            if item.get("csv_file") == csv_file:
+                if item.get("analyst") == user:
+                    return ("You already have a pending {} request "
+                            "for this CSV. "
+                            "Wait for it to be processed.".format(
+                                item["action_type"].replace("_", " ")))
+                return ("This CSV is locked by a pending {} request "
+                        "from {}. It must be resolved before new "
+                        "requests can be submitted.".format(
+                            item["action_type"].replace("_", " "),
+                            item.get("analyst", "")))
+    return None
 
 
 def _cancel_conflicting_requests(queue, detection_rule, csv_file,
@@ -407,11 +478,549 @@ def _notify_admins(notif_type, message, related_request_id=None,
                           related_request_id, extra)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Emergency Lockdown
+# ═══════════════════════════════════════════════════════════════════════════
+
+_LOCKDOWN_FILE = "_emergency_lockdown.json"
+
+
+def _get_lockdown_path():
+    """Return path to the emergency lockdown state file."""
+    versions_dir = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
+    os.makedirs(versions_dir, exist_ok=True)
+    return os.path.join(versions_dir, _LOCKDOWN_FILE)
+
+
+def _read_lockdown_state():
+    """Read emergency lockdown state. Returns dict or empty dict."""
+    path = _get_lockdown_path()
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_lockdown_state(state):
+    """Write emergency lockdown state to disk."""
+    path = _get_lockdown_path()
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(state, fh, indent=2)
+
+
+def _is_locked_down():
+    """Check if emergency lockdown is active."""
+    state = _read_lockdown_state()
+    return bool(state.get("locked"))
+
+
+def _check_lockdown_gate(user):
+    """Check if a write operation is blocked by lockdown.
+
+    Returns (blocked: bool, error_msg: str). If blocked is True, the
+    caller should return the error to the client.
+    """
+    state = _read_lockdown_state()
+    if not state.get("locked"):
+        return False, ""
+    locked_by = state.get("locked_by", "unknown")
+    locked_at = state.get("locked_at_human", "unknown time")
+    reason = state.get("reason", "")
+    msg = ("Emergency lockdown is active. All write operations are "
+           "frozen. Lockdown activated by {} at {}.".format(
+               locked_by, locked_at))
+    if reason:
+        msg += " Reason: " + reason[:200]
+    msg += " A different super-admin must unlock."
+    return True, msg
+
+
+_COOLDOWN_KV_COLLECTION = "wl_cooldowns"
+_COOLDOWN_KV_KEY = "state"
+PURGE_COOLDOWN_SECONDS = 3600  # 1 hour between consecutive purges
+
+# Strict SHA-256 hex format for `expected_content_hash`. 64 lowercase
+# hex chars only — anything else is either malformed, truncated, or
+# an attempt to smuggle garbage past the optimistic-lock check.
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _validate_expected_content_hash(value):
+    """Return (ok, error_response_dict_or_None, normalized_value).
+
+    Rejection semantics (build 555+):
+    - ``value is None`` → 409 "require reload".
+    - Not a string, wrong length, or non-hex → 400 "invalid format".
+    - Valid 64-char hex (case-insensitive) → (True, None, lowercased).
+
+    Callers MUST use the returned normalized value for comparison,
+    not the original input — some REST libraries normalize hex to
+    uppercase, and Python's hashlib always returns lowercase.
+    """
+    if value is None:
+        return False, {
+            "status": 409,
+            "error": "Conflict: expected_content_hash is required for "
+                     "save and revert operations. Please reload the "
+                     "CSV and try again.",
+            "reload_required": True,
+        }, None
+    if not isinstance(value, str) or not _SHA256_HEX_RE.match(value.lower()):
+        return False, {
+            "status": 400,
+            "error": "Invalid expected_content_hash — must be 64 "
+                     "hexadecimal characters (SHA-256).",
+        }, None
+    return True, None, value.lower()
+
+# Cooldown KV schema versioning — if the body shape ever changes,
+# bump this. Readers reject any record with an unknown version.
+_COOLDOWN_SCHEMA_CURRENT = 1
+_COOLDOWN_SCHEMA_SUPPORTED = {1}
+
+# HMAC key — salt imported from wl_constants (single source of truth).
+# Combined with Splunk server GUID at runtime so read-only source
+# access cannot forge valid cooldown records.
+# cache shape: {guid: (key_bytes, expires_at_epoch_seconds)}
+_RUNTIME_HMAC_KEY_CACHE = {}
+# Cache TTL — long-running Splunk workers could otherwise hold a
+# stale key forever if the server GUID ever rotates (DR restore,
+# container clone). An hour is short enough to self-heal and long
+# enough that the REST/instance.cfg lookup is not a hot path.
+_RUNTIME_HMAC_KEY_TTL_SECONDS = 3600
+
+
+def _fetch_server_guid(session_key):
+    """Fetch this Splunk instance's server GUID.
+
+    The GUID is unique per Splunk install and is unknown to anyone who
+    only has read access to this app's source code. It is exposed via
+    the standard `/services/server/info` REST endpoint, which requires
+    an authenticated session.
+
+    Falls back to reading `etc/instance.cfg` if the REST call fails.
+    Returns None on total failure (callers should fail closed).
+    """
+    if not session_key:
+        return None
+    try:
+        import splunk.rest
+        status, content = splunk.rest.simpleRequest(
+            "/services/server/info",
+            sessionKey=session_key,
+            getargs={"output_mode": "json"},
+            raiseAllErrors=False,
+        )
+        if getattr(status, "status", 0) == 200:
+            data = json.loads(content)
+            entries = data.get("entry", [])
+            if entries:
+                guid = entries[0].get("content", {}).get("guid")
+                if guid:
+                    return str(guid)
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("GUID fetch via REST failed: %s", exc)
+
+    # Fallback: read instance.cfg directly
+    try:
+        cfg_path = os.path.join(SPLUNK_HOME, "etc", "instance.cfg")
+        if os.path.isfile(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line.startswith("guid"):
+                        parts = line.split("=", 1)
+                        if len(parts) == 2:
+                            return parts[1].strip()
+    except OSError as exc:
+        _logger.warning("GUID fetch via instance.cfg failed: %s", exc)
+    return None
+
+
+def _get_runtime_hmac_key(session_key):
+    """Derive and cache a per-instance HMAC key with a bounded TTL.
+
+    The key is SHA-256(salt || guid). It is cached per Python process
+    keyed by the GUID string with an expiration timestamp. Repeat
+    calls within the TTL window return the cached key so steady-state
+    operation does not re-hit the REST API. After the TTL expires,
+    the key is re-derived from the live GUID, which lets long-running
+    Splunk workers self-heal if the server GUID ever rotates (DR
+    restore, container clone).
+
+    Returns None if the GUID cannot be resolved — callers must treat
+    that as fail-closed.
+    """
+    now = int(time.time())
+    # Prune expired entries on every call (cheap — cache is tiny).
+    for cached_guid, (_k, exp) in list(_RUNTIME_HMAC_KEY_CACHE.items()):
+        if exp <= now:
+            _RUNTIME_HMAC_KEY_CACHE.pop(cached_guid, None)
+
+    guid = _fetch_server_guid(session_key)
+    if not guid:
+        return None
+    cached = _RUNTIME_HMAC_KEY_CACHE.get(guid)
+    if cached is not None:
+        key_bytes, expires_at = cached
+        if now < expires_at:
+            return key_bytes
+    import hashlib
+    derived = hashlib.sha256(COOLDOWN_HMAC_SALT + guid.encode("utf-8")).digest()
+    _RUNTIME_HMAC_KEY_CACHE[guid] = (derived, now + _RUNTIME_HMAC_KEY_TTL_SECONDS)
+    return derived
+
+
+def _compute_cooldown_checksum(data, session_key, schema_version):
+    """Compute HMAC-SHA256 checksum for cooldown integrity verification.
+
+    Uses a runtime-derived key (see ``_get_runtime_hmac_key``). The
+    schema version is hashed together with the payload so an attacker
+    cannot flip ``schema_version`` on-disk without invalidating the
+    signature. Returns None if the key cannot be derived — callers
+    must fail closed.
+    """
+    import hmac
+    import hashlib
+    key = _get_runtime_hmac_key(session_key)
+    if key is None:
+        return None
+    filtered = {k: v for k, v in data.items() if k != "_checksum"}
+    payload = json.dumps(filtered, sort_keys=True, default=str)
+    signed = "v{}:{}".format(int(schema_version), payload)
+    return hmac.new(key, signed.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+_TAMPER_FLAG_FILE = ".cooldown_tamper"
+
+
+def _get_tamper_flag_path():
+    """Return path to the on-disk tamper flag file."""
+    return os.path.join(OWN_LOOKUPS, VERSIONS_DIR, _TAMPER_FLAG_FILE)
+
+
+def _is_tamper_flagged():
+    """Check if the on-disk tamper flag is set."""
+    return os.path.isfile(_get_tamper_flag_path())
+
+
+def _get_tamper_reason():
+    """Read the tamper reason from the flag file."""
+    path = _get_tamper_flag_path()
+    if not os.path.isfile(path):
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data.get("reason", "unknown")
+    except (json.JSONDecodeError, OSError):
+        return "flag_unreadable"
+
+
+def _set_tamper_flag(reason):
+    """Persist the tamper flag to disk. Survives process restarts."""
+    path = _get_tamper_flag_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({
+            "tampered": True,
+            "reason": reason,
+            "at": int(time.time()),
+        }, fh, indent=2)
+    _logger.error(
+        "SECURITY: Cooldown tamper flag set — reason=%s. "
+        "Rate-limited operations are now fail-closed until recovery.",
+        reason)
+
+
+def _kv_collection_url():
+    """Base URL for the wl_cooldowns KV store collection."""
+    return ("/servicesNS/nobody/{}/storage/collections/data/{}"
+            .format(APP_NAME, _COOLDOWN_KV_COLLECTION))
+
+
+def _kv_get_cooldown_record(session_key):
+    """Fetch the single cooldown state record from the KV store.
+
+    Returns:
+        (status_int, record_or_none)
+        - (200, dict) on success
+        - (404, None) if record does not exist yet (first install)
+        - (other, None) on transient error (caller fails closed)
+    """
+    import splunk.rest
+    import splunk
+    url = "{}/{}".format(_kv_collection_url(), _COOLDOWN_KV_KEY)
+    try:
+        status, content = splunk.rest.simpleRequest(
+            url,
+            sessionKey=session_key,
+            getargs={"output_mode": "json"},
+            raiseAllErrors=False,
+        )
+    except splunk.ResourceNotFound:
+        return 404, None
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc)
+        if "[HTTP 404]" in msg or "404" in msg:
+            return 404, None
+        _logger.error("KV cooldown GET failed: %s", exc)
+        return 0, None
+    code = getattr(status, "status", 0)
+    if code == 200:
+        try:
+            return 200, json.loads(content)
+        except (ValueError, TypeError):
+            return 0, None
+    if code == 404:
+        return 404, None
+    _logger.warning(
+        "KV cooldown GET returned status=%s content=%s",
+        code, (content or "")[:200])
+    return code, None
+
+
+def _kv_put_cooldown_record(session_key, body):
+    """Insert or update the cooldown state record in the KV store.
+
+    ``body`` must be a dict ready for JSON serialization.
+
+    Returns True on success, False otherwise. This function never
+    creates a tamper flag — the caller decides how to escalate.
+    """
+    import splunk.rest
+    import splunk
+    update_url = "{}/{}".format(_kv_collection_url(), _COOLDOWN_KV_KEY)
+    insert_url = _kv_collection_url()
+    body_with_key = dict(body)
+    body_with_key["_key"] = _COOLDOWN_KV_KEY
+
+    def _do_insert():
+        try:
+            status, content = splunk.rest.simpleRequest(
+                insert_url,
+                sessionKey=session_key,
+                method="POST",
+                jsonargs=json.dumps(body_with_key),
+                raiseAllErrors=False,
+            )
+            code = getattr(status, "status", 0)
+            if code in (200, 201):
+                return True
+            _logger.error(
+                "KV cooldown INSERT failed status=%s body=%s",
+                code, (content or "")[:200])
+            return False
+        except Exception as exc:  # noqa: BLE001
+            _logger.error("KV cooldown INSERT raised: %s", exc)
+            return False
+
+    try:
+        status, content = splunk.rest.simpleRequest(
+            update_url,
+            sessionKey=session_key,
+            method="POST",
+            jsonargs=json.dumps(body),
+            raiseAllErrors=False,
+        )
+    except splunk.ResourceNotFound:
+        return _do_insert()
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc)
+        if "[HTTP 404]" in msg or "Could not find object" in msg:
+            return _do_insert()
+        _logger.error("KV cooldown PUT raised: %s", exc)
+        return False
+    code = getattr(status, "status", 0)
+    if code in (200, 201):
+        return True
+    if code == 404:
+        return _do_insert()
+    _logger.error(
+        "KV cooldown PUT failed status=%s body=%s",
+        code, (content or "")[:200])
+    return False
+
+
+def _read_cooldowns(session_key):
+    """Read cooldown state from the KV store with integrity verification.
+
+    Fail-closed semantics:
+    - If the on-disk tamper flag exists → None.
+    - If the runtime HMAC key cannot be derived → None (and tamper set).
+    - If the KV record exists but checksum mismatches → None (tamper set).
+    - If the KV record is missing AND the init marker says we've
+      bootstrapped before → None (tamper set: "kv_deleted_after_init").
+    - If the KV record is missing AND no init marker → empty dict
+      (bootstrap mode).
+    - Otherwise → the decoded counter dict (without ``_checksum``).
+    """
+    if _is_tamper_flagged():
+        return None
+
+    # Runtime key must resolve — if it cannot, the HMAC can't be
+    # validated, so fail closed.
+    key = _get_runtime_hmac_key(session_key)
+    if key is None:
+        _set_tamper_flag("runtime_key_unavailable")
+        return None
+
+    code, record = _kv_get_cooldown_record(session_key)
+    if code == 200 and record:
+        # Schema version check — reject unknown versions (including
+        # future versions written by newer code against a rolled-back
+        # handler) to fail loudly rather than silently mis-parse.
+        raw_version = record.get("schema_version", 1)
+        try:
+            schema_version = int(raw_version)
+        except (ValueError, TypeError):
+            _set_tamper_flag("kv_schema_version_invalid")
+            return None
+        if schema_version not in _COOLDOWN_SCHEMA_SUPPORTED:
+            _set_tamper_flag(
+                "kv_schema_version_unknown:{}".format(schema_version))
+            return None
+
+        payload_str = record.get("payload", "")
+        stored_checksum = record.get("checksum", "")
+        try:
+            data = json.loads(payload_str) if payload_str else {}
+        except (json.JSONDecodeError, TypeError):
+            _set_tamper_flag("kv_payload_corrupt")
+            return None
+        expected = _compute_cooldown_checksum(
+            data, session_key, schema_version)
+        if expected is None:
+            _set_tamper_flag("runtime_key_unavailable")
+            return None
+        if not stored_checksum or stored_checksum != expected:
+            _set_tamper_flag("kv_checksum_mismatch")
+            return None
+        return data
+
+    if code == 404:
+        # Record absent. Either first install or deletion attack.
+        marker_path = _get_init_marker_path()
+        if os.path.isfile(marker_path):
+            _set_tamper_flag("kv_deleted_after_init")
+            return None
+        return {}
+
+    # Transient or permission error — do NOT set tamper flag (we don't
+    # want a one-off KV outage to require a manual recovery script),
+    # but do fail closed for this call.
+    return None
+
+
+def _write_cooldowns(session_key, data, updated_by=""):
+    """Persist cooldown state to the KV store with HMAC signature.
+
+    Writes with the current schema version. Readers will reject any
+    record whose ``schema_version`` is not in
+    ``_COOLDOWN_SCHEMA_SUPPORTED``. Returns True on success, False on
+    failure. On first successful write the init marker file is
+    created.
+    """
+    clean = {k: v for k, v in data.items() if k != "_checksum"}
+    checksum = _compute_cooldown_checksum(
+        clean, session_key, _COOLDOWN_SCHEMA_CURRENT)
+    if checksum is None:
+        _set_tamper_flag("runtime_key_unavailable")
+        return False
+    body = {
+        "schema_version": _COOLDOWN_SCHEMA_CURRENT,
+        "payload": json.dumps(clean, sort_keys=True, default=str),
+        "checksum": checksum,
+        "updated_at": int(time.time()),
+        "updated_by": updated_by or "system",
+    }
+    ok = _kv_put_cooldown_record(session_key, body)
+    if ok:
+        _create_init_marker_if_missing()
+    return ok
+
+
+_COOLDOWN_INIT_MARKER = ".cooldown_initialized"
+
+
+def _get_init_marker_path():
+    """Return path to the cooldown initialization marker."""
+    return os.path.join(OWN_LOOKUPS, VERSIONS_DIR, _COOLDOWN_INIT_MARKER)
+
+
+def _create_init_marker_if_missing():
+    """Create the bootstrap marker on first successful KV write."""
+    marker_path = _get_init_marker_path()
+    if os.path.isfile(marker_path):
+        return
+    try:
+        os.makedirs(os.path.dirname(marker_path), exist_ok=True)
+        with open(marker_path, "w", encoding="utf-8") as fh:
+            json.dump({
+                "initialized_at": int(time.time()),
+                "initialized_at_human": datetime.now(
+                    timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "storage": "kvstore",
+            }, fh, indent=2)
+    except OSError as exc:
+        _logger.warning("Failed to write init marker: %s", exc)
+
+
+def _check_cooldown(user, action_type, cooldown_seconds, session_key):
+    """Check if user is still in cooldown for an action.
+
+    Returns (blocked: bool, remaining_seconds: int).
+
+    If the cooldown store has been tampered with, returns (True, -1)
+    to signal fail-closed state. Callers should treat -1 as "blocked
+    indefinitely until recovery action".
+    """
+    cooldowns = _read_cooldowns(session_key)
+    if cooldowns is None:
+        return True, -1
+    key = "{}:{}".format(user, action_type)
+    last_ts = cooldowns.get(key, 0)
+    now = int(time.time())
+    elapsed = now - last_ts
+    if elapsed < cooldown_seconds:
+        return True, cooldown_seconds - elapsed
+    return False, 0
+
+
+def _record_cooldown(user, action_type, session_key):
+    """Record that user performed an action (starts cooldown)."""
+    cooldowns = _read_cooldowns(session_key)
+    if cooldowns is None:
+        return
+    key = "{}:{}".format(user, action_type)
+    cooldowns[key] = int(time.time())
+    _write_cooldowns(session_key, cooldowns, updated_by=user)
+
+
 def _get_limit_config_path():
     """Return path to the daily limit config JSON file."""
     versions_dir = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
     os.makedirs(versions_dir, exist_ok=True)
     return os.path.join(versions_dir, LIMIT_CONFIG_FILE)
+
+
+def _compute_config_checksum(config_data):
+    """Compute HMAC-SHA256 checksum for config integrity verification.
+
+    Uses a deterministic key derived from the app name. Detects accidental
+    corruption and naive manual edits (not cryptographically secure against
+    attackers with source code access, but raises the bar).
+    """
+    import hashlib
+    import hmac
+    # Exclude the checksum field itself from the computation
+    filtered = {k: v for k, v in config_data.items() if k != "_checksum"}
+    payload = json.dumps(filtered, sort_keys=True, default=str)
+    key = b"wl_manager_config_integrity_v1"
+    return hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def _read_limit_config():
@@ -422,6 +1031,18 @@ def _read_limit_config():
     try:
         with open(path, "r", encoding="utf-8") as fh:
             config = json.load(fh)
+
+            # Integrity check — log warning if checksum doesn't match
+            stored_checksum = config.pop("_checksum", None)
+            if stored_checksum is not None:
+                expected = _compute_config_checksum(config)
+                if stored_checksum != expected:
+                    _logger.warning(
+                        "CONFIG_INTEGRITY_FAILED path=%s "
+                        "stored=%s expected=%s — possible tampering "
+                        "or corruption", path,
+                        stored_checksum[:12], expected[:12])
+
             # Migrate old reset_hour_utc (int 0-23) to reset_time_utc ("HH:MM")
             if "reset_hour_utc" in config and "reset_time_utc" not in config:
                 h = config.pop("reset_hour_utc", 0)
@@ -447,8 +1068,11 @@ def _get_threshold(name):
 
 
 def _write_limit_config(config):
-    """Write daily limit config to disk."""
+    """Write daily limit config to disk with integrity checksum."""
     path = _get_limit_config_path()
+    # Remove old checksum before computing new one
+    config.pop("_checksum", None)
+    config["_checksum"] = _compute_config_checksum(config)
     with open(path, "w", encoding="utf-8") as fh:
         if fcntl:
             try:
@@ -463,9 +1087,15 @@ def _write_limit_config(config):
 
 
 def _read_admin_limits():
-    """Read admin-specific limits from the config file."""
+    """Read admin-specific limits from the config file.
+
+    Backfills any missing keys from DEFAULT_ADMIN_LIMITS. The returned dict
+    contains limit values, schedule fields, permission toggles, and optionally
+    a ``change_history`` list.
+    """
     config = _read_limit_config()
     admin_cfg = config.get("admin_limits", {})
+    # Preserve change_history separately — it's not in DEFAULT_ADMIN_LIMITS
     # Ensure all default admin limit keys exist
     for k, v in DEFAULT_ADMIN_LIMITS.items():
         if k not in admin_cfg:
@@ -480,8 +1110,17 @@ def _write_admin_limits(admin_limits):
     _write_limit_config(config)
 
 
+def _get_admin_counter_period_key():
+    """Return the counter period key for admin limits.
+
+    Uses the admin-specific reset schedule (independent from analyst schedule).
+    """
+    admin_cfg = _read_admin_limits()
+    return _get_counter_period_key(config=admin_cfg)
+
+
 def _check_admin_daily_limit(user, action_type, action_count=1):
-    """Check if an admin has exceeded their daily limit for an action.
+    """Check if an admin has exceeded their limit for an action.
 
     Returns (allowed, current_count, maximum).
     Uses the same counter structure as editor limits:
@@ -497,7 +1136,7 @@ def _check_admin_daily_limit(user, action_type, action_count=1):
 
     admin_action = "admin_" + action_type
     counters = _read_daily_limits()
-    period_key = _get_counter_period_key()
+    period_key = _get_admin_counter_period_key()
     period_data = counters.get(period_key, {})
     user_data = period_data.get(user, {})
     current = user_data.get(admin_action, 0)
@@ -506,15 +1145,25 @@ def _check_admin_daily_limit(user, action_type, action_count=1):
     return allowed, current, max_count
 
 
+def _check_admin_permission(permission_key):
+    """Check if an admin permission toggle is enabled.
+
+    Returns True if the permission is allowed, False if disabled.
+    """
+    admin_cfg = _read_admin_limits()
+    return bool(admin_cfg.get(permission_key,
+                              DEFAULT_ADMIN_LIMITS.get(permission_key, True)))
+
+
 def _increment_admin_daily_limit(user, action_type, count=1):
-    """Increment an admin's daily counter for an action type.
+    """Increment an admin's counter for an action type.
 
     Counter structure: counters[period_key][user][action_type]
     matches the existing editor counter layout.
     """
     admin_action = "admin_" + action_type
     counters = _read_daily_limits()
-    period_key = _get_counter_period_key()
+    period_key = _get_admin_counter_period_key()
     if period_key not in counters:
         counters[period_key] = {}
     if user not in counters[period_key]:
@@ -576,7 +1225,7 @@ def _generate_request_id(user, csv_file="", detection_rule=""):
     return "req_{}_{}_{}" .format(ts, suffix, user)
 
 
-def _get_counter_period_key():
+def _get_counter_period_key(config=None):
     """Return the counter period key based on frequency and reset schedule.
 
     Finds the most recent reset boundary and returns a unique key for that
@@ -592,8 +1241,13 @@ def _get_counter_period_key():
       weekly  -> "2026-W09-Wed"  (includes day for uniqueness)
       monthly -> "2026-03"
       yearly  -> "2026"
+
+    Args:
+        config: Optional config dict with reset_frequency and schedule keys.
+                If None, reads from the main analyst limit config.
     """
-    config = _read_limit_config()
+    if config is None:
+        config = _read_limit_config()
     freq = config.get("reset_frequency", "daily")
 
     if freq == "never":
@@ -701,6 +1355,14 @@ _LIMIT_LABELS = {
     "rule_deletion": "Rule deletion",
     "csv_deletion": "CSV deletion",
     "approval_count": "Approval",
+    "limit_changes": "Limit configuration change",
+    "csv_save": "CSV save",
+    "csv_revert": "CSV revert",
+    "rule_creation": "Rule creation",
+    "csv_creation": "CSV creation",
+    "trash_restore": "Trash restoration",
+    "trash_purge": "Trash purge",
+    "usage_reset": "Usage reset",
 }
 
 
@@ -721,6 +1383,17 @@ def _daily_limit_error_msg(limit_type, action_count, current, maximum,
             "Contact {}.".format(
                 label.lower(), action_count, over, current, maximum,
                 contact))
+
+
+def _log_superadmin_exemption(user, action_type, detail=""):
+    """Log an audit trail entry when a superadmin bypasses admin limits.
+
+    This provides SOC visibility into superadmin actions that would have
+    been blocked for a regular admin.
+    """
+    _logger.info(
+        "SUPERADMIN_EXEMPTION user=%s action=%s detail=%s",
+        user, action_type, detail)
 
 
 def _increment_daily_limit(user, action_type, count=1):
@@ -789,6 +1462,47 @@ def _count_nonempty_cells(rows, col_name):
     return sum(1 for r in rows if (r.get(col_name, "") or "").strip())
 
 
+# Per-process cache for CSV content hashes. Keyed by absolute path,
+# with (mtime, size) used as a cache-busting signal. When mtime or
+# size changes the hash is recomputed. This keeps the lightweight
+# `check_csv_status` poll cheap under steady state while still
+# detecting content changes that preserve mtime (`cp -p`, `touch -r`,
+# or writes via external tools).
+_CSV_HASH_CACHE = {}
+_CSV_HASH_CACHE_MAX = 256
+
+
+def _get_csv_content_hash(path, mtime, size):
+    """Return SHA-256 hex digest of the CSV file at ``path``.
+
+    ``mtime`` and ``size`` are used only as cache keys — they are NOT
+    trusted for identity. The hash is over the raw file bytes.
+    """
+    import hashlib
+    cached = _CSV_HASH_CACHE.get(path)
+    if cached is not None:
+        cached_mtime, cached_size, cached_hash = cached
+        if cached_mtime == mtime and cached_size == size:
+            return cached_hash
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            while True:
+                chunk = fh.read(65536)
+                if not chunk:
+                    break
+                h.update(chunk)
+        digest = h.hexdigest()
+    except OSError:
+        return ""
+    # Bound the cache to avoid unbounded memory growth across many CSVs
+    if len(_CSV_HASH_CACHE) >= _CSV_HASH_CACHE_MAX:
+        # Simple eviction: drop an arbitrary entry
+        _CSV_HASH_CACHE.pop(next(iter(_CSV_HASH_CACHE)), None)
+    _CSV_HASH_CACHE[path] = (mtime, size, digest)
+    return digest
+
+
 class WhitelistHandler(PersistentServerConnectionApplication):
     """Splunk PersistentServerConnectionApplication handler with dispatch-table routing."""
 
@@ -832,6 +1546,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         "get_notifications": (None, "_action_get_notifications"),
         "get_trash_config": (ADMIN_ROLES, "_action_get_trash_config"),
         "list_trash": (ADMIN_ROLES, "_action_list_trash"),
+        "get_lockdown_status": (None, "_action_get_lockdown_status"),
+
+        # FIM Deploy Window (read-only status)
+        "get_deploy_window_status": (SUPERADMIN_ROLES, "_action_get_deploy_window_status"),
     }
 
     POST_ACTIONS = {
@@ -867,16 +1585,34 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         "purge_trash": (ADMIN_ROLES, "_action_purge_trash"),
         "restore_from_trash": (ADMIN_ROLES, "_action_restore_from_trash"),
 
+        # Emergency Lockdown
+        "activate_lockdown": (SUPERADMIN_ROLES, "_action_activate_lockdown"),
+        "deactivate_lockdown": (SUPERADMIN_ROLES, "_action_deactivate_lockdown"),
+
+        # FIM Deploy Window
+        "open_deploy_window": (SUPERADMIN_ROLES, "_action_open_deploy_window"),
+        "close_deploy_window": (SUPERADMIN_ROLES, "_action_close_deploy_window"),
+
+        # Maintenance
+        "bootstrap_csv_hashes": (SUPERADMIN_ROLES, "_action_bootstrap_csv_hashes"),
+
         # Notifications & Logging
         "mark_notifications_read": (None, "_action_mark_notifications_read"),
         "log_event": (None, "_action_log_event"),
-
-        # Debug (temporary — remove before release)
-        "debug_log": (None, "_action_debug_log"),
     }
 
     def __init__(self, command_line, command_arg):
         super().__init__()
+
+    @staticmethod
+    def _get_session_key(request):
+        """Extract Splunk session key from request object.
+
+        BaseRestHandler does NOT provide self.sessionKey; the key must
+        be read from the request dict on every call.
+        """
+        return (request.get("system_authtoken", "") or
+                request.get("session", {}).get("authtoken", ""))
 
     # ------------------------------------------------------------------
     # Dispatch Infrastructure
@@ -915,10 +1651,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # Check action exists
         if action not in table:
             self._log_access(action, user, 400, start_time, 0)
-            valid_actions = sorted(table.keys())
             return self._resp(400, {
-                "error": f"Unknown action: {action}",
-                "valid_actions": valid_actions
+                "error": "Unknown action",
             })
 
         # Extract required roles and handler name
@@ -947,13 +1681,16 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         except FileNotFoundError as e:
             self._log_access(action, user, 404, start_time, 0)
-            return self._resp(404, {"error": str(e)})
+            _logger.warning("FileNotFoundError in %s: %s", handler_name, e)
+            return self._resp(404, {"error": "The requested resource was not found."})
         except PermissionError as e:
             self._log_access(action, user, 403, start_time, 0)
-            return self._resp(403, {"error": str(e)})
+            _logger.warning("PermissionError in %s: %s", handler_name, e)
+            return self._resp(403, {"error": "Access denied."})
         except ValueError as e:
             self._log_access(action, user, 400, start_time, 0)
-            return self._resp(400, {"error": str(e)})
+            _logger.warning("ValueError in %s: %s", handler_name, e)
+            return self._resp(400, {"error": "Invalid request data."})
         except IOError as e:
             self._log_access(action, user, 500, start_time, 0)
             _logger.error(f"IO error in handler {handler_name}: {e}", exc_info=True)
@@ -1008,7 +1745,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 return self._resp(405, {"error": "Method not allowed"})
         except Exception as exc:
             _logger.error("Unhandled exception: %s\n%s", exc, traceback.format_exc())
-            return self._resp(500, {"error": "An internal error occurred."})
+            return self._resp(500, {"error": "Internal server error"})
 
     # ==================================================================
     # GET
@@ -1022,7 +1759,6 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if not action:
             return self._resp(400, {
                 "error": "Missing or unknown action",
-                "valid_actions": sorted(self.GET_ACTIONS.keys()),
             })
 
         return self._dispatch(self.GET_ACTIONS, action, request, user, roles, query=query)
@@ -1152,6 +1888,15 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "payload": p.get("payload", {}),
         } for p in pending_approvals]
 
+        try:
+            st = os.stat(path)
+            file_mtime = int(st.st_mtime)
+            file_size = st.st_size
+        except OSError:
+            file_mtime = 0
+            file_size = 0
+        content_hash = (_get_csv_content_hash(path, file_mtime, file_size)
+                        if file_mtime else "")
         return self._resp(200, {
             "csv_file": csv_file,
             "headers": headers,
@@ -1159,7 +1904,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "row_count": len(rows),
             "auto_removed_count": auto_removed_count,
             "expire_column": get_expire_column(headers) or "",
-            "file_mtime": int(os.path.getmtime(path)),
+            "file_mtime": file_mtime,
+            "file_size": file_size,
+            "content_hash": content_hash,
             "pending_approvals": pending_info,
         })
 
@@ -1254,7 +2001,20 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
 
     def _check_csv_status(self, csv_file, app_context):
-        """Lightweight check — returns file mtime and pending approval count."""
+        """Lightweight status poll — returns file mtime, content hash,
+        and pending approval count.
+
+        The content hash (SHA-256 of the raw file bytes) closes a gap
+        where an attacker preserves mtime via ``cp -p`` or
+        ``touch -r`` and modifies the CSV directly on disk or via SPL.
+        A stale open session polling this endpoint will see a changed
+        hash even if mtime is unchanged, and can prompt the user.
+
+        To keep the endpoint cheap (it runs every 5 seconds per open
+        CSV per user), the hash is cached per (path, mtime, size). The
+        hash is only recomputed when mtime or size changes, so honest
+        polling is O(stat) in the steady state.
+        """
         if not is_safe_filename(csv_file):
             return self._resp(400, {"error": "Invalid CSV file name"})
 
@@ -1262,10 +2022,19 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if path is None:
             return self._resp(404, {"error": "CSV file not found"})
 
+        try:
+            st = os.stat(path)
+        except OSError:
+            return self._resp(404, {"error": "CSV file not found"})
+
+        file_mtime = int(st.st_mtime)
+        content_hash = _get_csv_content_hash(path, file_mtime, st.st_size)
         pending = _get_pending_for_csv(csv_file)
         return self._resp(200, {
             "csv_file": csv_file,
-            "file_mtime": int(os.path.getmtime(path)),
+            "file_mtime": file_mtime,
+            "file_size": st.st_size,
+            "content_hash": content_hash,
             "pending_count": len(pending),
         })
 
@@ -1437,7 +2206,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     def _action_get_approval_queue(self, request, query, user, roles):
         """GET action wrapper for get_approval_queue (admin-only)."""
         queue = _read_approval_queue()
-        return self._resp(200, {"approval_queue": queue})
+        return self._resp(200, {
+            "approval_queue": queue,
+            "is_superadmin": bool(roles & SUPERADMIN_ROLES),
+            "username": user,
+        })
 
     def _action_check_daily_limit_status(self, request, query, user, roles):
         """GET action wrapper for check_daily_limit_status."""
@@ -1455,7 +2228,12 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     def _action_get_admin_limits(self, request, query, user, roles):
         """GET action wrapper for get_admin_limits (admin-only)."""
         admin_limits = _read_admin_limits()
-        return self._resp(200, {"admin_limits": admin_limits})
+        history = admin_limits.pop("change_history", [])
+        return self._resp(200, {
+            "admin_limits": admin_limits,
+            "defaults": dict(DEFAULT_ADMIN_LIMITS),
+            "change_history": history,
+        })
 
     def _action_get_notifications(self, request, query, user, roles):
         """GET action wrapper for get_notifications."""
@@ -1483,7 +2261,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         """GET action wrapper for list_trash (admin-only)."""
         items, err = list_trash()
         if err:
-            return self._resp(500, {"error": "Failed to list trash: " + err})
+            _logger.error("Failed to list trash: %s", err)
+            return self._resp(500, {"error": "Failed to list trash. Check server logs for details."})
         return self._resp(200, {"trash_items": items})
 
     # ==================================================================
@@ -1494,7 +2273,32 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _action_save_csv(self, request, payload, user, roles):
         """POST action wrapper for save_csv."""
-        return self._save_csv(request, payload, user)
+        # Admin daily limit for CSV saves (superadmins exempt + logged)
+        if is_admin(roles) and is_superadmin(roles):
+            _log_superadmin_exemption(
+                user, "csv_save",
+                payload.get("csv_file", ""))
+        elif is_admin(roles):
+            allowed, current, maximum = _check_admin_daily_limit(
+                user, "csv_save")
+            if not allowed:
+                return self._resp(200, {
+                    "error": _daily_limit_error_msg(
+                        "csv_save", 1, current, maximum,
+                        contact="your super-admin"),
+                    "limit_type": "admin_csv_save",
+                    "current": current, "maximum": maximum,
+                    "disabled": maximum == 0,
+                })
+        result = self._save_csv(request, payload, user)
+        # Increment counter on success
+        if (is_admin(roles) and not is_superadmin(roles)
+                and isinstance(result, dict)
+                and result.get("status") == 200):
+            body = json.loads(result.get("payload", "{}"))
+            if not body.get("error"):
+                _increment_admin_daily_limit(user, "csv_save")
+        return result
 
     def _action_add_row(self, request, payload, user, roles):
         """POST action wrapper for add_row (delegates to save_csv pipeline)."""
@@ -1506,7 +2310,31 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _action_revert_csv(self, request, payload, user, roles):
         """POST action wrapper for revert_csv."""
-        return self._revert_csv(request, payload, user, roles=roles)
+        # Admin daily limit for CSV reverts (superadmins exempt + logged)
+        if is_admin(roles) and is_superadmin(roles):
+            _log_superadmin_exemption(
+                user, "csv_revert",
+                payload.get("csv_file", ""))
+        elif is_admin(roles):
+            allowed, current, maximum = _check_admin_daily_limit(
+                user, "csv_revert")
+            if not allowed:
+                return self._resp(200, {
+                    "error": _daily_limit_error_msg(
+                        "csv_revert", 1, current, maximum,
+                        contact="your super-admin"),
+                    "limit_type": "admin_csv_revert",
+                    "current": current, "maximum": maximum,
+                    "disabled": maximum == 0,
+                })
+        result = self._revert_csv(request, payload, user, roles=roles)
+        if (is_admin(roles) and not is_superadmin(roles)
+                and isinstance(result, dict)
+                and result.get("status") == 200):
+            body = json.loads(result.get("payload", "{}"))
+            if not body.get("error"):
+                _increment_admin_daily_limit(user, "csv_revert")
+        return result
 
     def _action_save_col_widths(self, request, payload, user, roles):
         """POST action wrapper for save_col_widths."""
@@ -1514,9 +2342,28 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _action_create_csv(self, request, payload, user, roles):
         """POST action wrapper for create_csv."""
-        # Admins execute directly (never gated)
+        # Admins execute directly (never gated) but check daily limit
         if is_admin(roles):
-            return self._create_csv(request, payload, user)
+            if not is_superadmin(roles):
+                allowed, current, maximum = _check_admin_daily_limit(
+                    user, "csv_creation")
+                if not allowed:
+                    return self._resp(200, {
+                        "error": _daily_limit_error_msg(
+                            "csv_creation", 1, current, maximum,
+                            contact="your super-admin"),
+                        "limit_type": "admin_csv_creation",
+                        "current": current, "maximum": maximum,
+                        "disabled": maximum == 0,
+                    })
+            result = self._create_csv(request, payload, user)
+            if (not is_superadmin(roles)
+                    and isinstance(result, dict)
+                    and result.get("status") == 200):
+                body = json.loads(result.get("payload", "{}"))
+                if not body.get("error"):
+                    _increment_admin_daily_limit(user, "csv_creation")
+            return result
         # Analyst permission check
         cfg = _read_limit_config()
         if not cfg.get("allow_analyst_create_csv", False):
@@ -1534,9 +2381,28 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     def _action_create_rule(self, request, payload, user, roles):
         """POST: Register a new detection rule name."""
         detection_rule = (payload.get("detection_rule") or "").strip()
-        # Admins execute directly (never gated)
+        # Admins execute directly (never gated) but check daily limit
         if is_admin(roles):
-            return self._execute_create_rule(request, detection_rule, user)
+            if not is_superadmin(roles):
+                allowed, current, maximum = _check_admin_daily_limit(
+                    user, "rule_creation")
+                if not allowed:
+                    return self._resp(200, {
+                        "error": _daily_limit_error_msg(
+                            "rule_creation", 1, current, maximum,
+                            contact="your super-admin"),
+                        "limit_type": "admin_rule_creation",
+                        "current": current, "maximum": maximum,
+                        "disabled": maximum == 0,
+                    })
+            result = self._execute_create_rule(request, detection_rule, user)
+            if (not is_superadmin(roles)
+                    and isinstance(result, dict)
+                    and result.get("status") == 200):
+                body = json.loads(result.get("payload", "{}"))
+                if not body.get("error"):
+                    _increment_admin_daily_limit(user, "rule_creation")
+            return result
         # Analyst permission check
         cfg = _read_limit_config()
         if not cfg.get("allow_analyst_create_rules", False):
@@ -1613,7 +2479,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # Call pipeline
         result = delete_csv_pipeline(
             csv_file, removal_type, comment, user,
-            self.sessionKey, rule_name=rule_name)
+            self._get_session_key(request), rule_name=rule_name)
 
         if not result.get("success"):
             return self._resp(404, {"error": result.get("error", "Delete failed")})
@@ -1637,6 +2503,15 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if data.get("trashed"):
             if is_admin(roles) and not is_superadmin(roles):
                 _increment_admin_daily_limit(user, "csv_deletion")
+
+        # Remove from CSV expected-hash registry (FIM watcher)
+        try:
+            app_context = data.get("app_context", "")
+            csv_path = resolve_csv_path(csv_file, app_context)
+            if csv_path:
+                remove_csv_expected_hash(csv_path)
+        except Exception:
+            pass  # Best-effort
 
         return self._resp(200, {
             "success": True,
@@ -1708,8 +2583,15 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 })
 
         # Call pipeline
-        result = delete_rule_pipeline(
-            rule_name, removal_type, comment, user, self.sessionKey)
+        try:
+            result = delete_rule_pipeline(
+                rule_name, removal_type, comment, user,
+                self._get_session_key(request))
+        except Exception as exc:
+            _logger.error("delete_rule_pipeline failed: %s", exc,
+                          exc_info=True)
+            return self._resp(500, {
+                "error": "Rule deletion failed. Check server logs for details."})
 
         if not result.get("success"):
             return self._resp(404, {"error": result.get("error", "Delete failed")})
@@ -1754,7 +2636,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _action_check_approval_gate(self, request, payload, user, roles):
         """POST action wrapper for check_approval_gate."""
-        return self._check_approval_gate(request, payload, user)
+        return self._check_approval_gate(request, payload, user, roles)
 
     def _action_cancel_request(self, request, payload, user, roles):
         """POST action wrapper for cancel_request."""
@@ -1765,29 +2647,261 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         return self._set_daily_limits_action(request, payload, user)
 
     def _action_set_admin_limits(self, request, payload, user, roles):
-        """POST action wrapper for set_admin_limits (superadmin-only)."""
-        admin = payload.get("admin", "")
-        limits = payload.get("limits", {})
-        admin_limits = _read_admin_limits()
-        admin_limits[admin] = limits
-        _write_admin_limits(admin_limits)
-        return self._resp(200, {"success": True})
+        """POST action wrapper for set_admin_limits (superadmin-only).
+
+        Validates, applies, tracks changes, and writes audit event.
+        Rate limited to MAX_ADMIN_LIMIT_CHANGES_PER_DAY (5) per day,
+        tracked via independent counter (not editable change_history).
+        """
+        MAX_ADMIN_LIMIT_CHANGES_PER_DAY = 5
+
+        new_limits = payload.get("limits", {})
+        if isinstance(new_limits, str):
+            try:
+                new_limits = json.loads(new_limits)
+            except (json.JSONDecodeError, TypeError):
+                new_limits = {}
+        admin_cfg = _read_admin_limits()
+
+        # Rate limit via independent counter with HMAC integrity check
+        # (tamper-resistant — separate from editable change_history,
+        # stored in Splunk KV store with runtime-derived HMAC key)
+        sys_key = self._get_session_key(request)
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        cooldowns = _read_cooldowns(sys_key)
+        if cooldowns is None:
+            # Tampering detected — fail closed
+            return self._resp(200, {
+                "error": "Security lockdown: rate limit counter has "
+                         "been tampered with (reason: {}). Admin limit "
+                         "changes are blocked until a superadmin runs "
+                         "the recovery script. Contact your security "
+                         "team.".format(_get_tamper_reason() or "unknown"),
+            })
+        rate_key = "admin_limit_changes:" + today_str
+        today_changes = cooldowns.get(rate_key, 0)
+        if today_changes >= MAX_ADMIN_LIMIT_CHANGES_PER_DAY:
+            return self._resp(200, {
+                "error": "Admin limit changes are capped at {} per day "
+                         "for security. {} change(s) already made today. "
+                         "Try again tomorrow.".format(
+                             MAX_ADMIN_LIMIT_CHANGES_PER_DAY,
+                             today_changes),
+            })
+
+        LIMIT_KEYS = (
+            "rule_deletion", "csv_deletion", "approval_count",
+            "limit_changes", "csv_save", "csv_revert",
+            "rule_creation", "csv_creation", "trash_restore",
+            "trash_purge", "usage_reset",
+        )
+        BOOL_KEYS = (
+            "allow_admin_purge_trash", "allow_admin_reset_usage",
+        )
+        VALID_FREQUENCIES = ("never", "daily", "weekly", "monthly", "yearly")
+        SCHEDULE_INT_KEYS = {
+            "reset_day_of_week": (0, 6),
+            "reset_day_of_month": (1, 31),
+            "reset_month": (1, 12),
+            "reset_day_of_year": (1, 31),
+        }
+
+        # Snapshot old values for diff
+        old_values = {}
+        for key in LIMIT_KEYS:
+            old_values[key] = admin_cfg.get(
+                key, DEFAULT_ADMIN_LIMITS.get(key, 0))
+        for key in BOOL_KEYS:
+            old_values[key] = admin_cfg.get(
+                key, DEFAULT_ADMIN_LIMITS.get(key, True))
+        old_values["reset_time_utc"] = admin_cfg.get(
+            "reset_time_utc",
+            DEFAULT_ADMIN_LIMITS.get("reset_time_utc", "00:00"))
+        old_values["reset_frequency"] = admin_cfg.get(
+            "reset_frequency",
+            DEFAULT_ADMIN_LIMITS.get("reset_frequency", "daily"))
+        for key, (lo, _hi) in SCHEDULE_INT_KEYS.items():
+            old_values[key] = admin_cfg.get(
+                key, DEFAULT_ADMIN_LIMITS.get(key, lo))
+
+        # Apply changes with validation
+        for key in LIMIT_KEYS:
+            if key in new_limits:
+                val = new_limits[key]
+                if isinstance(val, int) and 0 <= val <= 100:
+                    admin_cfg[key] = val
+        for key in BOOL_KEYS:
+            if key in new_limits:
+                admin_cfg[key] = bool(new_limits[key])
+        if "reset_time_utc" in new_limits:
+            val = new_limits["reset_time_utc"]
+            if isinstance(val, str) and len(val) == 5 and val[2] == ':':
+                try:
+                    hh, mm = int(val[:2]), int(val[3:])
+                    if 0 <= hh <= 23 and 0 <= mm <= 59:
+                        admin_cfg["reset_time_utc"] = val
+                except (ValueError, IndexError):
+                    pass
+        if "reset_frequency" in new_limits:
+            val = new_limits["reset_frequency"]
+            if val in VALID_FREQUENCIES:
+                admin_cfg["reset_frequency"] = val
+        for key, (lo, hi) in SCHEDULE_INT_KEYS.items():
+            if key in new_limits:
+                val = new_limits[key]
+                if isinstance(val, int) and lo <= val <= hi:
+                    admin_cfg[key] = val
+
+        # Compute diff
+        changes = []
+        all_tracked = (list(LIMIT_KEYS) + list(BOOL_KEYS)
+                       + ["reset_time_utc", "reset_frequency"]
+                       + list(SCHEDULE_INT_KEYS.keys()))
+        for key in all_tracked:
+            old_val = old_values.get(key, 0)
+            new_val = admin_cfg.get(key, old_val)
+            if old_val != new_val:
+                changes.append({"key": key, "old": old_val, "new": new_val})
+
+        history = admin_cfg.get("change_history", [])
+
+        if not changes:
+            clean = {k: v for k, v in admin_cfg.items()
+                     if k != "change_history"}
+            return self._resp(200, {
+                "message": "No changes",
+                "no_changes": True,
+                "admin_limits": clean,
+                "change_history": history,
+            })
+
+        # Record change history (newest first, max 10)
+        entry = {
+            "timestamp": datetime.now(timezone.utc).strftime(
+                "%Y-%m-%d %H:%M:%S UTC"),
+            "admin": user,
+            "changes": changes,
+        }
+        history.insert(0, entry)
+        if len(history) > 10:
+            history = history[:10]
+        admin_cfg["change_history"] = history
+
+        _write_admin_limits(admin_cfg)
+
+        # Audit event
+        value_lines = []
+        for c in changes:
+            value_lines.append("{}: {} -> {}".format(
+                c["key"], c["old"], c["new"]))
+        evt = {
+            "action": "admin_limit_change",
+            "timestamp": int(time.time()),
+            "analyst": user,
+            "change_count": len(changes),
+            "value": value_lines,
+        }
+        self._index_audit(request, evt)
+
+        # Increment independent rate limit counter
+        cooldowns = _read_cooldowns(sys_key)
+        if cooldowns is None:
+            return self._resp(200, {
+                "error": "Security lockdown: rate limit counter has "
+                         "been tampered with (reason: {}). Admin limit "
+                         "changes are blocked until a superadmin runs "
+                         "the recovery script.".format(
+                             _get_tamper_reason() or "unknown"),
+            })
+        cooldowns[rate_key] = cooldowns.get(rate_key, 0) + 1
+        _write_cooldowns(sys_key, cooldowns, updated_by=user)
+
+        # Notify other superadmins about admin limit changes
+        change_summary = "; ".join(
+            "{}: {} -> {}".format(c["key"], c["old"], c["new"])
+            for c in changes[:5])  # Truncate to first 5 changes
+        if len(changes) > 5:
+            change_summary += " (+{} more)".format(len(changes) - 5)
+        sa_users = get_superadmin_users(sys_key)
+        for sa_user in sa_users:
+            if sa_user != user:  # Don't notify the person who made the change
+                _add_notification(
+                    sa_user, "new_request",
+                    "{} changed admin limits: {}".format(
+                        user, change_summary),
+                    extra={"action_type": "admin_limit_change"})
+
+        clean = {k: v for k, v in admin_cfg.items()
+                 if k != "change_history"}
+        return self._resp(200, {
+            "success": True,
+            "message": "Admin limits updated",
+            "admin_limits": clean,
+            "change_history": history,
+        })
 
     def _action_reset_daily_limits(self, request, payload, user, roles):
         """POST action wrapper for reset_daily_limits (superadmin-only)."""
         return self._reset_daily_limits_action(request, user)
 
     def _action_reset_daily_usage(self, request, payload, user, roles):
-        """POST action wrapper for reset_daily_usage (superadmin-only)."""
-        return self._reset_daily_usage_action(payload, user)
+        """POST action wrapper for reset_daily_usage (admin-only).
+
+        Mass reset (analyst=all) requires dual-approval for ALL roles
+        including superadmin. Individual resets proceed normally.
+        """
+        analyst = payload.get("analyst", "")
+
+        # Mass reset requires dual-approval (destructive)
+        if analyst == "all":
+            return self._submit_dual_approval(request, {
+                "action_type": "admin_mass_usage_reset",
+                "comment": payload.get("comment",
+                                       "Reset all analyst daily usage"),
+            }, user)
+
+        # Individual reset — permission toggle check (admins only)
+        if not is_superadmin(roles):
+            if not _check_admin_permission("allow_admin_reset_usage"):
+                return self._resp(200, {
+                    "error": "Usage reset has been disabled by your "
+                             "super-admin. This action is not permitted."})
+            # Admin daily limit
+            allowed, current, maximum = _check_admin_daily_limit(
+                user, "usage_reset")
+            if not allowed:
+                return self._resp(200, {
+                    "error": _daily_limit_error_msg(
+                        "usage_reset", 1, current, maximum,
+                        contact="your super-admin"),
+                    "limit_type": "admin_usage_reset",
+                    "current": current, "maximum": maximum,
+                    "disabled": maximum == 0,
+                })
+        result = self._reset_daily_usage_action(payload, user)
+        if (not is_superadmin(roles)
+                and isinstance(result, dict)
+                and result.get("status") == 200):
+            body = json.loads(result.get("payload", "{}"))
+            if body.get("success"):
+                _increment_admin_daily_limit(user, "usage_reset")
+        return result
 
     def _action_save_as_default(self, request, payload, user, roles):
         """POST action wrapper for save_as_default (superadmin-only)."""
         return self._save_as_default_action(request, user)
 
     def _action_reset_factory_defaults(self, request, payload, user, roles):
-        """POST action wrapper for reset_factory_defaults (superadmin-only)."""
-        return self._reset_factory_defaults_action(request, user)
+        """POST action wrapper for reset_factory_defaults (superadmin-only).
+
+        Destructive action — requires dual-approval. Resets all carefully
+        configured analyst limits to factory defaults.
+        """
+        return self._submit_dual_approval(request, {
+            "action_type": "admin_factory_reset",
+            "comment": payload.get("comment",
+                                   "Reset analyst limits to factory defaults"),
+        }, user)
 
     def _action_set_trash_retention(self, request, payload, user, roles):
         """POST action wrapper for set_trash_retention (admin-only)."""
@@ -1814,21 +2928,193 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         return self._resp(200, {"success": True})
 
     def _action_purge_trash(self, request, payload, user, roles):
-        """POST action wrapper for purge_trash (admin-only)."""
-        purged = purge_trash_item(payload.get("item_id", ""))
-        return self._resp(200, {"success": purged})
+        """POST action wrapper for purge_trash (admin-only).
+
+        Destructive action — requires dual-approval for ALL roles including
+        superadmin. No unilateral permanent data deletion.
+        """
+        # Permission toggle check (admins only — superadmins exempt)
+        if not is_superadmin(roles):
+            if not _check_admin_permission("allow_admin_purge_trash"):
+                return self._resp(200, {
+                    "error": "Trash purge has been disabled by your "
+                             "super-admin. This action is not permitted."})
+            # Admin daily limit
+            allowed, current, maximum = _check_admin_daily_limit(
+                user, "trash_purge")
+            if not allowed:
+                return self._resp(200, {
+                    "error": _daily_limit_error_msg(
+                        "trash_purge", 1, current, maximum,
+                        contact="your super-admin"),
+                    "limit_type": "admin_trash_purge",
+                    "current": current, "maximum": maximum,
+                    "disabled": maximum == 0,
+                })
+        # Cooldown: 1 hour between consecutive purge submissions
+        sys_key = self._get_session_key(request)
+        cooldown_blocked, remaining = _check_cooldown(
+            user, "purge_trash", PURGE_COOLDOWN_SECONDS, sys_key)
+        if cooldown_blocked:
+            if remaining < 0:
+                # Tamper detected — fail closed
+                return self._resp(200, {
+                    "error": "Security lockdown: cooldown counter has "
+                             "been tampered with. Purge operations are "
+                             "blocked until a superadmin runs the "
+                             "recovery script."})
+            mins = remaining // 60
+            return self._resp(200, {
+                "error": "Purge cooldown active. You must wait {} "
+                         "minute(s) before submitting another purge "
+                         "request.".format(max(mins, 1)),
+            })
+        _record_cooldown(user, "purge_trash", sys_key)
+
+        # Dual-approval required for ALL roles (defense in depth)
+        return self._submit_dual_approval(request, {
+            "action_type": "admin_purge_trash",
+            "trash_id": payload.get("item_id", ""),
+            "comment": payload.get("comment", "Purge trash item"),
+        }, user)
 
     def _action_restore_from_trash(self, request, payload, user, roles):
         """POST action wrapper for restore_from_trash — delegates to pipeline."""
+        # Admin daily limit for trash restore
+        if is_admin(roles) and not is_superadmin(roles):
+            allowed, current, maximum = _check_admin_daily_limit(
+                user, "trash_restore")
+            if not allowed:
+                return self._resp(200, {
+                    "error": _daily_limit_error_msg(
+                        "trash_restore", 1, current, maximum,
+                        contact="your super-admin"),
+                    "limit_type": "admin_trash_restore",
+                    "current": current, "maximum": maximum,
+                    "disabled": maximum == 0,
+                })
         item_id = payload.get("item_id", "")
         comment = payload.get("comment", "")
         result = restore_from_trash_pipeline(
-            item_id, user, self.sessionKey, comment=comment)
+            item_id, user, self._get_session_key(request), comment=comment)
         if not result.get("success"):
             return self._resp(400, {"error": result.get("error", "Restore failed")})
+        if is_admin(roles) and not is_superadmin(roles):
+            _increment_admin_daily_limit(user, "trash_restore")
+
+        # Update CSV expected-hash registry for the restored file
+        try:
+            restored = result.get("data", {})
+            csv_file = restored.get("csv_file", "")
+            app_ctx = restored.get("app_context", "")
+            if csv_file:
+                csv_path = resolve_csv_path(csv_file, app_ctx)
+                if csv_path and os.path.isfile(csv_path):
+                    update_csv_expected_hash(csv_path)
+        except Exception:
+            pass  # Best-effort
+
         return self._resp(200, {
             "success": True,
             "data": result.get("data", {}),
+        })
+
+    # ==================================================================
+    # Emergency Lockdown
+    # ==================================================================
+
+    def _action_get_lockdown_status(self, request, query, user, roles):
+        """GET: Return current lockdown state."""
+        return self._resp(200, {"lockdown": _read_lockdown_state()})
+
+    def _action_activate_lockdown(self, request, payload, user, roles):
+        """POST: Activate emergency lockdown (superadmin-only).
+
+        Freezes ALL write operations app-wide until a different
+        superadmin deactivates.
+        """
+        reason = sanitize_text(
+            (payload.get("reason") or "")[:500])
+        state = _read_lockdown_state()
+        if state.get("locked"):
+            return self._resp(200, {
+                "error": "Lockdown is already active (activated by "
+                         "{})".format(state.get("locked_by", "unknown"))})
+
+        now = int(time.time())
+        new_state = {
+            "locked": True,
+            "locked_by": user,
+            "locked_at": now,
+            "locked_at_human": datetime.now(timezone.utc).strftime(
+                "%Y-%m-%d %H:%M:%S UTC"),
+            "reason": reason,
+        }
+        _write_lockdown_state(new_state)
+
+        # Notify all admins
+        sys_key = self._get_session_key(request)
+        _notify_admins(
+            "new_request",
+            "EMERGENCY LOCKDOWN activated by {}: {}".format(
+                user, reason or "No reason given"),
+            extra={"action_type": "emergency_lockdown"},
+            session_key=sys_key)
+
+        # Audit
+        self._index_audit(request, {
+            "action": "emergency_lockdown_activated",
+            "timestamp": now,
+            "analyst": user,
+            "reason": reason,
+        })
+
+        return self._resp(200, {
+            "success": True,
+            "message": "Emergency lockdown activated. All write "
+                       "operations are frozen.",
+        })
+
+    def _action_deactivate_lockdown(self, request, payload, user, roles):
+        """POST: Deactivate emergency lockdown (superadmin-only).
+
+        Must be a DIFFERENT superadmin than the one who activated.
+        """
+        state = _read_lockdown_state()
+        if not state.get("locked"):
+            return self._resp(200, {
+                "error": "Lockdown is not active"})
+
+        # Self-unlock prevention: activator cannot deactivate
+        if state.get("locked_by") == user:
+            return self._resp(200, {
+                "error": "You activated this lockdown. A different "
+                         "super-admin must deactivate it."})
+
+        now = int(time.time())
+        _write_lockdown_state({})
+
+        # Notify all admins
+        sys_key = self._get_session_key(request)
+        _notify_admins(
+            "approved",
+            "Emergency lockdown DEACTIVATED by {}. Write operations "
+            "resumed.".format(user),
+            extra={"action_type": "emergency_lockdown_lifted"},
+            session_key=sys_key)
+
+        # Audit
+        self._index_audit(request, {
+            "action": "emergency_lockdown_deactivated",
+            "timestamp": now,
+            "analyst": user,
+            "originally_locked_by": state.get("locked_by", ""),
+        })
+
+        return self._resp(200, {
+            "success": True,
+            "message": "Emergency lockdown deactivated. Write "
+                       "operations resumed.",
         })
 
     def _action_mark_notifications_read(self, request, payload, user, roles):
@@ -1843,21 +3129,250 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         """POST action wrapper for log_event."""
         return self._log_event(request, payload)
 
-    def _action_debug_log(self, request, payload, user, roles):
-        """Write frontend debug entry to /tmp/wl_debug.log."""
-        import datetime
-        entry = payload.get("entry", {})
-        entry["user"] = user
-        line = "{} {}\n".format(
-            datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            json.dumps(entry, default=str),
-        )
+    # ── FIM Deploy Window (REST-based — replaces shell-only access) ──
+
+    def _action_get_deploy_window_status(self, request, query, user, roles):
+        """GET action: return current deploy window state."""
+        window_path = os.path.join(OWN_LOOKUPS, VERSIONS_DIR, "_fim_deploy_window.json")
+        if not os.path.isfile(window_path):
+            return self._resp(200, {"active": False, "status": "no_window"})
         try:
-            with open("/tmp/wl_debug.log", "a", encoding="utf-8") as f:
-                f.write(line)
-        except Exception:
+            with open(window_path, "r", encoding="utf-8") as fh:
+                body = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return self._resp(200, {"active": False, "status": "unreadable"})
+        now = int(time.time())
+        expires = int(body.get("expires_at", 0))
+        if now >= expires:
+            return self._resp(200, {"active": False, "status": "expired",
+                                    "expired_at": expires})
+        return self._resp(200, {
+            "active": True,
+            "status": "active",
+            "started_by": body.get("started_by", "?"),
+            "reason": body.get("reason", ""),
+            "started_at": body.get("started_at"),
+            "expires_at": expires,
+            "remaining_seconds": expires - now,
+        })
+
+    def _action_open_deploy_window(self, request, payload, user, roles):
+        """POST action: open a FIM deploy window (superadmin-only).
+
+        Payload:
+            duration_minutes (int): 1-60, default 15.
+            reason (str): free-text reason (required, max 500 chars).
+
+        The window file is HMAC-signed with the FIM key so
+        ``wl_fim.py`` can verify its authenticity. A hard 1-hour cap
+        is enforced at both creation time (here) and read time (FIM).
+        """
+        duration = payload.get("duration_minutes", 15)
+        try:
+            duration = int(duration)
+        except (ValueError, TypeError):
+            return self._resp(200, {
+                "error": "duration_minutes must be an integer (1-60)."})
+        if duration < 1 or duration > 60:
+            return self._resp(200, {
+                "error": "duration_minutes must be between 1 and 60."})
+
+        reason = sanitize_text(str(payload.get("reason", "")))[:500]
+        if not reason.strip():
+            return self._resp(200, {
+                "error": "A reason is required for opening a deploy window."})
+
+        window_path = os.path.join(OWN_LOOKUPS, VERSIONS_DIR, "_fim_deploy_window.json")
+        recovery_log = os.path.join(OWN_LOOKUPS, VERSIONS_DIR, "_recovery_log.jsonl")
+
+        # Atomic check-and-create: if the file already exists, verify
+        # whether the window is still active before allowing overwrite.
+        # This closes the TOCTOU between "is file present?" and "write".
+        os.makedirs(os.path.dirname(window_path), exist_ok=True)
+        try:
+            fd = os.open(window_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                         0o600)
+            os.close(fd)
+            # File created exclusively — no active window. Proceed.
+        except OSError:
+            # File exists — check if window is still active.
+            try:
+                with open(window_path, "r", encoding="utf-8") as fh:
+                    existing = json.load(fh)
+                if int(existing.get("expires_at", 0)) > int(time.time()):
+                    return self._resp(200, {
+                        "error": "A deploy window is already active "
+                                 "(expires at {}). Close it first.".format(
+                                     existing.get("expires_at"))})
+            except (OSError, json.JSONDecodeError):
+                pass  # Stale/corrupt file — overwrite is safe
+
+        # Derive FIM HMAC key (same construction as wl_fim.py)
+        session_key = self._get_session_key(request)
+        guid = _fetch_server_guid(session_key)
+        if not guid:
+            # Clean up the empty sentinel file we may have created
+            try:
+                os.remove(window_path)
+            except OSError:
+                pass
+            return self._resp(200, {
+                "error": "Cannot derive FIM signing key — "
+                         "server GUID unavailable."})
+        fim_key = hashlib.sha256(
+            FIM_HMAC_SALT + guid.encode("utf-8")).digest()
+
+        started_at = int(time.time())
+        expires_at = started_at + duration * 60
+        body = {
+            "started_at": started_at,
+            "expires_at": expires_at,
+            "started_by": user,
+            "reason": reason,
+        }
+        payload_json = json.dumps(
+            {k: v for k, v in body.items() if k != "_checksum"},
+            sort_keys=True, default=str)
+        body["_checksum"] = hmac.new(
+            fim_key, payload_json.encode("utf-8"),
+            hashlib.sha256).hexdigest()
+
+        with open(window_path, "w", encoding="utf-8") as fh:
+            json.dump(body, fh, indent=2)
+        try:
+            os.chmod(window_path, 0o600)
+        except OSError:
             pass
-        return self._resp(200, {"ok": True})
+
+        # Append recovery-log audit record (host_user matches shell script convention)
+        rec = {
+            "timestamp": started_at,
+            "timestamp_human": datetime.fromtimestamp(
+                started_at, tz=timezone.utc
+            ).strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "action": "fim_deploy_window_start",
+            "source": "rest_api",
+            "host_user": user,
+            "reason": reason,
+            "duration_min": duration,
+        }
+        try:
+            with open(recovery_log, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec) + "\n")
+        except OSError:
+            pass  # Best-effort audit
+
+        # Also emit to wl_audit index so SOC dashboards catch
+        # abnormal window-opening patterns (e.g. compromised superadmin)
+        self._index_audit(request, {
+            "action": "fim_deploy_window_start",
+            "analyst": user,
+            "reason": reason,
+            "duration_minutes": duration,
+            "severity": "HIGH",
+        })
+
+        return self._resp(200, {
+            "success": True,
+            "started_at": started_at,
+            "expires_at": expires_at,
+            "duration_minutes": duration,
+        })
+
+    def _action_close_deploy_window(self, request, payload, user, roles):
+        """POST action: close an active FIM deploy window."""
+        window_path = os.path.join(OWN_LOOKUPS, VERSIONS_DIR, "_fim_deploy_window.json")
+        recovery_log = os.path.join(OWN_LOOKUPS, VERSIONS_DIR, "_recovery_log.jsonl")
+
+        if not os.path.isfile(window_path):
+            return self._resp(200, {"error": "No deploy window is active."})
+
+        try:
+            os.remove(window_path)
+        except OSError as exc:
+            return self._resp(200, {
+                "error": "Failed to remove deploy window file: {}".format(
+                    type(exc).__name__)})
+
+        # Append recovery-log audit record (host_user matches shell script convention)
+        now = int(time.time())
+        rec = {
+            "timestamp": now,
+            "timestamp_human": datetime.fromtimestamp(
+                now, tz=timezone.utc
+            ).strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "action": "fim_deploy_window_end",
+            "source": "rest_api",
+            "host_user": user,
+        }
+        try:
+            with open(recovery_log, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec) + "\n")
+        except OSError:
+            pass
+
+        self._index_audit(request, {
+            "action": "fim_deploy_window_end",
+            "analyst": user,
+        })
+
+        return self._resp(200, {"success": True})
+
+    # ==================================================================
+    # Maintenance — CSV hash bootstrap
+    # ==================================================================
+    def _action_bootstrap_csv_hashes(self, request, payload, user, roles):
+        """POST action: rebuild the expected-hash registry for ALL managed CSVs.
+
+        Diff-aware: compares new hashes against the previous registry and
+        emits individual audit events for each CSV whose hash changed.
+        This makes "bootstrap laundering" attacks visible — if an attacker
+        modifies a CSV then immediately bootstraps to suppress watcher
+        alerts, the per-CSV change events still appear in the audit trail.
+
+        Superadmin-only, lockdown-exempt, rate-limit-exempt.
+        """
+        try:
+            result = bootstrap_csv_expected_hashes(OWN_LOOKUPS)
+        except OSError as exc:
+            return self._resp(200, {
+                "error": "Bootstrap failed: {}".format(str(exc))})
+
+        # Emit per-CSV change events (the anti-laundering audit trail)
+        for change in result.get("changed_csvs", []):
+            self._index_audit(request, {
+                "action": "bootstrap_csv_hash_changed",
+                "analyst": user,
+                "csv_file": change["csv_file"],
+                "old_hash": change["old_hash"],
+                "new_hash": change["new_hash"],
+                "severity": "HIGH",
+            })
+
+        # Emit summary event
+        self._index_audit(request, {
+            "action": "bootstrap_csv_hashes",
+            "analyst": user,
+            "hashed_count": result["hashed_count"],
+            "missing_count": result["missing_count"],
+            "changed_count": len(result.get("changed_csvs", [])),
+            "new_count": len(result.get("new_csvs", [])),
+        })
+
+        resp = {
+            "success": True,
+            "hashed_count": result["hashed_count"],
+            "missing_count": result["missing_count"],
+            "changed_count": len(result.get("changed_csvs", [])),
+        }
+        if result["missing_files"]:
+            resp["missing_files"] = result["missing_files"]
+        if result["changed_csvs"]:
+            resp["changed_csvs"] = [c["csv_file"]
+                                    for c in result["changed_csvs"]]
+        if result["new_csvs"]:
+            resp["new_csvs"] = result["new_csvs"]
+        return self._resp(200, resp)
 
     # ==================================================================
     # POST
@@ -1886,8 +3401,22 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if not action:
             return self._resp(400, {
                 "error": "Missing or unknown action",
-                "valid_actions": sorted(self.POST_ACTIONS.keys()),
             })
+
+        # Emergency lockdown gate — block all write operations except
+        # lockdown management, notifications, and read-like POSTs
+        LOCKDOWN_EXEMPT_ACTIONS = {
+            "activate_lockdown", "deactivate_lockdown",
+            "mark_notifications_read", "log_event",
+            "check_approval_gate", "check_daily_limit_status",
+            "report_presence", "save_col_widths",
+            "open_deploy_window", "close_deploy_window",
+            "bootstrap_csv_hashes",
+        }
+        if action not in LOCKDOWN_EXEMPT_ACTIONS:
+            blocked, err_msg = _check_lockdown_gate(user)
+            if blocked:
+                return self._resp(200, {"error": err_msg})
 
         return self._dispatch(self.POST_ACTIONS, action, request, user, roles, payload=payload)
 
@@ -2092,7 +3621,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         target_app_dir = os.path.join(APPS_DIR, safe_app)
         if not os.path.isdir(target_app_dir):
             return self._resp(400, {
-                "error": "App '{}' does not exist".format(app_context)
+                "error": "App '{}' does not exist".format(safe_app)
             })
         target_lookups = os.path.join(target_app_dir, "lookups")
         if not os.path.isdir(target_lookups):
@@ -2285,6 +3814,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if ascii_err:
             return self._resp(200, {"error": ascii_err})
         expected_mtime = payload.get("expected_mtime", None)
+        expected_content_hash = payload.get("expected_content_hash", None)
 
         # ── Validate filename ─────────────────────────────────────────
         if not is_safe_filename(csv_file):
@@ -2460,6 +3990,14 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # ── Acquire file-level lock for the read-modify-write cycle ───
         # (On Windows, falls through to optimistic-lock-only mode.)
         # ── Optimistic locking — reject if file changed since load ───
+        #
+        # Two independent checks run here:
+        #   1. mtime equality — catches honest external writers that
+        #      update mtime normally.
+        #   2. content-hash equality — catches attackers that preserve
+        #      mtime via ``cp -p`` / ``touch -r`` / direct filesystem
+        #      writes / ``| outputlookup``. Either check failing is a
+        #      hard 409 conflict — the save must not be applied.
         if expected_mtime is not None:
             try:
                 expected_int = int(expected_mtime)
@@ -2479,6 +4017,37 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     })
             except OSError:
                 pass  # File not yet on disk (new CSV) — skip check
+
+        # Strict expected_content_hash validation — required on all
+        # save paths that are not an approval replay. A missing hash
+        # means the client is an older build that pre-dates the
+        # content-hash lock and must reload; a malformed hash means
+        # someone is speaking our protocol incorrectly and the save
+        # should be rejected before it touches the filesystem.
+        # Approval replay paths set expected_content_hash=None
+        # deliberately — the admin is approving at a later time so
+        # the snapshot the requester saw is already stale.
+        if not _from_approval:
+            ok, err, expected_content_hash = _validate_expected_content_hash(
+                expected_content_hash)
+            if not ok:
+                return self._resp(err["status"], {
+                    k: v for k, v in err.items() if k != "status"
+                })
+            try:
+                st = os.stat(path)
+                current_hash = _get_csv_content_hash(
+                    path, int(st.st_mtime), st.st_size)
+                if current_hash and current_hash != expected_content_hash:
+                    return self._resp(409, {
+                        "error": "Conflict: the CSV file's content hash has "
+                                 "changed since you loaded it (possible "
+                                 "mtime-preserving external write). Please "
+                                 "reload the file and try again.",
+                        "current_content_hash": current_hash,
+                    })
+            except OSError:
+                pass
 
         # ── Read BEFORE state ─────────────────────────────────────────
         old_headers, old_rows = read_csv(path)
@@ -2535,7 +4104,17 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         has_rename = bool(column_renames)
         has_reorder = bool(row_reorder) or bool(column_reorder)
         if not has_row_changes and not has_col_changes and not has_rename and not has_reorder:
-            return self._resp(200, {"message": "No changes detected", "diff": diff})
+            # Even with no changes, register the expected hash so the
+            # FIM watcher can track this CSV (handles bootstrapping).
+            try:
+                update_csv_expected_hash(path)
+            except Exception:
+                pass
+            return self._resp(200, {
+                "message": "No changes detected",
+                "diff": diff,
+                "file_mtime": int(os.path.getmtime(path)),
+            })
 
         # ── Full file lock — block ALL saves when approval pending ──
         if not _from_approval:
@@ -2712,6 +4291,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         version_display = payload.get("version_display", "")
         revert_reason = payload.get("revert_reason", "")
         expected_mtime = payload.get("expected_mtime", None)
+        expected_content_hash = payload.get("expected_content_hash", None)
 
         if not revert_reason.strip():
             return self._resp(400, {"error": "A reason is required for revert"})
@@ -2751,7 +4331,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # ── Optimistic locking — reject if file changed since load ───
         # Skip when replaying from approval — the admin approves at a
-        # later time, so mtime will naturally differ.
+        # later time, so mtime will naturally differ. Both mtime and
+        # content-hash are validated independently; either mismatch
+        # is a hard conflict.
         if not _from_approval and expected_mtime is not None:
             try:
                 expected_int = int(expected_mtime)
@@ -2768,6 +4350,28 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                                  "user or process since you loaded it. Please "
                                  "reload the file and try again.",
                         "current_mtime": current_mtime,
+                    })
+            except OSError:
+                pass
+
+        if not _from_approval:
+            ok, err, expected_content_hash = _validate_expected_content_hash(
+                expected_content_hash)
+            if not ok:
+                return self._resp(err["status"], {
+                    k: v for k, v in err.items() if k != "status"
+                })
+            try:
+                st = os.stat(path)
+                current_hash = _get_csv_content_hash(
+                    path, int(st.st_mtime), st.st_size)
+                if current_hash and current_hash != expected_content_hash:
+                    return self._resp(409, {
+                        "error": "Conflict: the CSV file's content hash has "
+                                 "changed since you loaded it (possible "
+                                 "mtime-preserving external write). Please "
+                                 "reload the file and try again.",
+                        "current_content_hash": current_hash,
                     })
             except OSError:
                 pass
@@ -2986,49 +4590,18 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # Block if ANY pending request exists for this CSV (by any user, any action type).
         # A locked CSV cannot accept new submissions — existing requests must be resolved first.
+        #
+        # We run this check twice: once here as an early-exit UX optimization
+        # (fast fail for obvious conflicts), and again inside the file lock
+        # below right before the append (authoritative check — prevents
+        # TOCTOU race where two concurrent submits both pass the outside
+        # check and both append).
         detection_rule = payload.get("detection_rule", "")
-        queue = _expire_pending_approvals()  # Lock acquired below for write
-        _rule_only = {"create_rule", "remove_rule"}
-        for item in queue:
-            if item["status"] != "pending":
-                continue
-            if action_type in _rule_only:
-                # Rule operations: block if same detection_rule has a pending request
-                if item.get("detection_rule", "") == detection_rule and item["action_type"] in _rule_only:
-                    if item["analyst"] == user:
-                        return self._resp(200, {
-                            "error": "You already have a pending {} request "
-                                     "for detection rule '{}'. "
-                                     "Wait for it to be processed.".format(
-                                         item["action_type"].replace("_", " "),
-                                         detection_rule)
-                        })
-                    else:
-                        return self._resp(200, {
-                            "error": "A pending {} request by {} exists "
-                                     "for detection rule '{}'. "
-                                     "It must be resolved first.".format(
-                                         item["action_type"].replace("_", " "),
-                                         item["analyst"], detection_rule)
-                        })
-            else:
-                # CSV operations: block if same csv_file has ANY pending request
-                if item.get("csv_file") == csv_file:
-                    if item["analyst"] == user:
-                        return self._resp(200, {
-                            "error": "You already have a pending {} request "
-                                     "for this CSV. "
-                                     "Wait for it to be processed.".format(
-                                         item["action_type"].replace("_", " "))
-                        })
-                    else:
-                        return self._resp(200, {
-                            "error": "This CSV is locked by a pending {} request "
-                                     "from {}. It must be resolved before new "
-                                     "requests can be submitted.".format(
-                                         item["action_type"].replace("_", " "),
-                                         item["analyst"])
-                        })
+        queue = _expire_pending_approvals()
+        conflict_err = _approval_conflict_error(
+            queue, action_type, user, csv_file, detection_rule)
+        if conflict_err:
+            return self._resp(200, {"error": conflict_err})
 
         # Check daily limit BEFORE allowing the request to be submitted.
         # Map approval action types to their daily-limit counter key.
@@ -3154,8 +4727,18 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         }
 
         with _approval_queue_lock():
-            # Re-read inside lock to prevent TOCTOU race
-            queue = _expire_pending_approvals()
+            # Re-read inside the lock and re-run the conflict check
+            # (authoritative TOCTOU guard). Uses inline read + in-memory
+            # expire — NOT _expire_pending_approvals, which performs its
+            # own unconditional write that would widen the critical
+            # section and increase the window for concurrent-reader
+            # interleaving outside the outer lock.
+            queue = _read_approval_queue()
+            queue = expire_pending_approvals(queue)
+            conflict_err = _approval_conflict_error(
+                queue, action_type, user, csv_file, detection_rule)
+            if conflict_err:
+                return self._resp(200, {"error": conflict_err})
             queue.append(entry)
             _write_approval_queue(queue)
 
@@ -3358,6 +4941,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         valid_types = {
             "admin_delete_rule", "admin_delete_csv", "admin_purge_trash",
+            "admin_factory_reset", "admin_mass_usage_reset",
         }
         if action_type not in valid_types:
             return self._resp(400, {
@@ -3392,16 +4976,40 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             if not tid:
                 return self._resp(400, {
                     "error": "trash_id is required"})
-            # Require super-admin for purge submissions
-            roles = get_roles(request)
-            if not is_superadmin(roles):
-                return self._resp(403, {
-                    "error": "Requires super-admin role to submit "
-                             "trash purge requests"})
+            # Permission toggle + daily limit already checked by wrapper
+            # EC6: Check at least 2 superadmins exist for dual-approval
+            sys_key = request.get("system_authtoken",
+                                  request.get("session", {}).get(
+                                      "authtoken", ""))
+            sa_users = get_superadmin_users(sys_key)
+            if len(sa_users) < 2:
+                return self._resp(200, {
+                    "error": "Dual-approval requires at least 2 "
+                             "super-admin accounts. Currently {} exist. "
+                             "Create another super-admin account "
+                             "first.".format(len(sa_users))})
             trash_dir = get_trash_dir()
             if not os.path.isdir(os.path.join(trash_dir, tid)):
                 return self._resp(404, {
                     "error": "Trash item not found"})
+
+        # EC7: Validate superadmin-only destructive actions
+        if action_type in ("admin_factory_reset", "admin_mass_usage_reset"):
+            roles = get_roles(request)
+            if not is_superadmin(roles):
+                return self._resp(403, {
+                    "error": "Only super-admins can submit {} "
+                             "requests".format(action_type)})
+            sys_key = request.get("system_authtoken",
+                                  request.get("session", {}).get(
+                                      "authtoken", ""))
+            sa_users = get_superadmin_users(sys_key)
+            if len(sa_users) < 2:
+                return self._resp(200, {
+                    "error": "Dual-approval requires at least 2 "
+                             "super-admin accounts. Currently {} exist. "
+                             "Create another super-admin account "
+                             "first.".format(len(sa_users))})
 
         # Create the dual-approval request in the queue
         request_id = _generate_request_id(user)
@@ -3432,6 +5040,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 meta.get("csv_file", "")),
             "admin_purge_trash": "permanently purge '{}' from trash".format(
                 meta.get("trash_id", "")[:40]),
+            "admin_factory_reset": "reset all analyst limits to "
+                                   "factory defaults",
+            "admin_mass_usage_reset": "reset ALL analyst daily "
+                                      "usage counters",
         }
         desc = desc_map.get(action_type, action_type)
         sys_key = request.get("system_authtoken",
@@ -3610,6 +5222,22 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 target["admin_comment"] = admin_comment
                 _write_approval_queue(queue)
 
+            elif action_type == "admin_factory_reset":
+                # No precondition to re-validate — always executable
+                target["status"] = "approved"
+                target["resolved_by"] = admin_user
+                target["resolved_at"] = now
+                target["admin_comment"] = admin_comment
+                _write_approval_queue(queue)
+
+            elif action_type == "admin_mass_usage_reset":
+                # No precondition to re-validate — always executable
+                target["status"] = "approved"
+                target["resolved_by"] = admin_user
+                target["resolved_at"] = now
+                target["admin_comment"] = admin_comment
+                _write_approval_queue(queue)
+
             else:
                 return self._resp(400, {
                     "error": "Unknown dual-approval action type"})
@@ -3639,7 +5267,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 exec_payload["removal_type"],
                 exec_payload["comment"],
                 target["analyst"],
-                self.sessionKey)
+                self._get_session_key(request))
             exec_result = self._resp(
                 200 if pipeline_result.get("success") else 400,
                 pipeline_result if pipeline_result.get("success")
@@ -3659,7 +5287,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 exec_payload["removal_type"],
                 exec_payload["comment"],
                 target["analyst"],
-                self.sessionKey,
+                self._get_session_key(request),
                 rule_name=exec_payload.get("rule_name", ""))
             exec_result = self._resp(
                 200 if pipeline_result.get("success") else 400,
@@ -3694,6 +5322,35 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             exec_result = self._resp(
                 200 if success else 500,
                 {"success": success, "message": msg})
+
+        elif action_type == "admin_factory_reset":
+            # Execute factory reset — wipes analyst limits to defaults
+            reset_result = self._reset_factory_defaults_action(
+                request, admin_user)
+            self._index_audit(request, {
+                "action": "factory_reset_executed",
+                "timestamp": int(time.time()),
+                "analyst": admin_user,
+                "requester": target["analyst"],
+                "comment": "Dual-approved factory reset",
+                "dual_approved": True,
+            })
+            exec_result = reset_result
+
+        elif action_type == "admin_mass_usage_reset":
+            # Execute mass usage reset
+            reset_payload = {"analyst": "all"}
+            reset_result = self._reset_daily_usage_action(
+                reset_payload, admin_user)
+            self._index_audit(request, {
+                "action": "mass_usage_reset_executed",
+                "timestamp": int(time.time()),
+                "analyst": admin_user,
+                "requester": target["analyst"],
+                "comment": "Dual-approved mass usage reset",
+                "dual_approved": True,
+            })
+            exec_result = reset_result
 
         # Notify submitter
         _add_notification(
@@ -4557,8 +6214,19 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "diff": result_body.get("diff", {}),
         })
 
-    def _check_approval_gate(self, request, payload, user):
-        """Check if an action requires approval based on thresholds."""
+    def _check_approval_gate(self, request, payload, user, roles=None):
+        """Check if an action requires approval based on thresholds.
+
+        Admins are exempt from approval gates — they ARE the approvers.
+        """
+        # Admin exemption: admins never need approval
+        if roles and is_admin(roles):
+            return self._resp(200, {
+                "requires_approval": False,
+                "reason": "",
+                "daily_limit": None,
+            })
+
         action_type = payload.get("gate_action", "")
         csv_file = payload.get("csv_file", "")
         app_context = payload.get("app_context", "")
@@ -4571,10 +6239,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             reason = "CSV import (Replace mode) always requires approval"
 
         elif action_type == "bulk_row_removal":
-            selected_count = payload.get("selected_count", 0)
-            if isinstance(selected_count, (int, float)):
-                selected_count = int(selected_count)
-            else:
+            try:
+                selected_count = int(payload.get("selected_count", 0))
+            except (ValueError, TypeError):
                 selected_count = 0
             if selected_count >= _get_threshold("bulk_row_removal_threshold"):
                 requires_approval = True
@@ -4603,10 +6270,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 )
 
         elif action_type == "bulk_row_edit":
-            selected_count = payload.get("selected_count", 0)
-            if isinstance(selected_count, (int, float)):
-                selected_count = int(selected_count)
-            else:
+            try:
+                selected_count = int(payload.get("selected_count", 0))
+            except (ValueError, TypeError):
                 selected_count = 0
             if selected_count >= _get_threshold("bulk_row_edit_threshold"):
                 requires_approval = True
@@ -4614,10 +6280,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     selected_count, _get_threshold("bulk_row_edit_threshold"))
 
         elif action_type == "bulk_row_addition":
-            selected_count = payload.get("selected_count", 0)
-            if isinstance(selected_count, (int, float)):
-                selected_count = int(selected_count)
-            else:
+            try:
+                selected_count = int(payload.get("selected_count", 0))
+            except (ValueError, TypeError):
                 selected_count = 0
             if selected_count >= _get_threshold("bulk_row_addition_threshold"):
                 requires_approval = True
@@ -4625,15 +6290,13 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     selected_count, _get_threshold("bulk_row_addition_threshold"))
 
         elif action_type == "revert":
-            total_changes = payload.get("total_row_changes", 0)
-            if isinstance(total_changes, (int, float)):
-                total_changes = int(total_changes)
-            else:
+            try:
+                total_changes = int(payload.get("total_row_changes", 0))
+            except (ValueError, TypeError):
                 total_changes = 0
-            total_col_changes = payload.get("total_col_changes", 0)
-            if isinstance(total_col_changes, (int, float)):
-                total_col_changes = int(total_col_changes)
-            else:
+            try:
+                total_col_changes = int(payload.get("total_col_changes", 0))
+            except (ValueError, TypeError):
                 total_col_changes = 0
             row_thresh = _get_threshold("revert_row_threshold")
             col_thresh = _get_threshold("revert_column_threshold")
