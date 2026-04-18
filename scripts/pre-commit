@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Pre-commit hook for Whitelist Manager
+# Prevents common issues from being committed.
+#
+# Install: copy to .git/hooks/pre-commit (or symlink scripts/pre-commit)
+# Skip:    git commit --no-verify (use sparingly)
+
+set -e
+
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+ERRORS=0
+
+# Get list of staged files
+STAGED=$(git diff --cached --name-only --diff-filter=ACM)
+
+# ── 1. Block CLAUDE.md from being committed ──
+if echo "$STAGED" | grep -qE '^CLAUDE\.md$'; then
+    echo -e "${RED}BLOCKED:${NC} CLAUDE.md is staged for commit."
+    echo "  This file contains internal development notes and must not be committed."
+    echo "  Run: git reset HEAD CLAUDE.md"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# ── 2. Block .env files ──
+if echo "$STAGED" | grep -qE '\.env$|\.env\.local$|\.env\.production$'; then
+    echo -e "${RED}BLOCKED:${NC} .env file staged for commit."
+    echo "  Environment files may contain secrets."
+    ERRORS=$((ERRORS + 1))
+fi
+
+# ── 3. Check for console.log in production JS ──
+JS_FILES=$(echo "$STAGED" | grep -E 'appserver/static/.*\.js$' | grep -v 'node_modules\|tests/' || true)
+if [ -n "$JS_FILES" ]; then
+    for f in $JS_FILES; do
+        if git show ":$f" 2>/dev/null | grep -n 'console\.log\|console\.info\|console\.debug' | grep -v '//.*console' > /dev/null 2>&1; then
+            echo -e "${YELLOW}WARNING:${NC} console.log found in $f"
+            git show ":$f" | grep -n 'console\.log\|console\.info\|console\.debug' | grep -v '//.*console' | head -5
+            ERRORS=$((ERRORS + 1))
+        fi
+    done
+fi
+
+# ── 4. Check for debugger statements in JS ──
+if [ -n "$JS_FILES" ]; then
+    for f in $JS_FILES; do
+        if git show ":$f" 2>/dev/null | grep -n '^\s*debugger' > /dev/null 2>&1; then
+            echo -e "${RED}BLOCKED:${NC} debugger statement in $f"
+            ERRORS=$((ERRORS + 1))
+        fi
+    done
+fi
+
+# ── 5. Python syntax check on staged .py files ──
+PY_FILES=$(echo "$STAGED" | grep -E '\.py$' || true)
+if [ -n "$PY_FILES" ]; then
+    for f in $PY_FILES; do
+        if ! python3 -m py_compile "$f" 2>/dev/null; then
+            echo -e "${RED}BLOCKED:${NC} Python syntax error in $f"
+            python3 -m py_compile "$f" 2>&1 || true
+            ERRORS=$((ERRORS + 1))
+        fi
+    done
+fi
+
+# ── 6. Check for hardcoded passwords in staged files ──
+for f in $STAGED; do
+    if git show ":$f" 2>/dev/null | grep -inE 'password\s*=\s*["\x27][^"\x27]+["\x27]|api_key\s*=\s*["\x27][^"\x27]+["\x27]' | grep -v 'placeholder\|example\|SPLUNK_PASSWORD\|os\.environ\|\.get(' > /dev/null 2>&1; then
+        # Exclude known safe patterns (docker-compose defaults, test fixtures, documentation)
+        case "$f" in
+            docker-compose*|Makefile|README*|CONTRIBUTING*|docs/*|tests/*|demo/*) ;;
+            *)
+                echo -e "${YELLOW}WARNING:${NC} Possible hardcoded credential in $f"
+                ERRORS=$((ERRORS + 1))
+                ;;
+        esac
+    fi
+done
+
+# ── Result ──
+if [ $ERRORS -gt 0 ]; then
+    echo ""
+    echo -e "${RED}Pre-commit check failed with $ERRORS issue(s).${NC}"
+    echo "Fix the issues above, or use 'git commit --no-verify' to bypass."
+    exit 1
+fi
+
+exit 0
