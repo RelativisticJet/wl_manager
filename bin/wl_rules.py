@@ -26,6 +26,7 @@ from wl_constants import (
     OWN_LOOKUPS, DETECTION_RULES_FILE, MAPPING_FILE, MAX_DETECTION_RULES,
     DEFAULT_TRASH_RETENTION_DAYS,
 )
+from wl_csv import update_csv_expected_hash
 
 
 _logger = logging.getLogger("wl_rules")
@@ -234,13 +235,23 @@ def _read_mapping_rows() -> List[Dict]:
 
 
 def _write_mapping_rows(rows: List[Dict]) -> None:
-    """Write rule_csv_map.csv atomically."""
+    """Write rule_csv_map.csv atomically.
+
+    After writing, updates the expected-hash registry so the FIM
+    watcher can distinguish this legitimate write from external
+    modifications (SPL outputlookup, filesystem edits).
+    """
     with open(MAPPING_FILE, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(
             fh, fieldnames=["rule_name", "csv_file", "app_context"],
             extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+    # Update expected hash — best effort (don't block mapping write on hash failure)
+    try:
+        update_csv_expected_hash(MAPPING_FILE)
+    except Exception:
+        _logger.warning("Failed to update expected hash for rule_csv_map.csv")
 
 
 def delete_rule_pipeline(

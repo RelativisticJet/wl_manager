@@ -467,11 +467,105 @@ def _queue_fim_notification(event):
         pass
 
 
+# ────────────────────────────────────────────────────────────────
+# Edge-triggered alert dedup for stateful conditions
+# ────────────────────────────────────────────────────────────────
+# Some FIM alerts describe conditions that PERSIST across runs (e.g.,
+# the baseline file is root-owned and unreadable). Without dedup, the
+# script would emit a CRITICAL alert every 60s for the same condition,
+# flooding the audit index and the notification bell. We track per
+# (action+key) the last-emitted timestamp and only re-emit if either
+# (a) we haven't seen this key before, or (b) the reminder interval
+# has elapsed (so persistent conditions still get periodic visibility,
+# but at human-attentive cadence rather than per-cycle).
+#
+# Event-based alerts (file modifications, deletions, deploy windows
+# opening/closing) are NOT in this set — each such event is a discrete
+# occurrence that must be indexed individually.
+FIM_ALERT_STATE_PATH = os.path.join(VERSIONS_DIR, ".fim_alert_state.json")
+STATEFUL_ALERT_ACTIONS = frozenset({
+    "fim_fs_baseline_permission_denied",
+    "fim_fs_baseline_rebuild_failed",
+    "fim_fs_baseline_missing_or_tampered",
+    "fim_baseline_kv_fs_divergence",
+    "fim_kv_baseline_checksum_mismatch",
+    "fim_csv_hash_registry_tampered",
+    "fim_lookups_dir_unreadable",
+    "fim_scripted_input_no_session_key",
+    "fim_baseline_tampered",
+    "fim_baseline_hmac_mismatch",
+    "fim_baseline_rebuilt_no_source",
+})
+STATEFUL_REMIND_INTERVAL_SECS = 3600  # 1 hour
+
+_alert_state_cache = None  # lazy-loaded once per run
+
+
+def _load_alert_state():
+    try:
+        with open(FIM_ALERT_STATE_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+            if isinstance(data, dict):
+                return data
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        pass
+    return {}
+
+
+def _save_alert_state(state):
+    try:
+        os.makedirs(os.path.dirname(FIM_ALERT_STATE_PATH), exist_ok=True)
+        with open(FIM_ALERT_STATE_PATH, "w", encoding="utf-8") as fh:
+            json.dump(state, fh)
+        try:
+            os.chmod(FIM_ALERT_STATE_PATH, 0o600)
+        except OSError:
+            pass
+    except OSError:
+        # Best-effort. If we can't persist state, the next run will just
+        # re-fire the alert — acceptable degradation.
+        pass
+
+
+def _should_emit_stateful(event, now_ts):
+    """Return True if this stateful alert should fire now (edge or reminder)."""
+    global _alert_state_cache
+    action = event.get("action", "")
+    if action not in STATEFUL_ALERT_ACTIONS:
+        return True
+    if _alert_state_cache is None:
+        _alert_state_cache = _load_alert_state()
+    # Dedup key: action + path/file identity + reason. This lets
+    # different paths fire independently while suppressing repeat alerts
+    # on the same path.
+    path = (event.get("path", "")
+            or event.get("monitored_path", "")
+            or event.get("csv_file", ""))
+    key = "{}|{}|{}".format(action, path, event.get("reason", ""))
+    last_ts = _alert_state_cache.get(key)
+    if last_ts is None or (now_ts - int(last_ts)) >= STATEFUL_REMIND_INTERVAL_SECS:
+        _alert_state_cache[key] = now_ts
+        _save_alert_state(_alert_state_cache)
+        # Annotate the event so dashboards can distinguish "first fire"
+        # from "1-hour reminder" when triaging.
+        if last_ts is not None:
+            event["alert_kind"] = "reminder"
+            event["last_alert_ts"] = int(last_ts)
+        else:
+            event["alert_kind"] = "first_fire"
+        return True
+    return False
+
+
 def _emit(event):
     event.setdefault("timestamp", int(time.time()))
     event.setdefault("timestamp_human",
                      datetime.now(timezone.utc)
                      .strftime("%Y-%m-%d %H:%M:%S UTC"))
+    # Edge-triggered dedup for persistent-state alerts. Suppression
+    # decision uses the event's timestamp (already set above).
+    if not _should_emit_stateful(event, event["timestamp"]):
+        return
     # Tag every event with the lockdown state. During an active lockdown,
     # ALL writes from the handler are blocked — so any FIM event is
     # definitionally unauthorized and should be treated as a high-signal
