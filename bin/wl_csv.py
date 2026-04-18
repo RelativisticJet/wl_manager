@@ -22,12 +22,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Tuple, Optional, Any
 
 import hashlib
-import hmac as _hmac_module
 
 from wl_constants import (
     OWN_LOOKUPS, MAX_ROWS, MAX_COLUMNS, MAX_CELL_CHARS, MAX_DIFF_ROWS,
     DETECTION_RULES_FILE, VERSIONS_DIR,
-    EXPIRE_COLUMN_NAMES, FIM_HMAC_SALT,
+    EXPIRE_COLUMN_NAMES,
+)
+from wl_hmac_key import (
+    derive_hash_registry_key as _derive_hash_registry_key,
+    compute_registry_checksum as _compute_hash_registry_checksum,
+    read_expected_hashes as _read_expected_hashes,
+    write_expected_hashes as _write_expected_hashes,
 )
 from wl_validation import sanitize_text
 
@@ -97,83 +102,6 @@ def _get_expected_hashes_path(csv_filepath: str) -> str:
     """
     parent = os.path.dirname(csv_filepath)
     return os.path.join(parent, VERSIONS_DIR, CSV_EXPECTED_HASHES_FILE)
-
-
-def _derive_hash_registry_key() -> bytes:
-    """Derive HMAC signing key for the expected-hash registry.
-
-    Uses the same GUID + salt construction as FIM baselines.
-    Falls back to salt-only key if instance.cfg is unreadable
-    (the watcher will still verify — just with a weaker key).
-    """
-    instance_cfg = "/opt/splunk/etc/instance.cfg"
-    guid = ""
-    try:
-        with open(instance_cfg, "r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if line.startswith("guid"):
-                    parts = line.split("=", 1)
-                    if len(parts) == 2:
-                        guid = parts[1].strip()
-                        break
-    except OSError:
-        pass
-    if guid:
-        return hashlib.sha256(FIM_HMAC_SALT + guid.encode("utf-8")).digest()
-    return hashlib.sha256(FIM_HMAC_SALT).digest()
-
-
-def _compute_hash_registry_checksum(hashes: Dict[str, str], key: bytes) -> str:
-    """Compute HMAC checksum over the hash entries (excluding _checksum)."""
-    filtered = {k: v for k, v in hashes.items() if k != "_checksum"}
-    payload = json.dumps(filtered, sort_keys=True)
-    return _hmac_module.new(key, payload.encode("utf-8"),
-                            hashlib.sha256).hexdigest()
-
-
-def _read_expected_hashes(path: str) -> Dict[str, str]:
-    """Read and verify the expected-hashes registry.
-
-    Returns the hash entries (without _checksum) if HMAC is valid,
-    or empty dict if missing, corrupt, or HMAC fails.
-    """
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, json.JSONDecodeError):
-        return {}
-    stored_checksum = data.pop("_checksum", None)
-    if stored_checksum is None:
-        # Legacy file without HMAC — accept but it will be re-signed
-        # on the next write.
-        return data
-    key = _derive_hash_registry_key()
-    expected = _compute_hash_registry_checksum(data, key)
-    if stored_checksum != expected:
-        _logger.warning(
-            "Expected-hash registry HMAC mismatch — file may be tampered")
-        return {}  # Fail closed: treat as empty (all CSVs become "unregistered")
-    return data
-
-
-def _write_expected_hashes(path: str, data: Dict[str, str]) -> None:
-    """Write the expected-hashes registry atomically with HMAC signature."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    key = _derive_hash_registry_key()
-    body = {k: v for k, v in data.items() if k != "_checksum"}
-    body["_checksum"] = _compute_hash_registry_checksum(body, key)
-    temp = path + ".tmp"
-    try:
-        with open(temp, "w", encoding="utf-8") as fh:
-            json.dump(body, fh, indent=2)
-        os.replace(temp, path)
-    except Exception:
-        try:
-            os.remove(temp)
-        except OSError:
-            pass
-        raise
 
 
 def update_csv_expected_hash(csv_filepath: str) -> str:

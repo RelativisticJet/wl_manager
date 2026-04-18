@@ -41,6 +41,19 @@ import time
 from datetime import datetime, timezone
 
 APP_DIR = "/opt/splunk/etc/apps/wl_manager"
+
+# Splunk scripted inputs run in a bundled-Python context where
+# ``bin/`` is NOT on sys.path by default. Insert it at module load
+# so sibling imports (wl_hmac_key, wl_constants) resolve.
+_BIN_DIR = os.path.join(APP_DIR, "bin")
+if _BIN_DIR not in sys.path:
+    sys.path.insert(0, _BIN_DIR)
+
+from wl_hmac_key import (  # noqa: E402
+    derive_hash_registry_key as _derive_hash_registry_key,
+    read_expected_hashes as _hmac_read_expected_hashes,
+    write_expected_hashes as _hmac_write_expected_hashes,
+)
 LOOKUPS_DIR = os.path.join(APP_DIR, "lookups")
 VERSIONS_DIR = os.path.join(LOOKUPS_DIR, "_versions")
 MAPPING_FILE = os.path.join(LOOKUPS_DIR, "rule_csv_map.csv")
@@ -239,34 +252,6 @@ def _resolve_csv_paths(mapping):
     return paths
 
 
-def _derive_hash_registry_key():
-    """Derive HMAC key for verifying the expected-hash registry."""
-    # Same construction as wl_csv._derive_hash_registry_key()
-    try:
-        sys.path.insert(0, os.path.join(APP_DIR, "bin"))
-        from wl_constants import FIM_HMAC_SALT
-    except ImportError:
-        FIM_HMAC_SALT = b"wl_manager_fim_integrity_v1"
-    guid = ""
-    try:
-        with open(INSTANCE_CFG, "r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if line.startswith("guid"):
-                    parts = line.split("=", 1)
-                    if len(parts) == 2:
-                        guid = parts[1].strip()
-                        break
-    except OSError:
-        pass
-    if guid:
-        return hashlib.sha256(FIM_HMAC_SALT + guid.encode("utf-8")).digest()
-    return hashlib.sha256(FIM_HMAC_SALT).digest()
-
-
-_hash_registry_key = None  # cached at first use
-
-
 def _bootstrap_registry_if_empty():
     """Auto-create the expected-hash registry on first run.
 
@@ -286,8 +271,6 @@ def _bootstrap_registry_if_empty():
     if not mapping:
         return  # No mapping file yet
 
-    import hmac as _hmac
-
     hashes = {}
     for csv_file, app_ctx in mapping:
         if app_ctx and app_ctx != "wl_manager":
@@ -305,74 +288,51 @@ def _bootstrap_registry_if_empty():
     if not hashes:
         return
 
-    # Write with HMAC signature
-    global _hash_registry_key
-    if _hash_registry_key is None:
-        _hash_registry_key = _derive_hash_registry_key()
-    payload = json.dumps(hashes, sort_keys=True)
-    checksum = _hmac.new(_hash_registry_key, payload.encode("utf-8"),
-                         hashlib.sha256).hexdigest()
-    hashes["_checksum"] = checksum
-
-    os.makedirs(os.path.dirname(EXPECTED_HASHES_FILE), exist_ok=True)
-    temp = EXPECTED_HASHES_FILE + ".tmp"
+    # Delegates HMAC signing + atomic write to wl_hmac_key.
+    # Best-effort: swallow OSError so a fresh install without permission
+    # to _versions/ still makes progress (matches pre-refactor behavior).
     try:
-        with open(temp, "w", encoding="utf-8") as fh:
-            json.dump(hashes, fh, indent=2)
-        os.replace(temp, EXPECTED_HASHES_FILE)
+        _hmac_write_expected_hashes(EXPECTED_HASHES_FILE, hashes)
     except OSError:
-        try:
-            os.remove(temp)
-        except OSError:
-            pass
         return
 
     _emit({
         "action": "fim_csv_auto_bootstrap",
         "severity": "INFO",
-        "hashed_count": len(hashes) - 1,  # exclude _checksum
+        "hashed_count": len(hashes),
         "details": "Auto-created expected-hash registry on first run "
                    "(no previous registry file found)",
+    })
+
+
+def _emit_registry_tamper_event() -> None:
+    """Emit CRITICAL audit event when the hash registry fails HMAC verification.
+
+    Passed as the ``on_tamper`` callback to ``wl_hmac_key.read_expected_hashes``.
+    The handler-side reader (``wl_csv``) does NOT emit this event — only the
+    watcher raises an alert, since the handler sees registry tampering in
+    its own error paths via the return-empty-dict fail-closed contract.
+    """
+    _emit({
+        "action": "fim_csv_hash_registry_tampered",
+        "severity": "CRITICAL",
+        "details": "Expected-hash registry HMAC verification failed — "
+                   "an attacker may have modified both CSVs and the "
+                   "hash registry to cover their tracks.",
     })
 
 
 def _read_expected_hashes():
     """Read and HMAC-verify the expected-hashes registry.
 
-    Returns hash entries if HMAC is valid, empty dict if tampered/missing.
-    Fail-closed: if the HMAC doesn't match, ALL CSVs are treated as
-    unregistered → any change triggers an alert.
+    Delegates to ``wl_hmac_key.read_expected_hashes``. On HMAC failure
+    this wrapper emits a CRITICAL ``fim_csv_hash_registry_tampered``
+    event (via the ``on_tamper`` callback) and returns an empty dict so
+    the caller treats every CSV as unregistered — fail-closed.
     """
-    global _hash_registry_key
-    if _hash_registry_key is None:
-        _hash_registry_key = _derive_hash_registry_key()
-
-    try:
-        with open(EXPECTED_HASHES_FILE, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-    stored = data.pop("_checksum", None)
-    if stored is None:
-        # Legacy file without HMAC — accept but warn
-        return data
-
-    import hmac as _hmac
-    filtered = {k: v for k, v in data.items() if k != "_checksum"}
-    payload = json.dumps(filtered, sort_keys=True)
-    expected = _hmac.new(_hash_registry_key, payload.encode("utf-8"),
-                         hashlib.sha256).hexdigest()
-    if stored != expected:
-        _emit({
-            "action": "fim_csv_hash_registry_tampered",
-            "severity": "CRITICAL",
-            "details": "Expected-hash registry HMAC verification failed — "
-                       "an attacker may have modified both CSVs and the "
-                       "hash registry to cover their tracks.",
-        })
-        return {}  # Fail closed: treat all CSVs as unregistered
-    return data
+    return _hmac_read_expected_hashes(
+        EXPECTED_HASHES_FILE, on_tamper=_emit_registry_tamper_event
+    )
 
 
 # ────────────────────────────────────────────────────────────────
