@@ -12,6 +12,8 @@
  *   Detect:   startChangeMonitoring, stopChangeMonitoring,
  *             checkForExternalChanges, hasUnsavedChanges, showExternalChangeModal
  *   Support:  handleSaveError, getAuditComment
+ *   Load:     loadCsv, reloadCsvQuiet
+ *   Gate:     doColumnRemoveWithGateCheck
  */
 define([
     "jquery",
@@ -57,7 +59,7 @@ define([
         if (xhr.status === 409) {
             showMsg(safeErr + ' <span class="wl-link" id="wl-conflict-reload">Click to reload.</span>', "error");
             _$msg.off("click", "#wl-conflict-reload").on("click", "#wl-conflict-reload", function () {
-                _actions.loadCsv(_state.selectedCsv, _state.selectedApp);
+                loadCsv(_state.selectedCsv, _state.selectedApp);
             });
         } else {
             showMsg(safeErr, "error");
@@ -95,7 +97,8 @@ define([
             rows:            _state.currentRows,
             comment:         "Column addition",
             removal_reasons: [],
-            expected_mtime:  _state.loadedMtime
+            expected_mtime:  _state.loadedMtime,
+            expected_content_hash: _state.loadedContentHash
         })
         .done(function (data) {
             if (data.error) {
@@ -223,7 +226,8 @@ define([
             comment:         pcr.reason || "Column removal",
             removal_reasons: [],
             column_removal_reasons: [{ column: pcr.colName, reason: pcr.reason }],
-            expected_mtime:  _state.loadedMtime
+            expected_mtime:  _state.loadedMtime,
+            expected_content_hash: _state.loadedContentHash
         })
         .done(function (data) {
             if (data.error) {
@@ -298,10 +302,22 @@ define([
         .done(function (data) {
             var newPending = data.pending_count !== undefined ? data.pending_count : 0;
             if (newPending !== _state.loadedPendingCount) {
-                _actions.loadCsv(_state.selectedCsv, _state.selectedApp);
+                loadCsv(_state.selectedCsv, _state.selectedApp);
                 return;
             }
-            if (data.file_mtime && data.file_mtime !== _state.loadedMtime) {
+            // mtime change OR content-hash change both trigger the
+            // external-change modal. Hash catches attackers that
+            // preserve mtime via `cp -p` / `touch -r` or that modify
+            // the file via SPL / another app while honest tools
+            // bump mtime as expected.
+            var mtimeChanged = data.file_mtime !== undefined
+                && data.file_mtime !== null
+                && data.file_mtime !== _state.loadedMtime;
+            var hashChanged = typeof data.content_hash === "string"
+                && data.content_hash
+                && _state.loadedContentHash
+                && data.content_hash !== _state.loadedContentHash;
+            if (mtimeChanged || hashChanged) {
                 stopChangeMonitoring();
                 showExternalChangeModal();
             }
@@ -358,7 +374,7 @@ define([
 
         $modal.on("click", "#wl-extchg-reload", function () {
             $modal.remove();
-            _actions.loadCsv(_state.selectedCsv, _state.selectedApp);
+            loadCsv(_state.selectedCsv, _state.selectedApp);
         });
         $modal.on("click", "#wl-extchg-keep", function () {
             $modal.remove();
@@ -368,7 +384,12 @@ define([
                 app:      _state.selectedApp || ""
             })
             .done(function (data) {
-                _state.loadedMtime = data.file_mtime || _state.loadedMtime;
+                if (data.file_mtime !== undefined && data.file_mtime !== null) {
+                    _state.loadedMtime = data.file_mtime;
+                }
+                if (typeof data.content_hash === "string" && data.content_hash) {
+                    _state.loadedContentHash = data.content_hash;
+                }
                 startChangeMonitoring();
             });
         });
@@ -517,7 +538,8 @@ define([
                 rows:            _state.currentRows,
                 comment:         result.comment,
                 removal_reasons: [],
-                expected_mtime:  _state.loadedMtime
+                expected_mtime:  _state.loadedMtime,
+            expected_content_hash: _state.loadedContentHash
             };
             if (_state.pendingBulkEditCount > 0) {
                 savePayload._bulk_edit_count = _state.pendingBulkEditCount;
@@ -574,7 +596,7 @@ define([
 
                 _state.searchQuery = "";
 
-                _actions.reloadCsvQuiet(function () {
+                reloadCsvQuiet(function () {
                     _state.saving = false;
                 });
             })
@@ -746,7 +768,8 @@ define([
             rows:            _state.currentRows,
             comment:         "Row removal",
             removal_reasons: [{ row: prr.removedRow, reason: prr.reason, row_number: prr.rowNumber }],
-            expected_mtime:  _state.loadedMtime
+            expected_mtime:  _state.loadedMtime,
+            expected_content_hash: _state.loadedContentHash
         };
         if (_state.pendingBulkEditCount > 0) {
             rmPayload._bulk_edit_count = _state.pendingBulkEditCount;
@@ -817,7 +840,8 @@ define([
             comment:         "Bulk removal (" + removedEntries.length + " rows)",
             removal_reasons: [],
             bulk_removal:    bulkRemoval,
-            expected_mtime:  _state.loadedMtime
+            expected_mtime:  _state.loadedMtime,
+            expected_content_hash: _state.loadedContentHash
         };
         if (_state.pendingBulkEditCount > 0) {
             bulkRmPayload._bulk_edit_count = _state.pendingBulkEditCount;
@@ -859,6 +883,144 @@ define([
     }
 
     // ══════════════════════════════════════════════════════════════════
+    // Load CSV content from REST
+    // ══════════════════════════════════════════════════════════════════
+    function loadCsv(csvFile, appContext) {
+        clearMsg();
+        _actions.$diff.empty();
+        $("#wl-approval-actions").remove();
+        $("#wl-addition-preview").remove();
+        _state.pendingFilterActive = false;
+        _state.pendingFilterIndices = null;
+        _$table.html('<p class="wl-muted">Loading CSV content&hellip;</p>');
+
+        restGet({
+            action:   "get_csv_content",
+            csv_file: csvFile,
+            app:      appContext || "",
+            tz_offset: new Date().getTimezoneOffset()
+        })
+        .done(function (data) {
+            if (data.error) {
+                showMsg(_.escape(data.error), "error");
+                _$table.empty();
+                return;
+            }
+            _state.expireColumn = data.expire_column || "";
+            var autoRemoved = parseInt(data.auto_removed_count, 10);
+            if (autoRemoved > 0) {
+                showMsg(
+                    "<strong>" + autoRemoved + " expired row(s)</strong> " +
+                    "were automatically removed.",
+                    "warning"
+                );
+            }
+            _state.pendingApprovals = data.pending_approvals || [];
+            _state.loadedPendingCount = _state.pendingApprovals.length;
+            _actions.buildLockedState();
+            _actions.renderTable(data.headers || [], data.rows || []);
+            _actions.loadVersions(csvFile, appContext);
+            _state.loadedMtime = (data.file_mtime !== undefined && data.file_mtime !== null) ? data.file_mtime : null;
+            _state.loadedContentHash = (typeof data.content_hash === "string" && data.content_hash) ? data.content_hash : null;
+            startChangeMonitoring();
+            _actions.startPresenceMonitoring();
+            if (_state.pendingApprovals.length) {
+                _actions.applyPendingHighlighting();
+            }
+            restGet({ action: "get_col_widths", csv_file: csvFile, app: appContext || "" })
+                .done(function (wdata) {
+                    var w = wdata.col_widths || {};
+                    if (Object.keys(w).length) {
+                        _actions.applyColWidths(w);
+                    }
+                });
+        })
+        .fail(function (xhr) {
+            if (xhr.status === 404) {
+                _actions.handleCsvRemoved(csvFile);
+                return;
+            }
+            var err = "Failed to load CSV.";
+            try { err = JSON.parse(xhr.responseText).error || err; } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
+            showMsg(_.escape(err), "error");
+            _$table.empty();
+        });
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Silent CSV reload (preserves messages, refreshes metadata)
+    // ══════════════════════════════════════════════════════════════════
+    function reloadCsvQuiet(callback) {
+        if (!_state.selectedCsv) {
+            if (callback) { callback(); }
+            return;
+        }
+        restGet({
+            action:   "get_csv_content",
+            csv_file: _state.selectedCsv,
+            app:      _state.selectedApp || "",
+            tz_offset: new Date().getTimezoneOffset()
+        })
+        .done(function (data) {
+            if (!data.error) {
+                _state.expireColumn = data.expire_column || "";
+                var autoRemoved = parseInt(data.auto_removed_count, 10);
+                if (autoRemoved > 0) {
+                    showMsg(
+                        "<strong>" + autoRemoved + " expired row(s)</strong> " +
+                        "were automatically removed.",
+                        "warning"
+                    );
+                }
+                _actions.renderTable(data.headers || [], data.rows || []);
+                _actions.loadVersions(_state.selectedCsv, _state.selectedApp);
+                if (data.file_mtime !== undefined && data.file_mtime !== null) { _state.loadedMtime = data.file_mtime; }
+                if (typeof data.content_hash === "string" && data.content_hash) { _state.loadedContentHash = data.content_hash; }
+                startChangeMonitoring();
+            }
+        })
+        .fail(function (xhr) {
+            if (xhr.status === 404) {
+                _actions.handleCsvRemoved(_state.selectedCsv);
+            }
+        })
+        .always(function () {
+            if (callback) { callback(); }
+        });
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Column removal with approval gate check
+    // ══════════════════════════════════════════════════════════════════
+    function doColumnRemoveWithGateCheck(colName) {
+        if (_state.csvLocked) {
+            showMsg("This CSV is locked by a pending approval request.", "error");
+            return;
+        }
+        restPost({
+            action: "check_approval_gate",
+            gate_action: "column_removal",
+            csv_file: _state.selectedCsv,
+            app_context: _state.selectedApp,
+            column_name: colName
+        }).done(function (gateData) {
+            if (gateData.requires_approval) {
+                _actions.showRemoveColumnModal(colName, function (reason) {
+                    _actions.submitApprovalRequest("column_removal", reason, null, colName);
+                });
+            } else if (gateData.daily_limit && !gateData.daily_limit.allowed) {
+                showMsg(formatDailyLimitMsg(gateData.daily_limit), "error");
+            } else {
+                _actions.showRemoveColumnModal(colName, function (reason) {
+                    doSaveColumnRemoval(colName, reason);
+                });
+            }
+        }).fail(function () {
+            showMsg("Unable to verify approval requirements. Please try again.", "error");
+        });
+    }
+
+    // ══════════════════════════════════════════════════════════════════
     // Public API
     // ══════════════════════════════════════════════════════════════════
     return {
@@ -873,6 +1035,9 @@ define([
         doSaveBulkRemoval:     doSaveBulkRemoval,
         doSaveColumnAddition:  doSaveColumnAddition,
         doSaveColumnRemoval:   doSaveColumnRemoval,
+        doColumnRemoveWithGateCheck: doColumnRemoveWithGateCheck,
+        loadCsv:               loadCsv,
+        reloadCsvQuiet:        reloadCsvQuiet,
         handleSaveError:       handleSaveError,
         clearUndo:             clearUndo,
         startChangeMonitoring: startChangeMonitoring,

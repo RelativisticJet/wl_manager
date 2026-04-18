@@ -130,6 +130,7 @@ function submitApprovalRequest(actionType, reason, rowIndices, colName) {
             comment: reason || "",
             original_payload: originalPayload,
             expected_mtime: _state.loadedMtime,
+            expected_content_hash: _state.loadedContentHash,
             pending_highlight: highlight,
             selected_count: approvalCount
         })
@@ -186,12 +187,14 @@ function submitBulkEditApproval(col, val, rowIndices, changedCount, reason) {
                 detection_rule: _state.selectedRule || "",
                 headers: _state.currentHeaders,
                 rows: _state.currentRows,
+                initial_rows: _state.originalRows,
                 comment: reason || ("Bulk edit (" + changedCount + " rows) - approved"),
                 bulk_edit_column: col,
                 bulk_edit_value: val,
                 _bulk_edit_count: changedCount
             },
             expected_mtime: _state.loadedMtime,
+            expected_content_hash: _state.loadedContentHash,
             pending_highlight: { type: "rows", row_keys: rowKeys, headers: visHeaders },
             selected_count: changedCount
         })
@@ -236,10 +239,12 @@ function submitInlineMultiEditApproval(changedCount, reason) {
                 detection_rule: _state.selectedRule || "",
                 headers: _state.currentHeaders,
                 rows: _state.currentRows,
+                initial_rows: _state.originalRows,
                 comment: reason || ("Inline multi-edit (" + changedCount + " rows) - approved"),
                 _bulk_edit_count: changedCount
             },
             expected_mtime: _state.loadedMtime,
+            expected_content_hash: _state.loadedContentHash,
             selected_count: changedCount
         })
         .done(function (data) {

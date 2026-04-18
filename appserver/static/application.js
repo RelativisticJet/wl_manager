@@ -2,7 +2,6 @@
 // Hides "Control Panel" nav link for non-admin users.
 // application.css hides by default; this script reveals for admins.
 require(["jquery", "splunkjs/mvc/utils"], function ($, utils) {
-    console.log("[wl_manager] application.js loaded");
 
     function hideControlPanelNav() {
         // Multiple selectors for Splunk nav variations
@@ -46,7 +45,6 @@ require(["jquery", "splunkjs/mvc/utils"], function ($, utils) {
         }
     }).done(function (data) {
         if (data.is_admin) {
-            console.log("[wl_manager] admin detected — showing Control Panel nav");
             observer.disconnect();
             showControlPanelNav();
         }
