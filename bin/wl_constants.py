@@ -96,6 +96,9 @@ __all__ = [
     '_CONTROL_CHAR_RE',
     '_SAFE_COLNAME_RE',
     '_SANITIZE_RE',
+    # HMAC salts (single source of truth — imported by handler, migration tool, FIM)
+    'COOLDOWN_HMAC_SALT',
+    'FIM_HMAC_SALT',
 ]
 
 
@@ -413,12 +416,30 @@ DEFAULT_LIMITS: dict = {
 """Default daily limits and permissions for analysts. Customizable per-analyst via the Control Panel."""
 
 DEFAULT_ADMIN_LIMITS: dict = {
-    "rule_deletion": 2,         # soft-delete actions per period
-    "csv_deletion": 2,          # soft-delete actions per period
-    "approval_count": 20,       # approval reviews per period
-    "limit_changes": 5,         # limit configuration changes per period
+    # Per-action limits
+    "rule_deletion": 2,         # soft-delete rules per period
+    "csv_deletion": 2,          # soft-delete CSVs per period
+    "approval_count": 20,       # approval actions per period
+    "limit_changes": 5,         # analyst limit config changes per period
+    "csv_save": 20,             # CSV save/edit operations per period
+    "csv_revert": 10,           # CSV revert operations per period
+    "rule_creation": 5,         # rule creations per period
+    "csv_creation": 5,          # CSV creations per period
+    "trash_restore": 10,        # trash restore operations per period
+    "trash_purge": 5,           # permanent trash purge operations per period
+    "usage_reset": 10,          # analyst usage reset operations per period
+    # Reset schedule (independent from analyst reset)
+    "reset_frequency": "daily",     # never, daily, weekly, monthly, yearly
+    "reset_time_utc": "00:00",      # HH:MM in UTC
+    "reset_day_of_week": 0,         # 0=Monday, ..., 6=Sunday (used by weekly)
+    "reset_day_of_month": 1,        # 1-31, clamped to last day (used by monthly)
+    "reset_month": 1,               # 1-12 (used by yearly)
+    "reset_day_of_year": 1,         # 1-366, clamped to last day (used by yearly)
+    # Admin permission toggles (superadmin controls)
+    "allow_admin_purge_trash": True,
+    "allow_admin_reset_usage": True,
 }
-"""Default daily limits for administrators. Set by superadmin only."""
+"""Default limits and permissions for administrators. Set by superadmin only."""
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -461,3 +482,26 @@ _SANITIZE_RE = re.compile(r'[^a-zA-Z0-9_ \t.,;:!?\'"()\-/@#&+=\[\]{}%$\n\r]')
 """Regex pattern for sanitizing user-provided text fields (reasons, descriptions, comments).
 ASCII-only: strips all non-ASCII characters (including Cyrillic, CJK, etc.),
 control characters, backticks, backslashes, and other dangerous characters."""
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HMAC Salts (single source of truth)
+# ═══════════════════════════════════════════════════════════════════════════
+# These are combined with the Splunk server GUID at runtime to derive
+# HMAC signing keys. They MUST NOT be duplicated in other modules —
+# always import from here.
+#
+# IMPORTANT — FIM runtime compatibility:
+# wl_fim.py and wl_migrate_cooldowns.py import these constants via
+# sys.path manipulation. Those scripts run OUTSIDE Splunk's normal
+# module environment (FIM runs as a scripted input, migration runs
+# via system python3). This module MUST keep its imports to Python
+# stdlib only (os, re, typing). Adding a Splunk-specific or wl_*
+# import at module level will break FIM and the migration tool
+# silently (they fall back to hardcoded salts, causing drift).
+
+COOLDOWN_HMAC_SALT: bytes = b"wl_manager_cooldown_integrity_v2"
+"""Salt for cooldown rate-limit records (KV store + filesystem markers)."""
+
+FIM_HMAC_SALT: bytes = b"wl_manager_fim_integrity_v1"
+"""Salt for FIM baselines and deploy-window signatures."""

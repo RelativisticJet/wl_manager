@@ -13,15 +13,21 @@ tested offline.
 import csv
 import difflib
 import json
+import logging
+
+_logger = logging.getLogger("wl_manager.wl_csv")
 import os
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Tuple, Optional, Any
 
+import hashlib
+import hmac as _hmac_module
+
 from wl_constants import (
     OWN_LOOKUPS, MAX_ROWS, MAX_COLUMNS, MAX_CELL_CHARS, MAX_DIFF_ROWS,
     DETECTION_RULES_FILE, VERSIONS_DIR,
-    EXPIRE_COLUMN_NAMES,
+    EXPIRE_COLUMN_NAMES, FIM_HMAC_SALT,
 )
 from wl_validation import sanitize_text
 
@@ -36,6 +42,10 @@ __all__ = [
     'set_column_widths',
     'save_csv_pipeline',
     'create_csv_pipeline',
+    'update_csv_expected_hash',
+    'remove_csv_expected_hash',
+    'bootstrap_csv_expected_hashes',
+    'CSV_EXPECTED_HASHES_FILE',
 ]
 
 
@@ -64,9 +74,228 @@ def read_csv(filepath: str) -> Tuple[List[str], List[Dict[str, str]]]:
     return headers, rows
 
 
+CSV_EXPECTED_HASHES_FILE = ".csv_expected_hashes.json"
+"""Filename for the expected-hash registry (stored in lookups/_versions/).
+The FIM stat-watcher reads this to distinguish legitimate handler writes
+from external modifications (SPL outputlookup, filesystem edits, etc.)."""
+
+
+def _csv_file_hash(filepath: str) -> str:
+    """Compute SHA-256 hash of a file on disk."""
+    h = hashlib.sha256()
+    with open(filepath, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _get_expected_hashes_path(csv_filepath: str) -> str:
+    """Derive the expected-hashes file path from a CSV filepath.
+
+    The hashes file lives in the ``_versions/`` subdirectory next to
+    the CSV's parent ``lookups/`` directory.
+    """
+    parent = os.path.dirname(csv_filepath)
+    return os.path.join(parent, VERSIONS_DIR, CSV_EXPECTED_HASHES_FILE)
+
+
+def _derive_hash_registry_key() -> bytes:
+    """Derive HMAC signing key for the expected-hash registry.
+
+    Uses the same GUID + salt construction as FIM baselines.
+    Falls back to salt-only key if instance.cfg is unreadable
+    (the watcher will still verify — just with a weaker key).
+    """
+    instance_cfg = "/opt/splunk/etc/instance.cfg"
+    guid = ""
+    try:
+        with open(instance_cfg, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("guid"):
+                    parts = line.split("=", 1)
+                    if len(parts) == 2:
+                        guid = parts[1].strip()
+                        break
+    except OSError:
+        pass
+    if guid:
+        return hashlib.sha256(FIM_HMAC_SALT + guid.encode("utf-8")).digest()
+    return hashlib.sha256(FIM_HMAC_SALT).digest()
+
+
+def _compute_hash_registry_checksum(hashes: Dict[str, str], key: bytes) -> str:
+    """Compute HMAC checksum over the hash entries (excluding _checksum)."""
+    filtered = {k: v for k, v in hashes.items() if k != "_checksum"}
+    payload = json.dumps(filtered, sort_keys=True)
+    return _hmac_module.new(key, payload.encode("utf-8"),
+                            hashlib.sha256).hexdigest()
+
+
+def _read_expected_hashes(path: str) -> Dict[str, str]:
+    """Read and verify the expected-hashes registry.
+
+    Returns the hash entries (without _checksum) if HMAC is valid,
+    or empty dict if missing, corrupt, or HMAC fails.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    stored_checksum = data.pop("_checksum", None)
+    if stored_checksum is None:
+        # Legacy file without HMAC — accept but it will be re-signed
+        # on the next write.
+        return data
+    key = _derive_hash_registry_key()
+    expected = _compute_hash_registry_checksum(data, key)
+    if stored_checksum != expected:
+        _logger.warning(
+            "Expected-hash registry HMAC mismatch — file may be tampered")
+        return {}  # Fail closed: treat as empty (all CSVs become "unregistered")
+    return data
+
+
+def _write_expected_hashes(path: str, data: Dict[str, str]) -> None:
+    """Write the expected-hashes registry atomically with HMAC signature."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    key = _derive_hash_registry_key()
+    body = {k: v for k, v in data.items() if k != "_checksum"}
+    body["_checksum"] = _compute_hash_registry_checksum(body, key)
+    temp = path + ".tmp"
+    try:
+        with open(temp, "w", encoding="utf-8") as fh:
+            json.dump(body, fh, indent=2)
+        os.replace(temp, path)
+    except Exception:
+        try:
+            os.remove(temp)
+        except OSError:
+            pass
+        raise
+
+
+def update_csv_expected_hash(csv_filepath: str) -> str:
+    """Record the current hash of a CSV file in the expected-hashes registry.
+
+    Called automatically by ``write_csv()`` and available for manual use
+    (e.g., after ``restore_from_trash`` which copies the file directly).
+
+    Returns:
+        The SHA-256 hex digest of the file.
+    """
+    file_hash = _csv_file_hash(csv_filepath)
+    hashes_path = _get_expected_hashes_path(csv_filepath)
+    hashes = _read_expected_hashes(hashes_path)
+    csv_name = os.path.basename(csv_filepath)
+    hashes[csv_name] = file_hash
+    _write_expected_hashes(hashes_path, hashes)
+    return file_hash
+
+
+def remove_csv_expected_hash(csv_filepath: str) -> None:
+    """Remove a CSV from the expected-hashes registry (on delete/trash)."""
+    hashes_path = _get_expected_hashes_path(csv_filepath)
+    hashes = _read_expected_hashes(hashes_path)
+    csv_name = os.path.basename(csv_filepath)
+    if csv_name in hashes:
+        del hashes[csv_name]
+        _write_expected_hashes(hashes_path, hashes)
+
+
+def bootstrap_csv_expected_hashes(lookups_dir: str) -> dict:
+    """Scan all CSVs from the rule mapping and rebuild the expected-hash registry.
+
+    This is a diff-aware batch operation that:
+    1. Reads the PREVIOUS registry (if any) for comparison
+    2. Reads rule_csv_map.csv to discover all managed CSV files
+    3. Hashes every CSV that exists on disk
+    4. Also hashes rule_csv_map.csv itself (sentinel CSV)
+    5. Compares new hashes against previous → reports changed CSVs
+    6. Writes a single HMAC-signed registry atomically
+
+    The diff step is critical for detecting "bootstrap laundering" — an
+    attacker who modifies a CSV then immediately bootstraps to suppress
+    the watcher alert.  The changed_csvs list makes this visible in the
+    audit trail regardless.
+
+    Returns:
+        dict with keys: hashed_count, missing_count, missing_files,
+        changed_csvs (list of {csv_file, old_hash, new_hash}),
+        new_csvs (list of csv names not in previous registry),
+        removed_csvs (list of csv names in previous but not current).
+    """
+    mapping_path = os.path.join(lookups_dir, "rule_csv_map.csv")
+    if not os.path.isfile(mapping_path):
+        raise OSError("rule_csv_map.csv not found at %s" % mapping_path)
+
+    # Read the mapping to discover all CSVs
+    csv_files = set()
+    with open(mapping_path, "r", newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            fname = row.get("csv_file", "").strip()
+            if fname:
+                csv_files.add(fname)
+
+    # Always include the mapping file itself (sentinel CSV)
+    csv_files.add("rule_csv_map.csv")
+
+    hashes_path = os.path.join(lookups_dir, VERSIONS_DIR, CSV_EXPECTED_HASHES_FILE)
+
+    # Read previous registry for diff (empty dict if missing/corrupt = first run)
+    old_hashes = _read_expected_hashes(hashes_path)
+
+    new_hashes = {}  # type: Dict[str, str]
+    missing = []  # type: List[str]
+
+    for csv_name in sorted(csv_files):
+        csv_path = os.path.join(lookups_dir, csv_name)
+        if os.path.isfile(csv_path):
+            new_hashes[csv_name] = _csv_file_hash(csv_path)
+        else:
+            missing.append(csv_name)
+
+    # Diff: detect changed, new, and removed CSVs
+    changed_csvs = []  # type: List[Dict[str, str]]
+    new_csvs = []  # type: List[str]
+    removed_csvs = []  # type: List[str]
+
+    for csv_name, new_hash in new_hashes.items():
+        old_hash = old_hashes.get(csv_name)
+        if old_hash is None:
+            new_csvs.append(csv_name)
+        elif old_hash != new_hash:
+            changed_csvs.append({
+                "csv_file": csv_name,
+                "old_hash": old_hash,
+                "new_hash": new_hash,
+            })
+
+    for csv_name in old_hashes:
+        if csv_name not in new_hashes:
+            removed_csvs.append(csv_name)
+
+    _write_expected_hashes(hashes_path, new_hashes)
+
+    return {
+        "hashed_count": len(new_hashes),
+        "missing_count": len(missing),
+        "missing_files": missing,
+        "changed_csvs": changed_csvs,
+        "new_csvs": new_csvs,
+        "removed_csvs": removed_csvs,
+    }
+
+
 def write_csv(filepath: str, headers: List[str], rows: List[Dict[str, str]]) -> None:
     """
     Write a CSV file atomically (write to temp, then rename).
+
+    After a successful write, automatically updates the expected-hash
+    registry so the FIM stat-watcher can distinguish this legitimate
+    write from external modifications.
 
     Args:
         filepath: Path to CSV file to write.
@@ -90,6 +319,13 @@ def write_csv(filepath: str, headers: List[str], rows: List[Dict[str, str]]) -> 
         except OSError:
             pass
         raise
+
+    # Update expected-hash registry so FIM watcher doesn't false-alarm.
+    # Best-effort — hash update failure should NOT block the CSV save.
+    try:
+        update_csv_expected_hash(filepath)
+    except Exception:
+        _logger.warning("Failed to update expected hash for %s", filepath)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -388,7 +624,14 @@ def compute_diff(
     def _rows_to_lines(headers: List[str], rows: List[Dict[str, str]]) -> List[str]:
         lines = [",".join(headers)]
         for r in rows:
-            lines.append(",".join(r.get(h, "") for h in headers))
+            # Coerce missing/None values to "" — a row may carry an
+            # explicit ``None`` for a column (e.g. after schema drift)
+            # and ``dict.get(h, "")`` only substitutes when the key is
+            # absent, not when the value is None.
+            lines.append(",".join(
+                ("" if r.get(h) is None else str(r.get(h)))
+                for h in headers
+            ))
         return lines
 
     old_vis = [h for h in old_headers if not h.startswith("_")]
@@ -700,6 +943,13 @@ def save_csv_pipeline(
         has_rename = bool(column_renames)
         has_reorder = bool(row_reorder) or bool(column_reorder)
         if not has_row_changes and not has_col_changes and not has_rename and not has_reorder:
+            # Even with no changes, update the expected hash so the FIM
+            # watcher has a baseline for this CSV (handles bootstrapping
+            # on first save attempt after fresh install).
+            try:
+                update_csv_expected_hash(csv_path)
+            except Exception:
+                pass
             return {
                 "success": True,
                 "message": "No changes detected",
@@ -949,18 +1199,20 @@ def save_csv_pipeline(
         }
 
     except OSError as exc:
+        _logger.error("Failed to save CSV: %s", exc, exc_info=True)
         return {
             "success": False,
             "message": "",
-            "error": "Failed to save CSV: {}".format(str(exc)),
+            "error": "Failed to save CSV. Check server logs for details.",
             "data": {},
             "diff": {},
         }
     except Exception as exc:
+        _logger.error("Unexpected error during save: %s", exc, exc_info=True)
         return {
             "success": False,
             "message": "",
-            "error": "Unexpected error during save: {}".format(str(exc)),
+            "error": "Unexpected error during save. Check server logs for details.",
             "data": {},
             "diff": {},
         }
@@ -1047,16 +1299,18 @@ def create_csv_pipeline(
         }
 
     except OSError as exc:
+        _logger.error("Failed to create CSV: %s", exc, exc_info=True)
         return {
             "success": False,
             "message": "",
-            "error": "Failed to create CSV: {}".format(str(exc)),
+            "error": "Failed to create CSV. Check server logs for details.",
             "data": {},
         }
     except Exception as exc:
+        _logger.error("Unexpected error during creation: %s", exc, exc_info=True)
         return {
             "success": False,
             "message": "",
-            "error": "Unexpected error during creation: {}".format(str(exc)),
+            "error": "Unexpected error during creation. Check server logs for details.",
             "data": {},
         }
