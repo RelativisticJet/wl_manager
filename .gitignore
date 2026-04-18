@@ -82,3 +82,7 @@ node_modules/
 npm-debug.log
 yarn-error.log
 test-results/
+
+# Graphify knowledge-graph tooling (local-only audit artifacts)
+.graphifyignore
+graphify-out/
