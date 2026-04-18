@@ -221,7 +221,8 @@ define([
             version_filename: versionFilename,
             version_display:  versionDisplay,
             revert_reason:    reason,
-            expected_mtime:   S.loadedMtime
+            expected_mtime:   S.loadedMtime,
+            expected_content_hash: S.loadedContentHash
         })
         .done(function (data) {
             if (data.error) {
@@ -284,6 +285,7 @@ define([
                             revert_reason: reason
                         },
                         expected_mtime: S.loadedMtime,
+                        expected_content_hash: S.loadedContentHash,
                         pending_highlight: {
                             type: "revert",
                             version_filename: versionFilename,

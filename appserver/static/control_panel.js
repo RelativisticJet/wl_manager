@@ -16,13 +16,9 @@ require([
     "app/wl_manager/modules/wl_constants",
     "app/wl_manager/modules/wl_rest",
     "app/wl_manager/modules/wl_ui",
-    "app/wl_manager/modules/wl_debug",
     "splunkjs/mvc/simplexml/ready!"
-], function ($, _, mvc, utils, C, REST, UI, Debug) {
+], function ($, _, mvc, utils, C, REST, UI) {
     "use strict";
-
-    // Activate debug interceptor (remove for production)
-    Debug.init();
 
     // ── Module aliases (Option A: local vars, zero changes to usage sites) ──
     var restUrl  = REST.restUrl;
@@ -37,6 +33,7 @@ require([
     // ══════════════════════════════════════════════════════════════════
     var cpCurrentUser = "";
     var cpIsSuperAdmin = false;  // Set from get_approval_queue response
+    var cpUser = "";  // Current username, set from get_approval_queue
 
     (function detectCurrentUser() {
         try {
@@ -178,6 +175,7 @@ require([
         $("#wl-cp-loading").hide();
         $("#wl-cp-content").show();
         cpIsSuperAdmin = !!data.is_superadmin;
+        cpUser = data.username || "";
         initControlPanel(data.approval_queue || data.queue || []);
     })
     .fail(function (xhr) {
@@ -238,12 +236,12 @@ require([
         var html =
             '<div class="wl-cp-tab-bar">' +
             '<span class="btn btn-primary wl-cp-tab" data-tab="queue">Approval Queue</span> ' +
-            '<span class="btn wl-cp-tab" data-tab="usage">Analyst Usage</span> ' +
-            '<span class="btn wl-cp-tab" data-tab="limits">Limits & Permissions</span> ' +
-            '<span class="btn wl-cp-tab" data-tab="trash">Trash Management</span>';
+            '<span class="btn wl-cp-tab" data-tab="usage">Activity</span> ' +
+            '<span class="btn wl-cp-tab" data-tab="limits">Analyst Settings</span>';
         if (cpIsSuperAdmin) {
-            html += ' <span class="btn wl-cp-tab" data-tab="admin-limits">Admin Limits</span>';
+            html += ' <span class="btn wl-cp-tab" data-tab="admin-limits">Admin Settings</span>';
         }
+        html += ' <span class="btn wl-cp-tab" data-tab="trash">Trash</span>';
         html += '</div>';
         $("#wl-cp-tabs").html(html);
 
@@ -293,6 +291,101 @@ require([
             switchTab(urlTab);
         }
     }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Emergency Lockdown Banner
+    // ══════════════════════════════════════════════════════════════════
+
+    function checkLockdownStatus() {
+        restGet({ action: "get_lockdown_status" })
+        .done(function (data) {
+            var lockdown = data.lockdown || {};
+            var $banner = $("#wl-cp-lockdown-banner");
+            if (!$banner.length) {
+                $("#wl-cp-content").prepend(
+                    '<div id="wl-cp-lockdown-banner"></div>');
+                $banner = $("#wl-cp-lockdown-banner");
+            }
+            if (lockdown.locked) {
+                var html = '<div style="background:#c0392b;color:#fff;padding:12px 16px;' +
+                    'border-radius:6px;margin-bottom:12px;display:flex;' +
+                    'align-items:center;justify-content:space-between">' +
+                    '<div>' +
+                    '<strong style="font-size:14px">EMERGENCY LOCKDOWN ACTIVE</strong>' +
+                    '<span style="margin-left:12px;font-size:13px">' +
+                    'Activated by ' + _.escape(lockdown.locked_by || "unknown") +
+                    ' at ' + _.escape(lockdown.locked_at_human || "unknown") + '.' +
+                    (lockdown.reason ? ' Reason: ' + _.escape(lockdown.reason) : '') +
+                    '</span></div>';
+                // Deactivate button — only if superadmin AND not the one who locked
+                if (cpIsSuperAdmin && lockdown.locked_by !== cpUser) {
+                    html += '<span class="wl-btn" id="wl-cp-deactivate-lockdown" ' +
+                        'style="cursor:pointer;background:#fff;color:#c0392b;' +
+                        'font-weight:600;white-space:nowrap">' +
+                        'Deactivate Lockdown</span>';
+                }
+                html += '</div>';
+                $banner.html(html);
+
+                // Bind deactivate handler
+                $("#wl-cp-deactivate-lockdown").on("click", function () {
+                    showCpConfirm("Deactivate Lockdown",
+                        "This will resume all write operations. Continue?",
+                        "Deactivate",
+                        function () {
+                            restPost({ action: "deactivate_lockdown" })
+                            .done(function (d) {
+                                if (d.success) {
+                                    showCpAlert("Unlocked",
+                                        "Emergency lockdown deactivated.", "success");
+                                    checkLockdownStatus();
+                                } else {
+                                    showCpAlert("Error", d.error, "error");
+                                }
+                            });
+                        });
+                });
+            } else {
+                // No lockdown — show activate button for superadmins
+                if (cpIsSuperAdmin) {
+                    $banner.html(
+                        '<div style="margin-bottom:8px;text-align:right">' +
+                        '<span class="wl-btn" id="wl-cp-activate-lockdown" ' +
+                        'style="cursor:pointer;color:#c0392b;border-color:#c0392b;' +
+                        'font-size:12px">Activate Emergency Lockdown</span></div>');
+
+                    $("#wl-cp-activate-lockdown").on("click", function () {
+                        showCpPrompt("Activate Emergency Lockdown",
+                            "This will freeze ALL write operations across the entire " +
+                            "app. A different super-admin must deactivate. " +
+                            "Enter a reason:",
+                            function (reason) {
+                                restPost({
+                                    action: "activate_lockdown",
+                                    reason: reason
+                                })
+                                .done(function (d) {
+                                    if (d.success) {
+                                        showCpAlert("Locked",
+                                            "Emergency lockdown activated.", "error");
+                                        checkLockdownStatus();
+                                    } else {
+                                        showCpAlert("Error", d.error, "error");
+                                    }
+                                });
+                            });
+                    });
+                } else {
+                    $banner.html("");
+                }
+            }
+        });
+    }
+
+    // Check lockdown on load
+    checkLockdownStatus();
+    // Refresh every 30 seconds
+    setInterval(checkLockdownStatus, 30000);
 
     // ══════════════════════════════════════════════════════════════════
     // Approval Queue
@@ -371,6 +464,10 @@ require([
                                 'data-action-type="' + _.escape(item.action_type) + '"' +
                                 '>Download CSV</span>'
                             : '') +
+                        '<span class="btn btn-small wl-cp-show-data-btn" ' +
+                            'data-id="' + _.escape(item.request_id) + '" ' +
+                            'style="background:#3498db;color:#fff;margin-left:4px"' +
+                            '>Show Data</span>' +
                     '</td></tr>';
             });
             html += '</tbody></table>';
@@ -417,8 +514,12 @@ require([
                     '<td class="wl-cp-reason-cell" title="' + _.escape(adminResponse) + '">' + _.escape(adminResponse) + '</td>' +
                     '<td style="font-weight:600;color:' + statusColor + '">' +
                         _.escape(item.status) + '</td>' +
-                    '<td>' + _.escape(item.resolved_by || "") + '</td>' +
-                    '</tr>';
+                    '<td style="white-space:nowrap">' + _.escape(item.resolved_by || "") +
+                        ' <span class="btn btn-small wl-cp-show-data-btn" ' +
+                            'data-id="' + _.escape(item.request_id) + '" ' +
+                            'style="background:#3498db;color:#fff;margin-left:4px;font-size:10px"' +
+                            '>Show Data</span>' +
+                    '</td></tr>';
             });
             html += '</tbody></table>';
             if (historyPages > 1) {
@@ -567,6 +668,425 @@ require([
             var requestId = $(this).data("id");
             showCancelModal(requestId);
         });
+
+        $(".wl-cp-show-data-btn").off("click").on("click", function () {
+            var requestId = $(this).data("id");
+            showRequestDataModal(requestId);
+        });
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Show Requested Data modal — previews the data in a pending request
+    // so admins can review what the analyst wants without navigating away
+    // ══════════════════════════════════════════════════════════════════
+
+    var PREVIEW_ROW_LIMIT = 100;
+
+    function showRequestDataModal(requestId) {
+        var item = null;
+        var all = allPending.concat(allResolved);
+        for (var i = 0; i < all.length; i++) {
+            if (all[i].request_id === requestId) {
+                item = all[i];
+                break;
+            }
+        }
+        if (!item) {
+            showCpAlert("Error", "Request not found in queue.", "error");
+            return;
+        }
+
+        $(".wl-modal-overlay").remove();
+
+        var actionLabel = (item.action_type || "").replace(/_/g, " ");
+        var title = actionLabel + " — " + _.escape(item.csv_file || item.detection_rule || "");
+        var bodyHtml;
+
+        try {
+            bodyHtml = renderRequestPreview(item);
+        } catch (e) {
+            bodyHtml = '<p style="color:#e74c3c">Error rendering preview: ' +
+                _.escape(e.message) + '</p>';
+        }
+
+        var $modal = $(
+            '<div class="wl-modal-overlay">' +
+            '<div class="wl-modal" style="max-width:92vw;width:auto;min-width:500px">' +
+                '<div class="wl-modal-header" style="font-size:14px">' +
+                    _.escape(title) +
+                '</div>' +
+                '<div style="padding:8px 12px 0">' +
+                    '<input type="text" id="wl-cp-preview-search" placeholder="Filter rows..." ' +
+                        'style="width:100%;padding:5px 8px;border:1px solid var(--wl-border,#ccc);' +
+                        'border-radius:3px;font-size:12px;box-sizing:border-box" />' +
+                '</div>' +
+                '<div class="wl-modal-body" style="max-height:60vh;overflow:auto;padding:12px">' +
+                    bodyHtml +
+                '</div>' +
+                '<div class="wl-modal-actions">' +
+                    '<span class="btn btn-primary" id="wl-cp-preview-close">Close</span>' +
+                '</div>' +
+            '</div></div>'
+        );
+
+        $("body").append($modal);
+        $modal.on("click", "#wl-cp-preview-close", function () {
+            $modal.remove();
+            $(document).off("keydown.wlcppreview");
+        });
+        $modal.on("click", function (e) {
+            if ($(e.target).hasClass("wl-modal-overlay")) {
+                $modal.remove();
+                $(document).off("keydown.wlcppreview");
+            }
+        });
+        $(document).off("keydown.wlcppreview").on("keydown.wlcppreview", function (e) {
+            if (e.key === "Escape" || e.keyCode === 27) {
+                // If search input is focused and has text, clear it first
+                var $search = $modal.find("#wl-cp-preview-search");
+                if ($search.is(":focus") && $search.val()) {
+                    $search.val("").trigger("input");
+                    return;
+                }
+                $modal.remove();
+                $(document).off("keydown.wlcppreview");
+            }
+        });
+        // Live search filter for table rows
+        $modal.on("input", "#wl-cp-preview-search", function () {
+            var term = $(this).val().toLowerCase();
+            $modal.find(".wl-modal-body table.wl-table tbody tr").each(function () {
+                var text = $(this).text().toLowerCase();
+                $(this).toggle(!term || text.indexOf(term) >= 0);
+            });
+        });
+    }
+
+    function renderRequestPreview(item) {
+        var at = item.action_type || "";
+        var payload = item.payload || {};
+        var hl = item.pending_highlight || {};
+
+        // ── Metadata header (always shown) ──
+        var meta = '<div style="margin-bottom:12px;font-size:12px;color:var(--wl-muted,#888)">' +
+            '<strong>Analyst:</strong> ' + _.escape(item.analyst) +
+            ' &nbsp;|&nbsp; <strong>Rule:</strong> ' + _.escape(item.detection_rule || "N/A") +
+            ' &nbsp;|&nbsp; <strong>CSV:</strong> ' + _.escape(item.csv_file || "N/A") +
+            ' &nbsp;|&nbsp; <strong>Reason:</strong> ' +
+            _.escape(item.comment || item.description || extractRequestReason(item) || "none") +
+            '</div>';
+
+        // ── Type-specific rendering ──
+        if (at === "bulk_row_addition") {
+            return meta + renderAdditionPreview(payload, hl);
+        } else if (at === "bulk_row_removal") {
+            return meta + renderRemovalPreview(payload, hl);
+        } else if (at === "bulk_row_edit") {
+            return meta + renderEditPreview(payload, hl);
+        } else if (at === "column_removal") {
+            return meta + renderColumnRemovalPreview(payload, hl);
+        } else if (at === "revert") {
+            return meta + renderRevertPreview(payload, hl, item);
+        } else if (at === "csv_import_replace") {
+            return meta + renderImportPreview(payload, hl);
+        } else if (at === "create_csv") {
+            return meta + renderCreateCsvPreview(payload, item);
+        } else if (at === "create_rule") {
+            return meta + renderCreateRulePreview(payload, item);
+        } else if (at === "remove_csv" || at === "remove_rule") {
+            return meta + renderDeletePreview(item);
+        }
+        return meta + '<p style="color:var(--wl-muted,#888)">No data preview available for this action type.</p>';
+    }
+
+    // ── Helpers ──
+
+    function previewTableStart(headers, highlightCol) {
+        var h = '<table class="wl-table" style="font-size:12px;margin-top:4px"><thead><tr>';
+        for (var i = 0; i < headers.length; i++) {
+            var style = (highlightCol && headers[i] === highlightCol)
+                ? ' style="background:rgba(231,76,60,0.25);text-decoration:line-through"' : '';
+            h += '<th' + style + '>' + _.escape(headers[i]) + '</th>';
+        }
+        h += '</tr></thead><tbody>';
+        return h;
+    }
+
+    function previewRow(headers, row, bgColor, highlightCol) {
+        var h = '<tr style="background:' + (bgColor || 'transparent') + '">';
+        for (var i = 0; i < headers.length; i++) {
+            var val = row[headers[i]] || "";
+            var style = (highlightCol && headers[i] === highlightCol)
+                ? ' style="background:rgba(231,76,60,0.15);text-decoration:line-through"' : '';
+            h += '<td' + style + '>' + _.escape(val) + '</td>';
+        }
+        h += '</tr>';
+        return h;
+    }
+
+    function truncationNote(total, limit) {
+        if (total <= limit) return '';
+        return '<p style="color:var(--wl-muted,#888);font-size:11px;margin-top:4px">' +
+            'Showing first ' + limit + ' of ' + total + ' rows.</p>';
+    }
+
+    // ── Addition: show the new rows to be added ──
+    function renderAdditionPreview(payload, hl) {
+        var headers = hl.headers || payload.headers || [];
+        var rowKeys = hl.row_keys || [];
+        if (!headers.length || !rowKeys.length) {
+            return '<p style="color:var(--wl-muted,#888)">No row data stored in this request.</p>';
+        }
+        var label = '<p style="color:#27ae60;margin:0 0 6px"><strong>' +
+            rowKeys.length + ' row(s) to be added:</strong></p>';
+        var html = previewTableStart(headers, null);
+        var limit = Math.min(rowKeys.length, PREVIEW_ROW_LIMIT);
+        for (var i = 0; i < limit; i++) {
+            html += '<tr style="background:rgba(39,174,96,0.08)">';
+            for (var c = 0; c < headers.length; c++) {
+                html += '<td>' + _.escape(rowKeys[i][c] != null ? rowKeys[i][c] : "") + '</td>';
+            }
+            html += '</tr>';
+        }
+        html += '</tbody></table>';
+        return label + html + truncationNote(rowKeys.length, PREVIEW_ROW_LIMIT);
+    }
+
+    // ── Removal: show the rows to be removed ──
+    function renderRemovalPreview(payload, hl) {
+        var headers = hl.headers || payload.headers || [];
+        var rowKeys = hl.row_keys || [];
+        if (!headers.length || !rowKeys.length) {
+            return '<p style="color:var(--wl-muted,#888)">No row data stored in this request.</p>';
+        }
+        var reasons = (payload.bulk_removal || []).map(function (r) { return r.reason || ""; });
+        var label = '<p style="color:#e74c3c;margin:0 0 6px"><strong>' +
+            rowKeys.length + ' row(s) to be removed:</strong></p>';
+        var html = previewTableStart(headers.concat(reasons.length ? ["Reason"] : []), null);
+        var limit = Math.min(rowKeys.length, PREVIEW_ROW_LIMIT);
+        for (var i = 0; i < limit; i++) {
+            html += '<tr style="background:rgba(231,76,60,0.08)">';
+            for (var c = 0; c < headers.length; c++) {
+                html += '<td>' + _.escape(rowKeys[i][c] != null ? rowKeys[i][c] : "") + '</td>';
+            }
+            if (reasons.length) {
+                html += '<td style="color:#e74c3c;font-style:italic">' +
+                    _.escape(reasons[i] || reasons[0] || "") + '</td>';
+            }
+            html += '</tr>';
+        }
+        html += '</tbody></table>';
+        return label + html + truncationNote(rowKeys.length, PREVIEW_ROW_LIMIT);
+    }
+
+    // ── Edit: show before → after for edited rows ──
+    // Priority order for data sources:
+    //   1. initial_rows + rows (diff mode — most informative, works for both
+    //      inline multi-edit AND bulk-edit-column paths since Apr 2026)
+    //   2. pending_highlight.row_keys (new values only — bulk-edit-column path
+    //      from older submissions that lacked initial_rows)
+    //   3. Neither → "no data" message
+    function renderEditPreview(payload, hl) {
+        var headers = (hl && hl.headers && hl.headers.length)
+            ? hl.headers : (payload.headers || []);
+        var rowKeys = (hl && hl.row_keys) || [];
+        var oldRows = payload.initial_rows || [];
+        var newRows = payload.rows || [];
+
+        if (!headers.length) {
+            return '<p style="color:var(--wl-muted,#888)">No row data stored in this request.</p>';
+        }
+
+        // PRIMARY PATH: diff mode using initial_rows vs rows
+        if (oldRows.length > 0 && newRows.length > 0) {
+            var editedIndices = [];
+            var maxLen = Math.min(oldRows.length, newRows.length);
+            for (var ri = 0; ri < maxLen; ri++) {
+                for (var ci = 0; ci < headers.length; ci++) {
+                    var oldVal = oldRows[ri][headers[ci]] || "";
+                    var newVal = newRows[ri][headers[ci]] || "";
+                    if (oldVal !== newVal) {
+                        editedIndices.push(ri);
+                        break;
+                    }
+                }
+            }
+
+            if (!editedIndices.length) {
+                return '<p style="color:var(--wl-muted,#888)">' +
+                    'No cell-level differences detected between old and new rows. ' +
+                    'The edit may only affect column widths or metadata.</p>';
+            }
+
+            var label = '<p style="color:#f39c12;margin:0 0 6px"><strong>' +
+                editedIndices.length + ' row(s) edited (showing old \u2192 new per cell):' +
+                '</strong></p>';
+
+            var html = previewTableStart(headers, null);
+            var limit = Math.min(editedIndices.length, PREVIEW_ROW_LIMIT);
+            for (var ei = 0; ei < limit; ei++) {
+                var idx = editedIndices[ei];
+                var oldRow = oldRows[idx] || {};
+                var newRow = newRows[idx] || {};
+                html += '<tr style="background:rgba(243,156,18,0.06)">';
+                for (var c = 0; c < headers.length; c++) {
+                    var h = headers[c];
+                    var ov = oldRow[h] || "";
+                    var nv = newRow[h] || "";
+                    if (ov !== nv) {
+                        html += '<td style="background:rgba(243,156,18,0.15)">' +
+                            '<span style="text-decoration:line-through;color:#999">' +
+                                _.escape(ov) + '</span>' +
+                            ' <span style="color:#d35400">\u2192</span> ' +
+                            '<strong>' + _.escape(nv) + '</strong></td>';
+                    } else {
+                        html += '<td>' + _.escape(nv) + '</td>';
+                    }
+                }
+                html += '</tr>';
+            }
+            html += '</tbody></table>';
+            return label + html + truncationNote(editedIndices.length, PREVIEW_ROW_LIMIT);
+        }
+
+        // FALLBACK: row_keys only (bulk-edit-column from legacy submissions)
+        if (rowKeys.length) {
+            var fbLabel = '<p style="color:#f39c12;margin:0 0 6px"><strong>' +
+                rowKeys.length + ' row(s) edited (showing new values):</strong></p>' +
+                '<p style="font-size:11px;color:var(--wl-muted,#888);margin:0 0 6px">' +
+                'Cell-level diff unavailable — initial_rows not stored in this request.</p>';
+            var fbHtml = previewTableStart(headers, null);
+            var fbLimit = Math.min(rowKeys.length, PREVIEW_ROW_LIMIT);
+            for (var fi = 0; fi < fbLimit; fi++) {
+                fbHtml += '<tr style="background:rgba(243,156,18,0.08)">';
+                for (var fc = 0; fc < headers.length; fc++) {
+                    fbHtml += '<td>' + _.escape(
+                        rowKeys[fi][fc] != null ? rowKeys[fi][fc] : "") + '</td>';
+                }
+                fbHtml += '</tr>';
+            }
+            fbHtml += '</tbody></table>';
+            return fbLabel + fbHtml + truncationNote(rowKeys.length, PREVIEW_ROW_LIMIT);
+        }
+
+        return '<p style="color:var(--wl-muted,#888)">No row data stored in this request.</p>';
+    }
+
+    // ── Column removal: show which column and sample data ──
+    function renderColumnRemovalPreview(payload, hl) {
+        var colName = hl.column_name || "";
+        var headers = payload.headers || [];
+        var rows = payload.initial_rows || payload.rows || [];
+        if (!colName) {
+            return '<p style="color:var(--wl-muted,#888)">Column name not stored in this request.</p>';
+        }
+        var label = '<p style="color:#e74c3c;margin:0 0 6px"><strong>Column to be removed: ' +
+            _.escape(colName) + '</strong></p>';
+        if (!headers.length || !rows.length) {
+            return label + '<p style="color:var(--wl-muted,#888)">' +
+                rows.length + ' row(s) will lose the "' + _.escape(colName) + '" column.</p>';
+        }
+        label += '<p style="font-size:11px;color:var(--wl-muted,#888);margin:0 0 4px">' +
+            rows.length + ' row(s) affected. Column data shown with strikethrough.</p>';
+        var html = previewTableStart(headers, colName);
+        var limit = Math.min(rows.length, PREVIEW_ROW_LIMIT);
+        for (var i = 0; i < limit; i++) {
+            html += previewRow(headers, rows[i], 'transparent', colName);
+        }
+        html += '</tbody></table>';
+        return label + html + truncationNote(rows.length, PREVIEW_ROW_LIMIT);
+    }
+
+    // ── Revert: show version info ──
+    function renderRevertPreview(payload, hl, item) {
+        var version = payload.revert_version || payload.version_id || "";
+        var reason = payload.revert_reason || "";
+        var html = '<p style="margin:0 0 6px"><strong>Revert to version:</strong> ' +
+            _.escape(version || "unknown") + '</p>';
+        if (reason) {
+            html += '<p style="margin:0 0 6px"><strong>Reason:</strong> ' +
+                _.escape(reason) + '</p>';
+        }
+        // Show rows from the stored payload if available
+        var headers = payload.headers || [];
+        var rows = payload.initial_rows || payload.rows || [];
+        if (headers.length && rows.length) {
+            html += '<p style="font-size:11px;color:var(--wl-muted,#888);margin:6px 0 4px">' +
+                'Target version data (' + rows.length + ' rows):</p>';
+            html += previewTableStart(headers, null);
+            var limit = Math.min(rows.length, PREVIEW_ROW_LIMIT);
+            for (var i = 0; i < limit; i++) {
+                html += previewRow(headers, rows[i], 'transparent', null);
+            }
+            html += '</tbody></table>';
+            html += truncationNote(rows.length, PREVIEW_ROW_LIMIT);
+        }
+        return html;
+    }
+
+    // ── Import replace: show the replacement data ──
+    function renderImportPreview(payload, hl) {
+        var headers = payload.headers || [];
+        var rows = payload.initial_rows || payload.rows || [];
+        if (!headers.length) {
+            return '<p style="color:var(--wl-muted,#888)">No import data stored in this request.</p>';
+        }
+        var label = '<p style="color:#8e44ad;margin:0 0 6px"><strong>Import will replace CSV with ' +
+            rows.length + ' row(s):</strong></p>';
+        var html = previewTableStart(headers, null);
+        var limit = Math.min(rows.length, PREVIEW_ROW_LIMIT);
+        for (var i = 0; i < limit; i++) {
+            html += previewRow(headers, rows[i], 'rgba(142,68,173,0.06)', null);
+        }
+        html += '</tbody></table>';
+        return label + html + truncationNote(rows.length, PREVIEW_ROW_LIMIT);
+    }
+
+    // ── Create CSV: show the initial data ──
+    function renderCreateCsvPreview(payload, item) {
+        var headers = payload.headers || [];
+        var rows = payload.initial_rows || payload.rows || [];
+        var csvName = item.csv_file || payload.csv_file || "";
+        var html = '<p style="margin:0 0 6px"><strong>New CSV:</strong> ' +
+            _.escape(csvName) + '</p>';
+        if (headers.length) {
+            html += '<p style="font-size:11px;color:var(--wl-muted,#888);margin:0 0 4px">' +
+                headers.length + ' column(s), ' + rows.length + ' row(s):</p>';
+            html += previewTableStart(headers, null);
+            var limit = Math.min(rows.length, PREVIEW_ROW_LIMIT);
+            for (var i = 0; i < limit; i++) {
+                html += previewRow(headers, rows[i], 'rgba(39,174,96,0.06)', null);
+            }
+            html += '</tbody></table>';
+            html += truncationNote(rows.length, PREVIEW_ROW_LIMIT);
+        } else {
+            html += '<p style="color:var(--wl-muted,#888)">No initial data (empty CSV).</p>';
+        }
+        return html;
+    }
+
+    // ── Create rule: show rule name ──
+    function renderCreateRulePreview(payload, item) {
+        var ruleName = item.detection_rule || payload.detection_rule || "";
+        return '<p style="margin:0"><strong>New detection rule:</strong> ' +
+            _.escape(ruleName) + '</p>' +
+            '<p style="font-size:12px;color:var(--wl-muted,#888);margin:4px 0 0">' +
+            'This will create the rule entry in the detection rules registry.</p>';
+    }
+
+    // ── Delete CSV/rule: show what will be deleted ──
+    function renderDeletePreview(item) {
+        var at = item.action_type || "";
+        if (at === "remove_csv") {
+            return '<p style="color:#e74c3c;margin:0"><strong>Delete CSV:</strong> ' +
+                _.escape(item.csv_file || "") + '</p>' +
+                '<p style="font-size:12px;color:var(--wl-muted,#888);margin:4px 0 0">' +
+                'The CSV will be moved to Trash. It can be restored by an admin.</p>';
+        }
+        return '<p style="color:#e74c3c;margin:0"><strong>Delete detection rule:</strong> ' +
+            _.escape(item.detection_rule || "") + '</p>' +
+            '<p style="font-size:12px;color:var(--wl-muted,#888);margin:4px 0 0">' +
+            'The rule and all its CSV mappings will be moved to Trash.</p>';
     }
 
     function showCancelModal(requestId) {
@@ -795,7 +1315,7 @@ require([
                 'data-info="' + _.escape(text) + '">i</span>';
         }
 
-        var html = '<h3 style="margin:12px 0 8px">Analyst Daily Limit Configuration</h3>';
+        var html = '<h3 style="margin:12px 0 8px">Analyst Settings</h3>';
         html += '<div style="max-width:820px">';
         fields.forEach(function (f) {
             var val = limits[f.key] !== undefined ? limits[f.key] : 10;
@@ -1835,6 +2355,9 @@ require([
     // Admin Limits (superadmin-only)
     // ══════════════════════════════════════════════════════════════════
 
+    var loadedAdminLimits = {};
+    var adminDefaults = {};
+
     function loadAdminLimits() {
         if (!cpIsSuperAdmin) {
             $("#wl-cp-admin-limits").html(
@@ -1850,9 +2373,11 @@ require([
                     _.escape(data.error) + '</p>');
                 return;
             }
+            adminDefaults = data.defaults || {};
             renderAdminLimitsForm(
                 data.admin_limits || {},
-                data.defaults || {});
+                adminDefaults,
+                data.change_history || []);
         })
         .fail(function () {
             $("#wl-cp-admin-limits").html(
@@ -1861,87 +2386,352 @@ require([
         });
     }
 
-    function renderAdminLimitsForm(limits, defaults) {
+    // ── Labels for change history display ──
+    var ADMIN_LIMIT_LABELS = {
+        rule_deletion: "Rule Deletions",
+        csv_deletion: "CSV Deletions",
+        approval_count: "Approval Actions",
+        limit_changes: "Limit Config Changes",
+        csv_save: "CSV Saves",
+        csv_revert: "CSV Reverts",
+        rule_creation: "Rule Creations",
+        csv_creation: "CSV Creations",
+        trash_restore: "Trash Restorations",
+        trash_purge: "Trash Purges",
+        usage_reset: "Usage Resets",
+        reset_frequency: "Counter Reset Frequency",
+        reset_time_utc: "Reset Time (UTC)",
+        reset_day_of_week: "Reset Day of Week",
+        reset_day_of_month: "Reset Day of Month",
+        reset_month: "Reset Month",
+        reset_day_of_year: "Reset Day (Yearly)",
+        allow_admin_purge_trash: "Allow Admin Purge Trash",
+        allow_admin_reset_usage: "Allow Admin Reset Usage"
+    };
+
+    function renderAdminLimitsForm(limits, defaults, changeHistory) {
+        loadedAdminLimits = $.extend({}, limits);
         var fields = [
+            {key: "csv_save", label: "CSV saves per period",
+             desc: "Max CSV save/edit operations an admin can perform per period"},
+            {key: "csv_revert", label: "CSV reverts per period",
+             desc: "Max CSV revert operations an admin can perform per period"},
+            {key: "rule_creation", label: "Rule creations per period",
+             desc: "Max detection rules an admin can create per period"},
+            {key: "csv_creation", label: "CSV creations per period",
+             desc: "Max CSV files an admin can create per period"},
             {key: "rule_deletion", label: "Rule deletions per period",
              desc: "Max rules an admin can soft-delete per period"},
             {key: "csv_deletion", label: "CSV deletions per period",
              desc: "Max CSVs an admin can soft-delete per period"},
-            {key: "approval_count", label: "Approvals per period",
-             desc: "Max approval actions an admin can perform per period"},
+            {key: "approval_count", label: "Approval actions per period",
+             desc: "Max approval/rejection actions an admin can perform per period"},
             {key: "limit_changes", label: "Limit config changes per period",
-             desc: "Max times an admin can change editor limits per period"},
+             desc: "Max times an admin can change analyst limits per period (superadmin-only action)"},
+            {key: "trash_restore", label: "Trash restorations per period",
+             desc: "Max items an admin can restore from trash per period"},
+            {key: "trash_purge", label: "Trash purges per period",
+             desc: "Max items an admin can permanently purge from trash per period"},
+            {key: "usage_reset", label: "Usage resets per period",
+             desc: "Max analyst usage reset operations an admin can perform per period"},
         ];
 
-        var html = '<h3 style="margin:8px 0 4px">Admin Daily Limits</h3>' +
+        function buildInfoIcon(text) {
+            return '<span class="wl-cp-info-icon" tabindex="0" ' +
+                'style="display:inline-flex;align-items:center;justify-content:center;' +
+                'width:18px;height:18px;border-radius:50%;background:var(--wl-border,#ccc);' +
+                'color:var(--wl-text,#333);font-size:12px;font-weight:700;cursor:pointer;' +
+                'flex-shrink:0;user-select:none;position:relative" ' +
+                'data-info="' + _.escape(text) + '">i</span>';
+        }
+
+        var html = '<h3 style="margin:8px 0 4px">Admin Settings</h3>' +
             '<p style="color:var(--wl-muted,#888);font-size:12px;margin-bottom:12px">' +
-            'These limits restrict admin actions. Super-admins are exempt. ' +
-            'Set 0 for unlimited.</p>';
+            'These limits restrict admin actions per period. Super-admins are exempt. ' +
+            'Set 0 to disable the action entirely.</p>';
 
-        html += '<table class="wl-table" style="width:auto;min-width:500px">' +
-            '<thead><tr><th>Limit</th><th>Current</th><th>Default</th>' +
-            '<th>New Value</th></tr></thead><tbody>';
-
+        // ── Action limit rows ──
+        html += '<div style="max-width:820px">';
         fields.forEach(function (f) {
-            var cur = limits[f.key];
+            var cur = (limits[f.key] !== undefined) ? limits[f.key] : defaults[f.key];
             var def = defaults[f.key];
-            if (cur === undefined) cur = def;
-            html += '<tr>' +
-                '<td title="' + _.escape(f.desc) + '">' + _.escape(f.label) + '</td>' +
-                '<td>' + cur + '</td>' +
-                '<td style="color:var(--wl-muted,#888)">' + def + '</td>' +
-                '<td><input type="number" class="wl-admin-limit-input" ' +
-                'data-key="' + f.key + '" value="' + cur + '" ' +
-                'min="0" max="100" style="width:80px;padding:4px 8px;' +
-                'background:var(--wl-bg-main,#1a1c1e);color:var(--wl-text,#e0e0e0);' +
-                'border:1px solid var(--wl-border,#444);border-radius:4px"></td>' +
-                '</tr>';
+            html += '<div style="margin-bottom:6px;display:flex;align-items:center;gap:10px">' +
+                '<label style="min-width:240px;flex-shrink:0;font-weight:500" ' +
+                    'title="' + _.escape(f.desc) + '">' + _.escape(f.label) + '</label>' +
+                '<input type="number" class="wl-admin-limit-input wl-input" ' +
+                    'data-key="' + f.key + '" value="' + cur + '" ' +
+                    'min="0" max="100" style="width:70px;text-align:center;' +
+                    'padding:4px 8px;box-sizing:border-box">' +
+                '<span style="color:var(--wl-muted,#888);font-size:12px">' +
+                    'default: ' + def + '</span>' +
+                buildInfoIcon(f.desc) +
+                '</div>';
         });
-        html += '</tbody></table>';
 
-        html += '<div style="margin-top:12px">' +
+        // ── Reset Frequency ──
+        var curFreq = limits.reset_frequency || "daily";
+        var curTime = limits.reset_time_utc || "00:00";
+        var curTimeParts = curTime.split(":");
+        var curHH = curTimeParts[0] || "00";
+        var curMM = curTimeParts[1] || "00";
+        var curDow = (typeof limits.reset_day_of_week === "number") ? limits.reset_day_of_week : 0;
+        var curDom = (typeof limits.reset_day_of_month === "number") ? limits.reset_day_of_month : 1;
+        var curMonth = (typeof limits.reset_month === "number") ? limits.reset_month : 1;
+        var curDoy = (typeof limits.reset_day_of_year === "number") ? limits.reset_day_of_year : 1;
+
+        // Build schedule option HTML
+        var hourOptsHtml = '';
+        for (var h = 0; h < 24; h++) {
+            var hStr = (h < 10 ? '0' : '') + h;
+            hourOptsHtml += '<option value="' + hStr + '"' +
+                (hStr === curHH ? ' selected' : '') + '>' + hStr + '</option>';
+        }
+        var minOptsHtml = '';
+        for (var m = 0; m < 60; m += 5) {
+            var mStr = (m < 10 ? '0' : '') + m;
+            minOptsHtml += '<option value="' + mStr + '"' +
+                (mStr === curMM ? ' selected' : '') + '>' + mStr + '</option>';
+        }
+        var dowNames = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+        var dowOptsHtml = '';
+        dowNames.forEach(function (name, idx) {
+            dowOptsHtml += '<option value="' + idx + '"' +
+                (idx === curDow ? ' selected' : '') + '>' + name + '</option>';
+        });
+        var domOptsHtml = '';
+        for (var d = 1; d <= 31; d++) {
+            domOptsHtml += '<option value="' + d + '"' +
+                (d === curDom ? ' selected' : '') + '>' + d + '</option>';
+        }
+        var monthNames = ["January","February","March","April","May","June",
+                          "July","August","September","October","November","December"];
+        var monthOptsHtml = '';
+        monthNames.forEach(function (name, idx) {
+            var val = idx + 1;
+            monthOptsHtml += '<option value="' + val + '"' +
+                (val === curMonth ? ' selected' : '') + '>' + name + '</option>';
+        });
+        var doyOptsHtml = '';
+        for (var dy = 1; dy <= 31; dy++) {
+            doyOptsHtml += '<option value="' + dy + '"' +
+                (dy === curDoy ? ' selected' : '') + '>' + dy + '</option>';
+        }
+
+        var freqOptions = [
+            { value: "never",   label: "Never" },
+            { value: "daily",   label: "Daily" },
+            { value: "weekly",  label: "Weekly" },
+            { value: "monthly", label: "Monthly" },
+            { value: "yearly",  label: "Yearly" }
+        ];
+        var freqOptsHtml = '';
+        freqOptions.forEach(function (opt) {
+            freqOptsHtml += '<option value="' + opt.value + '"' +
+                (curFreq === opt.value ? ' selected' : '') + '>' +
+                opt.label + '</option>';
+        });
+        var ss = 'text-align:center;padding:3px 2px;font-size:12px';
+        function dIf(freq, target) {
+            return freq === target ? "inline" : "none";
+        }
+
+        html += '<div style="margin:16px 0 12px;padding-top:12px;border-top:1px solid var(--wl-border-light,#e0e0e0)">';
+        html += '<div style="margin-bottom:12px;display:flex;align-items:center;gap:10px">' +
+            '<label style="min-width:240px;flex-shrink:0;font-weight:500">Counter Reset Frequency</label>' +
+            '<select class="wl-input" id="wl-cp-admin-freq" data-key="reset_frequency" ' +
+                'style="width:120px;min-width:120px;text-align:center;box-sizing:border-box">' +
+            freqOptsHtml +
+            '</select>' +
+            buildInfoIcon("How often admin limit counters reset to zero. " +
+                "'Never' means counters accumulate permanently until manually reset. " +
+                "This schedule is independent from the analyst counter reset.") +
+            '<span id="wl-cp-admin-schedule-wrap" style="display:' +
+                (curFreq === "never" ? "none" : "inline-flex") +
+                ';align-items:center;gap:6px;border-left:1px solid var(--wl-border-light,#e0e0e0);' +
+                'padding-left:10px;margin-left:2px;font-size:12px;' +
+                'color:var(--wl-text-secondary,#555)">' +
+                '<select class="wl-input wl-cp-admin-sched wl-cp-admin-sched-weekly" id="wl-cp-admin-reset-dow" ' +
+                    'style="display:' + dIf(curFreq, "weekly") + ';' + ss + '">' +
+                    dowOptsHtml + '</select>' +
+                '<select class="wl-input wl-cp-admin-sched wl-cp-admin-sched-monthly" id="wl-cp-admin-reset-dom" ' +
+                    'style="display:' + dIf(curFreq, "monthly") + ';width:50px;' + ss + '">' +
+                    domOptsHtml + '</select>' +
+                '<select class="wl-input wl-cp-admin-sched wl-cp-admin-sched-yearly" id="wl-cp-admin-reset-month" ' +
+                    'style="display:' + dIf(curFreq, "yearly") + ';' + ss + '">' +
+                    monthOptsHtml + '</select>' +
+                '<select class="wl-input wl-cp-admin-sched wl-cp-admin-sched-yearly" id="wl-cp-admin-reset-doy" ' +
+                    'style="display:' + dIf(curFreq, "yearly") + ';width:50px;' + ss + '">' +
+                    doyOptsHtml + '</select>' +
+                '<select class="wl-input" id="wl-cp-admin-reset-hh" ' +
+                    'style="width:42px;' + ss + '">' +
+                    hourOptsHtml + '</select>' +
+                '<span style="font-weight:600">:</span>' +
+                '<select class="wl-input" id="wl-cp-admin-reset-mm" ' +
+                    'style="width:42px;' + ss + '">' +
+                    minOptsHtml + '</select>' +
+                '<span>UTC</span>' +
+            '</span>' +
+            '</div>';
+        html += '</div>';
+
+        // ── Admin Permission Toggles ──
+        html += '<div style="margin-top:4px;padding-top:12px;border-top:1px solid var(--wl-border-light,#e0e0e0)">' +
+            '<h4 style="margin:0 0 10px;font-size:14px;font-weight:600">Admin Permissions</h4>';
+
+        function buildAdminPermToggle(id, key, labelText, infoText) {
+            var val = (limits[key] !== undefined) ? limits[key] : (defaults[key] !== undefined ? defaults[key] : true);
+            return '<div style="margin-bottom:12px;display:flex;align-items:center;gap:10px">' +
+                '<label style="min-width:240px;flex-shrink:0;font-weight:500">' +
+                    labelText + '</label>' +
+                '<select id="' + id + '" class="wl-input wl-cp-admin-perm-select" ' +
+                    'data-key="' + key + '" ' +
+                    'style="width:120px;font-size:13px;padding:5px 8px;border-radius:4px;cursor:pointer">' +
+                    '<option value="true"' + (val ? ' selected' : '') + '>Enabled</option>' +
+                    '<option value="false"' + (!val ? ' selected' : '') + '>Disabled</option>' +
+                '</select>' +
+                buildInfoIcon(infoText) +
+                '</div>';
+        }
+
+        html += buildAdminPermToggle('wl-cp-admin-perm-purge',
+            'allow_admin_purge_trash', 'Trash Purge',
+            'When disabled, admins cannot permanently delete items from trash. ' +
+            'Only super-admins can purge. This is an irreversible action.');
+
+        html += buildAdminPermToggle('wl-cp-admin-perm-reset',
+            'allow_admin_reset_usage', 'Usage Reset',
+            'When disabled, admins cannot reset analyst daily usage counters. ' +
+            'Only super-admins can reset usage.');
+
+        html += '</div>';
+
+        // ── Buttons ──
+        html += '<div style="margin-top:16px;display:flex;align-items:center;gap:10px">' +
             '<span class="wl-btn wl-btn-primary" id="wl-save-admin-limits" ' +
-            'style="cursor:pointer">Save Admin Limits</span> ' +
+            'style="cursor:pointer">Save Changes</span> ' +
             '<span class="wl-btn" id="wl-reset-admin-limits" ' +
-            'style="cursor:pointer">Reset to Defaults</span></div>';
+            'style="cursor:pointer">Reset to Defaults</span>' +
+            '<span id="wl-cp-admin-limits-msg" style="display:none;font-size:13px;' +
+            'font-weight:500;margin-left:8px"></span>' +
+            '</div>';
+
+        html += '</div>'; // close max-width wrapper
+
+        // ── Change History ──
+        html += renderAdminLimitHistory(changeHistory);
 
         $("#wl-cp-admin-limits").html(html);
 
-        // Save handler
+        // ── Frequency change handler ──
+        function updateAdminScheduleVisibility(freq) {
+            if (freq === "never") {
+                $("#wl-cp-admin-schedule-wrap").hide();
+            } else {
+                $("#wl-cp-admin-schedule-wrap").css("display", "inline-flex");
+            }
+            $(".wl-cp-admin-sched").hide();
+            if (freq !== "never" && freq !== "daily") {
+                $(".wl-cp-admin-sched-" + freq).css("display", "inline");
+            }
+        }
+        $("#wl-cp-admin-freq").on("change", function () {
+            updateAdminScheduleVisibility($(this).val());
+        });
+
+        // ── Info icon tooltip (delegate on admin-limits container) ──
+        var adminInfoTimer = null;
+        function closeAdminInfoBubble() {
+            if (adminInfoTimer) { clearTimeout(adminInfoTimer); adminInfoTimer = null; }
+            $(".wl-cp-admin-info-bubble").remove();
+        }
+        $("#wl-cp-admin-limits").off("click.info").on("click.info", ".wl-cp-info-icon", function (e) {
+            e.stopPropagation();
+            var $icon = $(this);
+            var wasOpen = $(".wl-cp-admin-info-bubble").length &&
+                          $(".wl-cp-admin-info-bubble").data("owner") === $icon[0];
+            closeAdminInfoBubble();
+            if (wasOpen) { return; }
+            var text = $icon.data("info");
+            var rect = $icon[0].getBoundingClientRect();
+            var $bubble = $('<div class="wl-cp-admin-info-bubble" style="position:fixed;' +
+                'z-index:10001;background:var(--wl-bg-main,#1a1c1e);' +
+                'border:1px solid var(--wl-border,#444);border-radius:6px;padding:10px 14px;' +
+                'font-size:12px;line-height:1.5;color:var(--wl-text,#e0e0e0);' +
+                'max-width:280px;box-shadow:0 4px 12px rgba(0,0,0,0.3);' +
+                'top:' + (rect.bottom + 6) + 'px;left:' + (rect.left - 120) + 'px">' +
+                _.escape(text) + '</div>');
+            $bubble.data("owner", $icon[0]);
+            $("body").append($bubble);
+            adminInfoTimer = setTimeout(closeAdminInfoBubble, 8000);
+        });
+        $(document).on("click.adminInfo", function () { closeAdminInfoBubble(); });
+
+        // ── Save handler ──
         $("#wl-save-admin-limits").on("click", function () {
             var newLimits = {};
-            var changed = false;
             $(".wl-admin-limit-input").each(function () {
-                var key = $(this).data("key");
-                var val = parseInt($(this).val(), 10);
-                if (!isNaN(val) && val !== limits[key]) {
-                    newLimits[key] = val;
-                    changed = true;
-                }
+                newLimits[$(this).data("key")] = parseInt($(this).val(), 10) || 0;
             });
-            if (!changed) {
-                showCpAlert("No Changes", "No values were changed.", "info");
+            // Permission toggles
+            $(".wl-cp-admin-perm-select").each(function () {
+                newLimits[$(this).data("key")] = ($(this).val() === "true");
+            });
+            // Schedule fields
+            newLimits.reset_frequency = $("#wl-cp-admin-freq").val();
+            newLimits.reset_time_utc = $("#wl-cp-admin-reset-hh").val() + ":" +
+                                       $("#wl-cp-admin-reset-mm").val();
+            newLimits.reset_day_of_week = parseInt($("#wl-cp-admin-reset-dow").val(), 10) || 0;
+            newLimits.reset_day_of_month = parseInt($("#wl-cp-admin-reset-dom").val(), 10) || 1;
+            newLimits.reset_month = parseInt($("#wl-cp-admin-reset-month").val(), 10) || 1;
+            newLimits.reset_day_of_year = parseInt($("#wl-cp-admin-reset-doy").val(), 10) || 1;
+
+            // Client-side no-change detection
+            var STRING_DEFAULTS = { reset_frequency: "daily", reset_time_utc: "00:00" };
+            var hasChanges = false;
+            for (var k in newLimits) {
+                if (STRING_DEFAULTS[k] !== undefined) {
+                    if (newLimits[k] !== (loadedAdminLimits[k] || STRING_DEFAULTS[k])) {
+                        hasChanges = true;
+                    }
+                } else if (newLimits[k] !== (loadedAdminLimits[k] !== undefined ? loadedAdminLimits[k] : -1)) {
+                    hasChanges = true;
+                }
+                if (hasChanges) { break; }
+            }
+            if (!hasChanges) {
+                var $m = $("#wl-cp-admin-limits-msg");
+                $m.text("No changes made").css("color", "#f39c12").show();
+                setTimeout(function () { $m.fadeOut(); }, 3000);
                 return;
             }
-            restPost({
-                action: "set_admin_limits",
-                limits: newLimits,
-                comment: "Updated via Control Panel"
-            })
-            .done(function (d) {
-                if (d.success) {
-                    showCpAlert("Saved", "Admin limits updated.", "success");
-                    loadAdminLimits();
+
+            var $btn = $(this);
+            $btn.text("Saving...").css("pointer-events", "none");
+            restPost({ action: "set_admin_limits", limits: newLimits })
+            .done(function (data) {
+                if (data.error) {
+                    showCpAlert("Error", data.error, "error");
+                } else if (data.no_changes) {
+                    var $m = $("#wl-cp-admin-limits-msg");
+                    $m.text("No changes made").css("color", "#f39c12").show();
+                    setTimeout(function () { $m.fadeOut(); }, 3000);
                 } else {
-                    showCpAlert("Error", d.error, "error");
+                    var $m = $("#wl-cp-admin-limits-msg");
+                    $m.text("Admin limits updated").css("color", "#27ae60").show();
+                    setTimeout(function () { $m.fadeOut(); }, 3000);
+                    loadedAdminLimits = newLimits;
+                    $("#wl-cp-admin-limit-history").replaceWith(
+                        renderAdminLimitHistory(data.change_history || []));
                 }
+                $btn.text("Save Changes").css("pointer-events", "auto");
             })
             .fail(function () {
                 showCpAlert("Error", "Failed to save admin limits", "error");
+                $btn.text("Save Changes").css("pointer-events", "auto");
             });
         });
 
-        // Reset handler
+        // ── Reset handler ──
         $("#wl-reset-admin-limits").on("click", function () {
             showCpConfirm("Reset Admin Limits",
                 "Reset all admin limits to factory defaults?",
@@ -1949,20 +2739,85 @@ require([
                 function () {
                     restPost({
                         action: "set_admin_limits",
-                        limits: defaults,
-                        comment: "Reset to factory defaults"
+                        limits: defaults
                     })
                     .done(function (d) {
                         if (d.success) {
                             showCpAlert("Reset", "Admin limits reset to defaults.", "success");
                             loadAdminLimits();
                         } else {
-                            showCpAlert("Error", d.error, "error");
+                            showCpAlert("Error", d.error || "Reset failed", "error");
                         }
+                    })
+                    .fail(function () {
+                        showCpAlert("Error", "Failed to reset admin limits", "error");
                     });
                 }
             );
         });
+    }
+
+    function renderAdminLimitHistory(history) {
+        var html = '<div id="wl-cp-admin-limit-history" style="margin-top:20px">';
+        html += '<h3 style="margin:12px 0 8px">Recent Changes</h3>';
+
+        if (!history || !history.length) {
+            html += '<p style="color:var(--wl-text-muted,#888);font-size:13px">' +
+                'No changes recorded yet.</p>';
+        } else {
+            html += '<table class="wl-table" style="font-size:13px"><thead><tr>' +
+                '<th style="width:180px">Timestamp</th>' +
+                '<th style="width:120px">Admin</th>' +
+                '<th>Changes</th>' +
+                '</tr></thead><tbody>';
+            var BOOL_SETTINGS = {
+                allow_admin_purge_trash: true,
+                allow_admin_reset_usage: true
+            };
+            var DOW_NAMES = ["Monday","Tuesday","Wednesday","Thursday",
+                             "Friday","Saturday","Sunday"];
+            var MONTH_NAMES = ["","January","February","March","April","May",
+                               "June","July","August","September","October",
+                               "November","December"];
+            history.forEach(function (entry) {
+                var changeDescs = (entry.changes || []).map(function (c) {
+                    var label = ADMIN_LIMIT_LABELS[c.key] || c.key;
+                    var oldStr = String(c.old);
+                    var newStr = String(c["new"]);
+                    if (BOOL_SETTINGS[c.key]) {
+                        oldStr = c.old ? "Enabled" : "Disabled";
+                        newStr = c["new"] ? "Enabled" : "Disabled";
+                    } else if (c.key === "reset_day_of_week") {
+                        oldStr = DOW_NAMES[c.old] || String(c.old);
+                        newStr = DOW_NAMES[c["new"]] || String(c["new"]);
+                    } else if (c.key === "reset_month") {
+                        oldStr = MONTH_NAMES[c.old] || String(c.old);
+                        newStr = MONTH_NAMES[c["new"]] || String(c["new"]);
+                    }
+                    return '<span style="white-space:nowrap">' +
+                        _.escape(label) + ': ' +
+                        '<span style="color:var(--wl-diff-rm,#c62828)">' +
+                            _.escape(oldStr) + '</span>' +
+                        ' &#8594; ' +
+                        '<span style="color:var(--wl-diff-add,#2e7d32)">' +
+                            _.escape(newStr) + '</span>' +
+                        '</span>';
+                });
+                var localTs = entry.timestamp || "";
+                if (localTs) {
+                    var dObj = new Date(localTs.replace(" UTC", "Z"));
+                    if (!isNaN(dObj.getTime())) { localTs = dObj.toLocaleString(); }
+                }
+                html += '<tr>' +
+                    '<td>' + _.escape(localTs) + '</td>' +
+                    '<td>' + _.escape(entry.admin || "") + '</td>' +
+                    '<td>' + changeDescs.join('<br>') + '</td>' +
+                    '</tr>';
+            });
+            html += '</tbody></table>';
+        }
+        html += '</div>';
+        return html;
     }
 
     // ══════════════════════════════════════════════════════════════════

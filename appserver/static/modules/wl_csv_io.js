@@ -744,6 +744,7 @@ define([
                 removal_reasons: []
             },
             expected_mtime: S.loadedMtime,
+            expected_content_hash: S.loadedContentHash,
             pending_highlight: { type: "table" }
         })
         .done(function (data) {
@@ -799,6 +800,7 @@ define([
                 removal_reasons: []
             },
             expected_mtime: S.loadedMtime,
+            expected_content_hash: S.loadedContentHash,
             pending_highlight: { type: "rows", row_keys: rowKeys, headers: visHeaders },
             selected_count: newRowCount
         })

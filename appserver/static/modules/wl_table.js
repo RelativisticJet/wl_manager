@@ -1232,7 +1232,8 @@ define([
             comment:         "Row reorder",
             removal_reasons: [],
             row_reorder:     { from_position: fromPos, to_position: toPos },
-            expected_mtime:  S.loadedMtime
+            expected_mtime:  S.loadedMtime,
+            expected_content_hash: S.loadedContentHash
         })
         .done(function (data) {
             if (data.error) {
@@ -1298,7 +1299,8 @@ define([
             comment:         "Column reorder",
             removal_reasons: [],
             column_reorder:  { column: fromCol, from_position: fromPos, to_position: toPos },
-            expected_mtime:  S.loadedMtime
+            expected_mtime:  S.loadedMtime,
+            expected_content_hash: S.loadedContentHash
         })
         .done(function (data) {
             if (data.error) {
@@ -1356,7 +1358,8 @@ define([
             comment:         "Column rename",
             removal_reasons: [],
             column_renames:  [{ old_name: oldName, new_name: newName }],
-            expected_mtime:  S.loadedMtime
+            expected_mtime:  S.loadedMtime,
+            expected_content_hash: S.loadedContentHash
         })
         .done(function (data) {
             if (data.error) {
