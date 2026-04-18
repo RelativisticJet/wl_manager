@@ -2,22 +2,40 @@
 """
 Scheduled expiration cleanup for Whitelist Manager.
 
-Splunk scripted input that runs hourly (configurable in inputs.conf).
-Iterates all CSVs from rule_csv_map.csv, removes expired rows,
-writes cleaned CSVs back, and indexes audit events to wl_audit.
+Splunk scripted input that runs on a schedule (see ``default/inputs.conf``).
+Iterates all CSVs from rule_csv_map.csv, removes expired rows, writes cleaned
+CSVs back, and indexes audit events to wl_audit.
+
+Delegates expired-row detection to ``wl_csv.remove_expired_rows`` so there
+is a single source of truth for expiration semantics (UTC format, legacy
+format, timezone handling). See ``tests/test_wl_expiration_cleanup.py``.
 
 Session key is read from stdin (standard Splunk scripted input pattern).
 """
 
-import os
-import sys
-import csv
+from __future__ import annotations
+
 import json
+import os
 import re
-import urllib.request
-import urllib.parse
 import ssl
+import sys
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
+from typing import Dict, List, Tuple
+
+# Make ``bin/`` importable when this script is launched by splunkd.
+_BIN_DIR = os.path.dirname(os.path.abspath(__file__))
+if _BIN_DIR not in sys.path:
+    sys.path.insert(0, _BIN_DIR)
+
+from wl_csv import (  # noqa: E402
+    get_expire_column,
+    read_csv,
+    remove_expired_rows,
+    write_csv,
+)
 
 APP_NAME = "wl_manager"
 SPLUNK_HOME = os.environ.get("SPLUNK_HOME", "/opt/splunk")
@@ -28,84 +46,49 @@ AUDIT_INDEX = "wl_audit"
 AUDIT_SOURCE = "wl_manager"
 AUDIT_SOURCETYPE = "wl_audit"
 
-# Column names treated as expiration dates (case-insensitive matching).
-EXPIRE_COLUMN_NAMES = {
-    "expires", "expire", "expiration", "expiration_date",
-    "expiry", "termination", "termination_date",
-}
+# Server-side scheduled cleanup has no browser timezone context. Legacy
+# (no-suffix) expiration values are therefore interpreted as UTC to match
+# the handler's ``tz_offset_minutes=0`` contract. Analysts who need
+# precise timezone behavior should use the new " UTC"-suffixed format.
+# Decision: CLAUDE.md Decision Log entry dated 2026-04-19.
+SCHEDULED_TZ_OFFSET_MINUTES = 0
 
 
-def find_expire_column(headers):
-    """Return the first header that matches an expiration column name, or None."""
-    for h in headers:
-        if h.lower() in EXPIRE_COLUMN_NAMES:
-            return h
-    return None
-
-
-def read_session_key():
+def read_session_key() -> str:
     """Read the Splunk session key from stdin (passed by splunkd)."""
     raw = sys.stdin.read()
-    m = re.search(r"<sessionKey>(.*?)</sessionKey>", raw)
-    if m:
-        return m.group(1)
+    match = re.search(r"<sessionKey>(.*?)</sessionKey>", raw)
+    if match:
+        return match.group(1)
     return raw.strip()
 
 
-def read_csv_file(filepath):
-    with open(filepath, "r", newline="", encoding="utf-8-sig") as fh:
-        reader = csv.DictReader(fh)
-        headers = list(reader.fieldnames or [])
-        rows = [dict(r) for r in reader]
-    return headers, rows
+def partition_expired(
+    headers: List[str],
+    rows: List[Dict[str, str]],
+) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    """Partition ``rows`` into (kept, expired) using ``wl_csv`` semantics.
 
+    ``wl_csv.remove_expired_rows`` only returns ``(kept, expired_count)`` so
+    callers that do not need the row contents pay no memory cost. The
+    scheduled cleanup DOES need the contents — to build ``value_lines``
+    for the audit event — so it partitions via dict-identity: every row
+    not in the kept set is expired.
 
-def write_csv_file(filepath, headers, rows):
-    with open(filepath, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=headers, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def remove_expired_rows(headers, rows):
-    """Filter out rows where an expiration column contains a past date/time.
-
-    Expiration values are treated as local time (matching the user's browser).
-    The scheduled cleanup uses the server's local time for comparison.
+    Row identity is preserved by ``wl_csv.remove_expired_rows`` (it does
+    ``kept.append(row)``, not ``kept.append(dict(row))``), which makes the
+    id-based set-difference reliable. See
+    ``tests/test_wl_expiration_cleanup.py::test_returned_rows_are_original_objects``.
     """
-    expire_col = find_expire_column(headers)
-    if not expire_col:
-        return rows, []
-
-    now = datetime.now()          # server local time (naive)
-    kept = []
-    expired = []
-
-    for row in rows:
-        exp_val = (row.get(expire_col) or "").strip()
-        if not exp_val:
-            kept.append(row)
-            continue
-        parsed = False
-        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
-            try:
-                exp_date = datetime.strptime(exp_val, fmt)   # naive — local time
-                parsed = True
-                break
-            except ValueError:
-                continue
-        if not parsed:
-            kept.append(row)
-            continue
-        if exp_date < now:
-            expired.append(row)
-        else:
-            kept.append(row)
-
+    kept, _ = remove_expired_rows(
+        headers, rows, tz_offset_minutes=SCHEDULED_TZ_OFFSET_MINUTES
+    )
+    kept_ids = {id(row) for row in kept}
+    expired = [row for row in rows if id(row) not in kept_ids]
     return kept, expired
 
 
-def index_audit(session_key, event):
+def index_audit(session_key: str, event: Dict) -> None:
     """Post audit event to Splunk's receivers/simple endpoint."""
     try:
         qs = urllib.parse.urlencode({
@@ -124,12 +107,12 @@ def index_audit(session_key, event):
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
 
-        urllib.request.urlopen(req, context=ctx, timeout=10)
+        urllib.request.urlopen(req, context=ctx, timeout=10)  # nosec B310
     except Exception as exc:
         sys.stderr.write("wl_expiration_cleanup audit error: %s\n" % exc)
 
 
-def main():
+def main() -> None:
     session_key = read_session_key()
 
     if not os.path.isfile(MAPPING_FILE):
@@ -137,6 +120,10 @@ def main():
             "wl_expiration_cleanup: mapping file not found: %s\n" % MAPPING_FILE
         )
         return
+
+    # Local csv import only here — read() of the mapping file is a small,
+    # cross-module concern; the per-CSV read/write is via wl_csv.
+    import csv
 
     with open(MAPPING_FILE, "r", newline="", encoding="utf-8-sig") as fh:
         mapping = list(csv.DictReader(fh))
@@ -161,24 +148,26 @@ def main():
         if not os.path.isfile(path):
             continue
 
-        headers, rows = read_csv_file(path)
+        headers, rows = read_csv(path)
 
-        if not find_expire_column(headers):
+        if not get_expire_column(headers):
             continue
 
-        kept, expired = remove_expired_rows(headers, rows)
+        kept, expired = partition_expired(headers, rows)
 
         if not expired:
             continue
 
-        write_csv_file(path, headers, kept)
+        # wl_csv.write_csv writes atomically (temp + rename) and updates
+        # the expected-hash registry — FIM will NOT flag this as tampering.
+        write_csv(path, headers, kept)
         total_removed += len(expired)
 
         expired_clean = [
             {k: v for k, v in r.items() if not k.startswith("_")}
             for r in expired
         ]
-        value_lines = []
+        value_lines: List[str] = []
         for i, entry_row in enumerate(expired_clean, 1):
             for col, val in sorted(entry_row.items()):
                 value_lines.append("{}_row_{}: {}".format(col, i, val))
