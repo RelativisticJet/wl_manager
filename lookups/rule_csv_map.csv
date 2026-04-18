@@ -28,3 +28,7 @@ DR_TEST_2,DR_TEST_2.csv,wl_manager
 DR_TEST_3,DR_TEST_3.csv,wl_manager
 DR_APPROVAL_TEST_1,DR_APPROVAL_TEST_1_v2.csv,wl_manager
 DR999_stress_test,test_gated_csv.csv,wl_manager
+AL13_Test_Rule,AL13_test_limits.csv,wl_manager
+AL15_Super_Exempt,AL15_super_exempt.csv,wl_manager
+AL_Test_Creation,AL_test_1775974555656.csv,wl_manager
+AL_Super_Exempt,AL_super_1775974555731.csv,wl_manager
