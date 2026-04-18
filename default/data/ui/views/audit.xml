@@ -41,39 +41,83 @@
       <default>*</default>
     </input>
 
-    <input type="dropdown" token="action_filter" searchWhenChanged="true">
-      <label>Action</label>
-      <choice value="*">All Actions</choice>
+    <!--
+      ACTION FILTERS — split into two dropdowns by category.
+
+      General Actions = data and request lifecycle (what happened to a CSV /
+        detection rule / approval request). Anything an analyst could initiate
+        or that describes the outcome of a data-change request.
+
+      Admin Actions = governance, configuration, security responses, recovery.
+        Things only privileged roles (admin / superadmin) can do, that aren't
+        about modifying CSV data directly.
+
+      Both dropdowns set the shared $action_filter$ token. The dashboard's
+      "Active Filter" indicator (below) shows which value is currently driving
+      the SPL searches. Picking from either dropdown updates the active filter;
+      picking "All ___ Actions" in either dropdown resets the filter to *.
+
+      When adding a new action choice in the future:
+        - Does an analyst do this, or is it about CSV/request lifecycle? -> General
+        - Is it admin/superadmin governance, security, or recovery? -> Admin
+    -->
+
+    <input type="dropdown" token="general_action_display" searchWhenChanged="true">
+      <label>General Action</label>
+      <choice value="*">All General Actions</choice>
       <choice value="row_added">Row Added</choice>
       <choice value="row_removed">Row Removed</choice>
       <choice value="row_edited">Row Edited</choice>
+      <choice value="row_reordered">Row Reordered</choice>
       <choice value="auto_removed">Auto Removed</choice>
       <choice value="revert">Revert</choice>
-      <choice value="column_removed">Column Removed</choice>
       <choice value="column_added">Column Added</choice>
-      <choice value="row_reordered">Row Reordered</choice>
+      <choice value="column_removed">Column Removed</choice>
       <choice value="column_reordered">Column Reordered</choice>
       <choice value="column_renamed">Column Renamed</choice>
-      <choice value="audit_exported">Audit Exported</choice>
-      <choice value="csv_exported">CSV Exported</choice>
-      <choice value="csv_imported">CSV Imported</choice>
       <choice value="csv_created">CSV Created</choice>
+      <choice value="csv_removed">CSV Removed</choice>
+      <choice value="csv_imported">CSV Imported</choice>
+      <choice value="csv_exported">CSV Exported</choice>
       <choice value="dr_created">Detection Rule Created</choice>
       <choice value="dr_removed">Detection Rule Deleted</choice>
-      <choice value="csv_removed">CSV Removed</choice>
+      <choice value="audit_exported">Audit Exported</choice>
       <choice value="request_submitted">Request Submitted</choice>
       <choice value="request_approved">Request Approved</choice>
       <choice value="request_rejected">Request Rejected</choice>
       <choice value="request_failed">Request Failed</choice>
       <choice value="request_cancelled">Request Cancelled</choice>
       <choice value="request_auto_cancelled">Request Auto-Cancelled</choice>
+      <default>*</default>
+    </input>
+
+    <input type="dropdown" token="admin_action_display" searchWhenChanged="true">
+      <label>Admin Action</label>
+      <choice value="*">All Admin Actions</choice>
+      <choice value="limit_change">Analyst Limit Changed</choice>
+      <choice value="admin_limit_change">Admin Limit Changed</choice>
+      <choice value="dual_approval_submitted">Dual-Approval Submitted</choice>
+      <choice value="dual_approval_approved">Dual-Approval Approved</choice>
+      <choice value="dual_approval_rejected">Dual-Approval Rejected</choice>
+      <choice value="emergency_lockdown_activated">Lockdown Activated</choice>
+      <choice value="emergency_lockdown_deactivated">Lockdown Deactivated</choice>
+      <choice value="factory_reset_executed">Factory Reset</choice>
+      <choice value="mass_usage_reset_executed">Mass Usage Reset</choice>
       <choice value="trash_restored">Trash Restored</choice>
       <choice value="trash_purged">Trash Purged</choice>
       <choice value="trash_retention_changed">Trash Retention Changed</choice>
+      <choice value="limit_defaults_saved">Limit Defaults Saved</choice>
+      <choice value="bootstrap_csv_hashes">Bootstrap CSV Hashes</choice>
+      <choice value="bootstrap_csv_hash_changed">Bootstrap Hash Changed</choice>
+      <choice value="fim_deploy_window_start">FIM Deploy Window Opened</choice>
+      <choice value="fim_deploy_window_end">FIM Deploy Window Closed</choice>
+      <choice value="emergency_unlock">Emergency Unlock (script)</choice>
+      <choice value="reset_cooldowns">Cooldown Reset (script)</choice>
       <default>*</default>
     </input>
 
   </fieldset>
+
 
   <!-- ============================================================
        SUMMARY STATS
@@ -452,9 +496,10 @@
             index=wl_audit sourcetype=wl_audit
               action=$action_filter$*
               analyst=$analyst_filter$ detection_rule=$rule_filter$
-            | where NOT match(action, "^request_|^audit_exported$|^csv_exported$|^csv_imported$|^csv_created$|^dr_created$|^dr_removed$|^csv_removed$|^trash_")
+            | where match(action, "^(row_added|row_removed|row_removed_multiple|row_edited|row_reordered|auto_removed|revert|column_added|column_removed|column_renamed|column_reordered)$")
             | stats values(value{}) as value values(*) as * by action csv_file analyst timestamp
             | sort -timestamp
+            | eval _raw_ts=timestamp
             | eval timestamp=if(match(timestamp, "^\d+\.?\d*$"), strftime(timestamp, "%d-%m-%Y %H:%M:%S GMT%:::z"), timestamp)
 
             | eval action_label=case(
@@ -506,15 +551,64 @@
                   "User ".analyst." ".action_label." ".row_change_count." row(s) from ".csv_file." (detection rule - ".detection_rule.") at ".timestamp
               )
             | eval reason=coalesce(row_remove_reason, row_add_reason, revert_reason, row_edit_reason, column_remove_reason, comment, "")
-            | table timestamp action analyst csv_file detection_rule reason row_change_count column_change_count request_id value summary
+            | eval _total_rows=coalesce(row_change_count, column_change_count, 0)
+            | eval value_count=mvcount(value)
+            | eval value_preview=if(value_count > 10,
+                mvjoin(mvindex(value, 0, 9), "
+") . "
+... +" . (value_count - 10) . " more field entries" . if(_total_rows > 0 AND _total_rows != value_count, " (" . _total_rows . " rows affected — click row for details)", " (click row for details)"),
+                mvjoin(value, "
+"))
+            | table timestamp _raw_ts action analyst csv_file detection_rule reason row_change_count column_change_count request_id value_preview summary
+            | rename value_preview AS value
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+        <drilldown>
+          <set token="detail_ts">$row._raw_ts$</set>
+          <set token="detail_action">$row.action$</set>
+          <set token="detail_analyst">$row.analyst$</set>
+          <set token="detail_csv">$row.csv_file$</set>
+        </drilldown>
+        <option name="count">5</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <!-- Detail panel — appears when a Data Changes row is clicked.
+       detail_ts is the raw epoch timestamp (integer), NOT the formatted string.
+       The close button is wired in audit_trail.js (inline onclick in Splunk
+       dashboard HTML panels doesn't have AMD require in scope). -->
+  <row depends="$detail_ts$">
+    <panel>
+      <title>Change Details — $detail_csv$ by $detail_analyst$ ($detail_action$)</title>
+      <table id="audit_detail_values">
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action="$detail_action$"
+              analyst="$detail_analyst$"
+              csv_file="$detail_csv$"
+            | where timestamp="$detail_ts$" OR timestamp=$detail_ts$
+            | head 1
+            | stats values(value{}) as value
+            | mvexpand value
+            | table value
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
         </search>
         <option name="drilldown">none</option>
-        <option name="count">5</option>
+        <option name="count">10</option>
         <option name="wrap">true</option>
       </table>
+      <html>
+        <div style="padding: 6px 12px;">
+          <span id="wl-close-details" style="display:inline-block;padding:4px 12px;background:#c0392b;color:#fff;border-radius:4px;font-size:12px;cursor:pointer;font-weight:600;user-select:none">Close Details</span>
+        </div>
+      </html>
     </panel>
   </row>
 
@@ -591,6 +685,264 @@
               )
             | eval reason=coalesce(row_remove_reason, row_add_reason, revert_reason, row_edit_reason, column_remove_reason, rejection_reason, failure_reason, cancellation_reason, comment, "")
             | table timestamp action analyst csv_file detection_rule reason request_id approval_action_type requester status export_file summary
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="count">5</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <!-- ============================================================
+       PRIVILEGED ADMIN ACTIONS
+       ============================================================ -->
+  <row>
+    <panel>
+      <title>Privileged Admin Actions</title>
+      <table id="audit_table_admin">
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$
+            | where match(action, "^(limit_change|admin_limit_change|limit_defaults_saved|dual_approval_submitted|dual_approval_approved|dual_approval_rejected|factory_reset_executed|mass_usage_reset_executed|emergency_lockdown_activated|emergency_lockdown_deactivated|trash_purged|bootstrap_csv_hashes|bootstrap_csv_hash_changed|fim_deploy_window_start|fim_deploy_window_end)$")
+            | stats values(*) as * by action analyst timestamp
+            | sort -timestamp
+            | eval timestamp=if(match(timestamp, "^\d+\.?\d*$"), strftime(timestamp, "%d-%m-%Y %H:%M:%S GMT%:::z"), timestamp)
+
+            | eval severity=case(
+                action=="emergency_lockdown_activated",   "CRITICAL",
+                action=="bootstrap_csv_hash_changed",     "CRITICAL",
+                action=="emergency_lockdown_deactivated", "HIGH",
+                action=="factory_reset_executed",         "HIGH",
+                action=="mass_usage_reset_executed",      "HIGH",
+                action=="trash_purged",                   "HIGH",
+                action=="bootstrap_csv_hashes",           "HIGH",
+                action=="fim_deploy_window_start",        "HIGH",
+                action=="dual_approval_submitted",        "MEDIUM",
+                action=="dual_approval_approved",         "MEDIUM",
+                action=="dual_approval_rejected",         "LOW",
+                action=="admin_limit_change",             "MEDIUM",
+                action=="limit_defaults_saved",           "MEDIUM",
+                action=="limit_change",                   "LOW",
+                action=="fim_deploy_window_end",          "INFO",
+                1==1, "INFO"
+              )
+
+            | eval action_label=case(
+                action=="limit_change",                     "Analyst Limits Changed",
+                action=="admin_limit_change",               "Admin Limits Changed",
+                action=="limit_defaults_saved",             "Limit Defaults Saved",
+                action=="dual_approval_submitted",          "Dual-Approval Submitted",
+                action=="dual_approval_approved",           "Dual-Approval Approved",
+                action=="dual_approval_rejected",           "Dual-Approval Rejected",
+                action=="factory_reset_executed",           "Factory Reset Executed",
+                action=="mass_usage_reset_executed",        "Mass Usage Reset",
+                action=="emergency_lockdown_activated",     "LOCKDOWN ACTIVATED",
+                action=="emergency_lockdown_deactivated",   "Lockdown Deactivated",
+                action=="trash_purged",                     "Trash Purged",
+                action=="bootstrap_csv_hashes",             "CSV Hash Registry Bootstrap",
+                action=="bootstrap_csv_hash_changed",       "CSV Hash CHANGED at Bootstrap",
+                action=="fim_deploy_window_start",          "FIM Deploy Window Opened",
+                action=="fim_deploy_window_end",            "FIM Deploy Window Closed",
+                1==1, action
+              )
+
+            | eval details=case(
+                action=="limit_change",
+                  coalesce(change_count, "?")." setting(s) changed for ".coalesce(target_analyst, "(self)"),
+                action=="admin_limit_change",
+                  coalesce(change_count, "?")." admin limit(s) changed",
+                action=="limit_defaults_saved",
+                  "Analyst-limit defaults updated by superadmin",
+                action=="dual_approval_submitted",
+                  "Action: ".coalesce(approval_action_type, "?")." — ".coalesce(comment, "(no comment)"),
+                action=="dual_approval_approved",
+                  "Approved ".coalesce(approval_action_type, "?")." by ".coalesce(requester, "?")." — ".coalesce(admin_comment, "(no comment)"),
+                action=="dual_approval_rejected",
+                  "Rejected ".coalesce(approval_action_type, "?")." by ".coalesce(requester, "?")." — ".coalesce(admin_comment, "(no comment)"),
+                action=="factory_reset_executed",
+                  "All analyst limits reset to factory defaults (dual-approved)",
+                action=="mass_usage_reset_executed",
+                  "All analyst counters reset to zero (dual-approved)",
+                action=="emergency_lockdown_activated",
+                  "Reason: ".coalesce(reason, "(no reason given)"),
+                action=="emergency_lockdown_deactivated",
+                  "Originally locked by ".coalesce(originally_locked_by, "(unknown)"),
+                action=="trash_purged",
+                  coalesce(item_type, "item")." '".coalesce(name, "(unknown)")."' permanently deleted".if(dual_approved=="True"," (dual-approved)",""),
+                action=="bootstrap_csv_hashes",
+                  "Re-bootstrapped expected-hash registry: ".coalesce(hashed_count, "?")." CSVs hashed, ".coalesce(changed_count, "0")." changed, ".coalesce(missing_count, "0")." missing",
+                action=="bootstrap_csv_hash_changed",
+                  "Hash for ".coalesce(csv_file, "(unknown CSV)")." changed during bootstrap — investigate (possible bypass laundering)",
+                action=="fim_deploy_window_start",
+                  "Window opened for ".coalesce(duration_minutes, "?")." min — reason: ".coalesce(reason, "(none)"),
+                action=="fim_deploy_window_end",
+                  "Window closed",
+                1==1, coalesce(comment, "")
+              )
+
+            | table timestamp severity action_label analyst details request_id
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="count">10</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <!-- ============================================================
+       FILE INTEGRITY MONITOR ALERTS
+       ============================================================ -->
+  <row>
+    <panel>
+      <title>File Integrity Monitor Alerts</title>
+      <table id="audit_table_fim">
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_fim
+            | search action=fim_*
+            | sort -timestamp
+            | eval timestamp_human=if(isnull(timestamp_human), strftime(timestamp, "%d-%m-%Y %H:%M:%S UTC"), timestamp_human)
+            | eval severity=coalesce(severity, case(
+                action=="fim_baseline_tampered",            "CRITICAL",
+                action=="fim_baseline_hmac_mismatch",       "CRITICAL",
+                action=="fim_baseline_kv_fs_divergence",    "CRITICAL",
+                action=="fim_kv_baseline_checksum_mismatch","CRITICAL",
+                action=="fim_fs_baseline_permission_denied","CRITICAL",
+                action=="fim_fs_baseline_rebuild_failed",   "CRITICAL",
+                action=="fim_csv_hash_registry_tampered",   "CRITICAL",
+                action=="fim_lookups_dir_unreadable",       "CRITICAL",
+                action=="fim_scripted_input_no_session_key","CRITICAL",
+                action=="fim_fs_baseline_missing_or_tampered","HIGH",
+                action=="fim_csv_external_modification",    "HIGH",
+                action=="fim_csv_external_deletion",        "HIGH",
+                action=="fim_csv_external_creation",        "HIGH",
+                action=="fim_csv_unregistered",             "HIGH",
+                action=="fim_lookups_dir_mode_changed",     "HIGH",
+                action=="fim_file_modified",                "HIGH",
+                action=="fim_file_removed",                 "HIGH",
+                action=="fim_watch_file_modified",          "HIGH",
+                action=="fim_watch_file_removed",           "HIGH",
+                action=="fim_file_appeared",                "MEDIUM",
+                action=="fim_watch_file_appeared",          "MEDIUM",
+                action=="fim_baseline_rebuilt_no_source",   "MEDIUM",
+                action=="fim_baseline_initialized",         "INFO",
+                action=="fim_csv_auto_bootstrap",           "INFO",
+                action=="fim_watch_started",                "INFO",
+                action=="fim_watch_stopped",                "INFO",
+                action=="fim_watch_heartbeat",              "INFO",
+                1==1, "INFO"
+              ))
+            | eval _path=coalesce(monitored_path, path, csv_file, "")
+            | eval summary=case(
+                action=="fim_baseline_initialized",
+                  "FIM baseline established (".coalesce(file_count, "?")." files watched)",
+                action=="fim_file_modified" OR action=="fim_watch_file_modified",
+                  "File modified outside deploy: ".coalesce(_path, "(unknown path)"),
+                action=="fim_file_removed" OR action=="fim_watch_file_removed",
+                  "File removed: ".coalesce(_path, "(unknown path)"),
+                action=="fim_file_appeared" OR action=="fim_watch_file_appeared",
+                  "Unexpected file appeared: ".coalesce(_path, "(unknown path)"),
+                action=="fim_baseline_tampered",
+                  "FIM baseline tampered (reason: ".coalesce(reason, "unknown").")",
+                action=="fim_baseline_hmac_mismatch",
+                  "FIM baseline HMAC did not verify — possible key rotation or attack",
+                action=="fim_baseline_kv_fs_divergence",
+                  "Filesystem and KV-store baselines disagree — one source was tampered with (fs=".coalesce(fs_file_count, "?").", kv=".coalesce(kv_file_count, "?").")",
+                action=="fim_kv_baseline_checksum_mismatch",
+                  "KV-store baseline HMAC failed; rebuilding from filesystem",
+                action=="fim_fs_baseline_permission_denied",
+                  "FIM baseline file unreadable (likely root-owned). Fix: chown splunk:splunk ".coalesce(_path, "the baseline file"),
+                action=="fim_fs_baseline_rebuild_failed",
+                  "Cannot rebuild filesystem baseline (reason: ".coalesce(reason, "unknown")."). Operator action required.",
+                action=="fim_fs_baseline_missing_or_tampered",
+                  "Filesystem baseline missing/tampered (status: ".coalesce(fs_status, "?").") — KV is now authoritative",
+                action=="fim_baseline_rebuilt_no_source",
+                  "FIM baseline rebuilt from scratch — no prior baseline existed in either store",
+                action=="fim_csv_external_modification",
+                  "CSV modified outside the handler (bypass attempt): ".coalesce(_path, "(unknown CSV)"),
+                action=="fim_csv_external_deletion",
+                  "CSV deleted outside the handler: ".coalesce(_path, "(unknown CSV)"),
+                action=="fim_csv_external_creation",
+                  "Unregistered CSV appeared in lookups dir: ".coalesce(_path, "(unknown path)"),
+                action=="fim_csv_unregistered",
+                  "Managed CSV is missing from the expected-hash registry: ".coalesce(_path, "(unknown CSV)"),
+                action=="fim_csv_hash_registry_tampered",
+                  "CSV hash registry HMAC failed — fail-closed; all CSVs treated as unregistered",
+                action=="fim_csv_auto_bootstrap",
+                  "CSV expected-hash registry auto-created on first run (".coalesce(file_count, "?")." CSVs)",
+                action=="fim_lookups_dir_mode_changed",
+                  "Lookups directory permission mode changed: ".coalesce(old_mode, "?")." -> ".coalesce(new_mode, "?"),
+                action=="fim_lookups_dir_unreadable",
+                  "Lookups directory unreadable — FIM cannot scan",
+                action=="fim_scripted_input_no_session_key",
+                  "FIM scripted input has no session key — passAuth dropped or misconfigured",
+                action=="fim_watch_started", "Continuous CSV watcher started",
+                action=="fim_watch_stopped", "Continuous CSV watcher stopped",
+                action=="fim_watch_heartbeat", "Watcher heartbeat (still alive)",
+                1==1, coalesce(details, action)
+              )
+            | table timestamp_human severity action _path old_hash new_hash summary
+            | rename _path AS path
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="count">10</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <!-- ============================================================
+       OUT-OF-BAND RECOVERY (emergency_unlock.sh / reset_cooldowns.sh)
+       ============================================================ -->
+  <row>
+    <panel>
+      <title>Out-of-Band Recovery Actions</title>
+      <table id="audit_table_recovery">
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit_recovery
+            | sort -timestamp
+            | eval timestamp_human=if(isnull(timestamp_human), strftime(timestamp, "%d-%m-%Y %H:%M:%S UTC"), timestamp_human)
+            | eval severity=case(
+                action=="emergency_unlock",       "CRITICAL",
+                action=="reset_cooldowns",        "HIGH",
+                action=="migrate_cooldowns",      "HIGH",
+                action=="fim_deploy_window_start","HIGH",
+                action=="fim_deploy_window_end",  "INFO",
+                1==1, "HIGH"
+              )
+            | eval _by=coalesce(host_user, "unknown")
+            | eval _ctx=coalesce(container, source, "n/a")
+            | eval _why=coalesce(reason, reason_text, "(no reason given)")
+            | eval _script=coalesce(script, "n/a")
+            | eval summary=case(
+                action=="emergency_unlock",
+                  "Emergency unlock script run by " . _by . " on " . _ctx . " — " . _why,
+                action=="reset_cooldowns",
+                  "Cooldown reset run by " . _by . " on " . _ctx . " — " . _why,
+                action=="migrate_cooldowns",
+                  "Cooldown schema migration v" . coalesce(from_version, "?") . " -> v" . coalesce(to_version, "?")
+                  . " (status: " . coalesce(status, "?") . if(isnull(reason_text) OR reason_text=="", "", ", " . reason_text) . ")",
+                action=="fim_deploy_window_start",
+                  "FIM deploy window opened by " . _by . " via " . _ctx . " (duration " . coalesce(duration_min, "?") . " min) — " . _why,
+                action=="fim_deploy_window_end",
+                  "FIM deploy window closed by " . _by . " via " . _ctx,
+                1==1,
+                  coalesce(details, "Recovery action: " . action . " — script=" . _script . " by=" . _by)
+              )
+            | table timestamp_human severity action _script _by _ctx summary
+            | rename _script AS script, _by AS host_user, _ctx AS context
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
