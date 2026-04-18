@@ -1,5 +1,35 @@
 name: CI — Validate & Package
 
+# ═══════════════════════════════════════════════════════════════════════
+# E2E TEST HARNESS GATE — READ BEFORE ENABLING E2E TESTS IN CI
+# ═══════════════════════════════════════════════════════════════════════
+#
+# The E2E tests under tests/e2e/ are DESTRUCTIVE — they delete KV store
+# records, mutate config files, clear tamper flags. Every destructive
+# helper is gated behind TWO checks:
+#
+#   1. WL_TEST_HARNESS=1 environment variable
+#   2. Container name "wl_manager_test"
+#
+# If you add an E2E job to this workflow, set WL_TEST_HARNESS=1 INLINE
+# on each step that runs a test, NEVER as a job-wide env block:
+#
+#     - name: Run harness gate verification
+#       run: WL_TEST_HARNESS=1 node tests/e2e/test_harness_gate.cjs
+#
+#     - name: Run cooldown tamper tests
+#       run: WL_TEST_HARNESS=1 node tests/e2e/test_cooldown_tamper.cjs
+#
+# DO NOT set WL_TEST_HARNESS=1 under `env:` at workflow or job scope —
+# that leaks the variable into unrelated steps and defeats the point
+# of the gate.
+#
+# DO NOT copy this env var to any other repository, `.env` file, or
+# shared shell profile.
+#
+# See tests/e2e/README.md for the full rationale.
+# ═══════════════════════════════════════════════════════════════════════
+
 on:
   push:
     branches: [main]

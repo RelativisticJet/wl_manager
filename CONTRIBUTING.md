@@ -21,6 +21,17 @@ make docker-wait          # Wait until Splunk is ready (~90s)
 
 Open `http://localhost:8000` and log in with `admin` / `Chang3d!` (override with `SPLUNK_PASSWORD` env var).
 
+### Pre-commit Hooks
+
+Install the pre-commit hook to catch common issues before they reach CI:
+
+```bash
+cp scripts/pre-commit .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+The hook checks for: CLAUDE.md accidentally staged, `.env` files, `console.log` in production JS, `debugger` statements, Python syntax errors, and hardcoded credentials.
+
 ### Development Workflow
 
 1. Make changes to source files
@@ -53,6 +64,18 @@ make package     # Build .spl package
 | `scripts/` | Build, validation, and test scripts |
 | `docs/` | User documentation and screenshots |
 | `demo/` | Docker demo scripts and guide |
+
+## Architecture Overview
+
+Read [ARCHITECTURE.md](ARCHITECTURE.md) for the full codebase map, module dependency graph, and design decisions.
+
+### Known Limitations
+
+**`wl_handler.py` (5,200+ lines)** is the main REST endpoint and the largest file. It uses a dispatch-table pattern where each action maps to a wrapper method. The core business logic has been extracted into domain modules (`wl_csv.py`, `wl_rules.py`, `wl_approval.py`, etc.), but the action wrappers remain in the handler. Splitting the handler further is the top refactoring priority.
+
+**Test coverage is 32%** (target: 80%). The extracted domain modules have good coverage (80-100%), but `wl_handler.py` itself has 0% — contributions that add handler-level tests are especially welcome. See [docs/CODE_METRICS.md](docs/CODE_METRICS.md) for per-module coverage.
+
+**`control_panel.js` (2,000 lines)** has not yet been modularized like the main editor. The same AMD module pattern used in `whitelist_manager.js` can be applied here.
 
 ## Guidelines
 
