@@ -235,3 +235,10 @@ MIT License. See [LICENSE](LICENSE) for details.
 ## Contributing
 
 Issues and pull requests welcome at [github.com/RelativisticJet/wl_manager](https://github.com/RelativisticJet/wl_manager).
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR — especially the
+**Security CI (Semgrep Taint Rules)** section. Every PR runs three Splunk-adapted
+Semgrep rules that gate against SSRF, command injection, and path traversal.
+If you add a new validation wrapper (e.g. a path or URL sanitizer), update the
+corresponding `tests/semgrep/*-splunk.yaml` `pattern-sanitizers` list in the
+same PR, or legitimate callers of your wrapper will trip the rule.

@@ -92,6 +92,53 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) for the full codebase map, module depend
 - Path traversal protection required for any file path from user input
 - Sanitize all fields written to the audit index
 
+### Security CI (Semgrep Taint Rules)
+
+A GitHub Actions job ([`.github/workflows/semgrep.yml`](.github/workflows/semgrep.yml))
+runs three Splunk-adapted Semgrep taint rules on every PR and every push to
+`main`. The rules live in [`tests/semgrep/`](tests/semgrep/) and gate against:
+
+- **SSRF** — user payload reaching outbound HTTP calls (`urllib.request.*`, `requests.*`) without a hardcoded-localhost prefix
+- **Command injection** — payload reaching `subprocess.run(..., shell=True)` without `shlex.quote` / `shlex.join`
+- **Path traversal** — payload reaching filesystem calls (`open`, `os.path.join`, `shutil.copy*`, `os.remove`, etc.) without going through `build_csv_path` / `resolve_csv_path` / `is_safe_filename` or a canonicalization sanitizer
+
+**Run them locally before pushing** (same command CI uses):
+
+```bash
+docker run --rm \
+  -v "$(pwd)/tests/semgrep:/rules:ro" \
+  -v "$(pwd)/bin:/src:ro" \
+  semgrep/semgrep semgrep --config=/rules --error --metrics=off /src
+```
+
+**When a finding fires — decision tree, in order:**
+
+1. **Is it a real bug?** (Payload really does reach a sink without validation.)
+   → **Fix the code.** Route the path through `build_csv_path()`, wrap the
+   subprocess arg in `shlex.quote()`, validate the URL against an allowlist, etc.
+
+2. **Did you add a new validation wrapper the rule doesn't know about?**
+   (e.g. a new `validate_rule_path()` that does `basename` + `startswith(APPS_DIR)` containment)
+   → **Update the rule's `pattern-sanitizers` list** in the relevant
+   `tests/semgrep/*-splunk.yaml`. Add the wrapper name as a new
+   `- pattern: your_wrapper(...)` entry in the **same PR** that introduces
+   the wrapper. This teaches Semgrep about your new defense once, for
+   everyone — otherwise every legitimate caller of your wrapper will
+   trigger a false positive and the next contributor will suppress it.
+
+3. **Is the finding architecturally impossible in that call site?**
+   (e.g. the variable Semgrep flagged is actually a module-level constant
+   that only *looks* like tainted data to the scanner)
+   → Refactor so the scanner's reading matches reality. If truly
+   unavoidable, add `# nosemgrep: <rule-id> — <one-line explanation>` on
+   the line. **Never `# nosemgrep` without the explanation** — a
+   suppression without context becomes permanent dead weight within a
+   month.
+
+See [tests/semgrep/README.md](tests/semgrep/README.md) for rule internals,
+how Semgrep taint mode handles function boundaries, and why the non-taint
+`splunk.ssrf.dynamic-url` rule is kept audit-only (not CI-gated).
+
 ### Commits
 
 - One logical change per commit
