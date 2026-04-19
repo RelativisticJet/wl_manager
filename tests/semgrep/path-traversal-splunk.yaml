@@ -1,0 +1,60 @@
+# Splunk-adapted path-traversal rule.
+# Derived from RAPTOR's engine/semgrep/rules/filesystem/path-traversal.yaml.
+#
+# wl_manager's handler reads CSV filenames from user payload and joins them
+# against OWN_LOOKUPS — this is the highest-value rule to run for us, since
+# path traversal via a crafted csv_file payload was a real concern during
+# the build 552+ hardening work.
+#
+# Changes from the RAPTOR original:
+#   - Added Splunk BaseRestHandler payload sources.
+#   - Added shutil.{copy*, move} and os.rename to the sink list.
+#   - Added os.path.realpath(...) startswith-check as a sanitiser (handler's
+#     actual containment pattern — not just abspath/resolve).
+rules:
+  - id: splunk.path-traversal.taint.python
+    message: >-
+      Splunk handler payload flows into a filesystem path call. Confirm the
+      resolved path is under a trusted root (OWN_LOOKUPS, VERSIONS_DIR, etc.)
+      via a startswith check after realpath.
+    languages: [python]
+    severity: ERROR
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: request.get($_)
+          - pattern: payload.get($_)
+          - pattern: payload[$_]
+          - pattern: flask.request.args[$_]
+          - pattern: flask.request.form[$_]
+          - pattern: input(...)
+    pattern-sinks:
+      - pattern-either:
+          - pattern: open($PATH, ...)
+          - pattern: os.open($PATH, ...)
+          - pattern: os.path.join($BASE, $PATH)
+          - pattern: Path($PATH)
+          - pattern: pathlib.Path($PATH)
+          - pattern: shutil.copy($SRC, $DST)
+          - pattern: shutil.copy2($SRC, $DST)
+          - pattern: shutil.move($SRC, $DST)
+          - pattern: os.rename($SRC, $DST)
+          - pattern: os.remove($PATH)
+          - pattern: os.unlink($PATH)
+    pattern-sanitizers:
+      - pattern: os.path.abspath(...)
+      - pattern: pathlib.Path(...).resolve()
+      - pattern: os.path.realpath(...)
+      # Strips directory components — common Python defence against ".."
+      - pattern: os.path.basename(...)
+      # Validation via startswith-check on an allowlist root
+      - pattern: $X.startswith($ROOT)
+      # wl_validation wrappers — applies is_safe_filename + basename +
+      # normpath + startswith(APPS_DIR) containment; teach the rule so
+      # downstream consumers of the returned path aren't re-flagged.
+      - pattern: build_csv_path(...)
+      - pattern: resolve_csv_path(...)
+      - pattern: is_safe_filename(...)
+    metadata:
+      cwe: ["CWE-22"]
+      adapted_from: "gadievron/raptor filesystem/path-traversal.yaml"

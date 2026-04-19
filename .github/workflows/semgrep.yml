@@ -1,0 +1,40 @@
+name: Semgrep — Splunk-adapted security rules
+
+# ═══════════════════════════════════════════════════════════════════════
+# Splunk-adapted Semgrep taint rules (SSRF, command injection, path
+# traversal) that guard the REST handler's payload → sink flow. Rules
+# live under tests/semgrep/; see that directory's README.md for origin
+# (RAPTOR / gadievron), adaptation notes, and the local-run command.
+#
+# This job runs on every push to main and every PR targeting main, and
+# fails fast on any finding (--error).
+# ═══════════════════════════════════════════════════════════════════════
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: Run Semgrep taint rules
+    runs-on: ubuntu-latest
+    # The official Semgrep image pins its own Python + rule parser, so
+    # no language-specific setup is needed here.
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Splunk-adapted taint rules against bin/
+        run: |
+          semgrep \
+            --config=tests/semgrep \
+            --error \
+            --metrics=off \
+            --disable-version-check \
+            bin/
