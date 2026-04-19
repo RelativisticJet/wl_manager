@@ -160,9 +160,29 @@ from wl_audit import build_audit_event, post_audit_event
 # Layer 3: Daily Limits & File Locking (imported from Phase 3 modules)
 # ---------------------------------------------------------------------------
 from wl_limits import (
+    # Public API (used directly by handler action dispatchers)
     check_analyst_limit, check_admin_limit, get_limit_status,
     increment_daily_limit, set_limit_config, reset_daily_limits,
-    get_limit_error_msg
+    get_limit_error_msg,
+    # Underscore-aliased imports replace prior handler-local duplicates
+    # (Phase 3a consolidation — see CLAUDE.md Decision Log 2026-04-19).
+    # Prior drift: handler's locals wrote to lookups/_versions/... while
+    # wl_limits read from lookups/..., silently bypassing the
+    # approval-gate rate-limit path (wl_approval.check_approval_gate).
+    compute_config_checksum as _compute_config_checksum,
+    read_limit_config as _read_limit_config,
+    write_limit_config as _write_limit_config,
+    read_admin_limits as _read_admin_limits,
+    write_admin_limits as _write_admin_limits,
+    read_daily_limits as _read_daily_limits,
+    write_daily_limits as _write_daily_limits,
+    get_counter_period_key as _get_counter_period_key,
+    get_admin_counter_period_key as _get_admin_counter_period_key,
+    check_daily_limit as _check_daily_limit,
+    check_admin_daily_limit as _check_admin_daily_limit,
+    check_admin_permission as _check_admin_permission,
+    increment_admin_daily_limit as _increment_admin_daily_limit,
+    increment_daily_limit as _increment_daily_limit,
 )
 from wl_filelock import file_lock
 
@@ -1000,212 +1020,10 @@ def _record_cooldown(user, action_type, session_key):
     _write_cooldowns(session_key, cooldowns, updated_by=user)
 
 
-def _get_limit_config_path():
-    """Return path to the daily limit config JSON file."""
-    versions_dir = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
-    os.makedirs(versions_dir, exist_ok=True)
-    return os.path.join(versions_dir, LIMIT_CONFIG_FILE)
-
-
-def _compute_config_checksum(config_data):
-    """Compute HMAC-SHA256 checksum for config integrity verification.
-
-    Uses a deterministic key derived from the app name. Detects accidental
-    corruption and naive manual edits (not cryptographically secure against
-    attackers with source code access, but raises the bar).
-    """
-    import hashlib
-    import hmac
-    # Exclude the checksum field itself from the computation
-    filtered = {k: v for k, v in config_data.items() if k != "_checksum"}
-    payload = json.dumps(filtered, sort_keys=True, default=str)
-    key = b"wl_manager_config_integrity_v1"
-    return hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
-
-
-def _read_limit_config():
-    """Read daily limit config, returning defaults if file doesn't exist."""
-    path = _get_limit_config_path()
-    if not os.path.isfile(path):
-        return dict(DEFAULT_LIMITS)
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            config = json.load(fh)
-
-            # Integrity check — log warning if checksum doesn't match
-            stored_checksum = config.pop("_checksum", None)
-            if stored_checksum is not None:
-                expected = _compute_config_checksum(config)
-                if stored_checksum != expected:
-                    _logger.warning(
-                        "CONFIG_INTEGRITY_FAILED path=%s "
-                        "stored=%s expected=%s — possible tampering "
-                        "or corruption", path,
-                        stored_checksum[:12], expected[:12])
-
-            # Migrate old reset_hour_utc (int 0-23) to reset_time_utc ("HH:MM")
-            if "reset_hour_utc" in config and "reset_time_utc" not in config:
-                h = config.pop("reset_hour_utc", 0)
-                if isinstance(h, int) and 0 <= h <= 23:
-                    config["reset_time_utc"] = "{:02d}:00".format(h)
-                else:
-                    config["reset_time_utc"] = "00:00"
-            elif "reset_hour_utc" in config:
-                config.pop("reset_hour_utc", None)
-            # Ensure all default keys exist
-            for k, v in DEFAULT_LIMITS.items():
-                if k not in config:
-                    config[k] = v
-            return config
-    except (json.JSONDecodeError, OSError):
-        return dict(DEFAULT_LIMITS)
-
-
 def _get_threshold(name):
     """Read an approval threshold from config, falling back to defaults."""
     config = _read_limit_config()
     return config.get(name, DEFAULT_LIMITS.get(name, 5))
-
-
-def _write_limit_config(config):
-    """Write daily limit config to disk with integrity checksum."""
-    path = _get_limit_config_path()
-    # Remove old checksum before computing new one
-    config.pop("_checksum", None)
-    config["_checksum"] = _compute_config_checksum(config)
-    with open(path, "w", encoding="utf-8") as fh:
-        if fcntl:
-            try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except (IOError, OSError):
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-        try:
-            json.dump(config, fh, indent=2)
-        finally:
-            if fcntl:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-
-
-def _read_admin_limits():
-    """Read admin-specific limits from the config file.
-
-    Backfills any missing keys from DEFAULT_ADMIN_LIMITS. The returned dict
-    contains limit values, schedule fields, permission toggles, and optionally
-    a ``change_history`` list.
-    """
-    config = _read_limit_config()
-    admin_cfg = config.get("admin_limits", {})
-    # Preserve change_history separately — it's not in DEFAULT_ADMIN_LIMITS
-    # Ensure all default admin limit keys exist
-    for k, v in DEFAULT_ADMIN_LIMITS.items():
-        if k not in admin_cfg:
-            admin_cfg[k] = v
-    return admin_cfg
-
-
-def _write_admin_limits(admin_limits):
-    """Write admin-specific limits to the config file."""
-    config = _read_limit_config()
-    config["admin_limits"] = admin_limits
-    _write_limit_config(config)
-
-
-def _get_admin_counter_period_key():
-    """Return the counter period key for admin limits.
-
-    Uses the admin-specific reset schedule (independent from analyst schedule).
-    """
-    admin_cfg = _read_admin_limits()
-    return _get_counter_period_key(config=admin_cfg)
-
-
-def _check_admin_daily_limit(user, action_type, action_count=1):
-    """Check if an admin has exceeded their limit for an action.
-
-    Returns (allowed, current_count, maximum).
-    Uses the same counter structure as editor limits:
-      counters[period_key][user][action_type]
-    with "admin_" prefix on the action type.
-    """
-    admin_cfg = _read_admin_limits()
-    max_count = admin_cfg.get(action_type,
-                              DEFAULT_ADMIN_LIMITS.get(action_type, 999))
-    # 0 = disabled (action not permitted at all)
-    if max_count == 0:
-        return False, 0, 0
-
-    admin_action = "admin_" + action_type
-    counters = _read_daily_limits()
-    period_key = _get_admin_counter_period_key()
-    period_data = counters.get(period_key, {})
-    user_data = period_data.get(user, {})
-    current = user_data.get(admin_action, 0)
-
-    allowed = (current + action_count) <= max_count
-    return allowed, current, max_count
-
-
-def _check_admin_permission(permission_key):
-    """Check if an admin permission toggle is enabled.
-
-    Returns True if the permission is allowed, False if disabled.
-    """
-    admin_cfg = _read_admin_limits()
-    return bool(admin_cfg.get(permission_key,
-                              DEFAULT_ADMIN_LIMITS.get(permission_key, True)))
-
-
-def _increment_admin_daily_limit(user, action_type, count=1):
-    """Increment an admin's counter for an action type.
-
-    Counter structure: counters[period_key][user][action_type]
-    matches the existing editor counter layout.
-    """
-    admin_action = "admin_" + action_type
-    counters = _read_daily_limits()
-    period_key = _get_admin_counter_period_key()
-    if period_key not in counters:
-        counters[period_key] = {}
-    if user not in counters[period_key]:
-        counters[period_key][user] = {}
-    counters[period_key][user][admin_action] = \
-        counters[period_key][user].get(admin_action, 0) + count
-    _write_daily_limits(counters)
-
-
-def _get_daily_limits_path():
-    """Return path to the daily limits counters JSON file."""
-    versions_dir = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
-    os.makedirs(versions_dir, exist_ok=True)
-    return os.path.join(versions_dir, DAILY_LIMITS_FILE)
-
-
-def _read_daily_limits():
-    """Read daily limit counters, or empty dict on error."""
-    path = _get_daily_limits_path()
-    if not os.path.isfile(path):
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def _write_daily_limits(counters):
-    """Write daily limit counters to disk."""
-    path = _get_daily_limits_path()
-    with open(path, "w", encoding="utf-8") as fh:
-        if fcntl:
-            try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except (IOError, OSError):
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-        try:
-            json.dump(counters, fh, indent=2)
-        finally:
-            if fcntl:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1223,124 +1041,6 @@ def _generate_request_id(user, csv_file="", detection_rule=""):
     ts = now.strftime("%Y%m%d_%H%M%S")
     suffix = "{:04d}".format(random.randint(0, 9999))
     return "req_{}_{}_{}" .format(ts, suffix, user)
-
-
-def _get_counter_period_key(config=None):
-    """Return the counter period key based on frequency and reset schedule.
-
-    Finds the most recent reset boundary and returns a unique key for that
-    period.  The boundary is defined by:
-      - reset_time_utc (HH:MM) for all frequencies
-      - reset_day_of_week (0=Mon..6=Sun) for weekly
-      - reset_day_of_month (1-31, clamped) for monthly
-      - reset_month (1-12) + reset_day_of_year (1-31, clamped) for yearly
-
-    Keys by frequency:
-      never   -> "permanent"
-      daily   -> "2026-03-03"
-      weekly  -> "2026-W09-Wed"  (includes day for uniqueness)
-      monthly -> "2026-03"
-      yearly  -> "2026"
-
-    Args:
-        config: Optional config dict with reset_frequency and schedule keys.
-                If None, reads from the main analyst limit config.
-    """
-    if config is None:
-        config = _read_limit_config()
-    freq = config.get("reset_frequency", "daily")
-
-    if freq == "never":
-        return "permanent"
-
-    now = datetime.now(timezone.utc)
-
-    # Parse reset time
-    reset_time = config.get("reset_time_utc", "00:00")
-    try:
-        parts = reset_time.split(":")
-        rh, rm = int(parts[0]), int(parts[1])
-    except (ValueError, IndexError):
-        rh, rm = 0, 0
-
-    now_time_minutes = now.hour * 60 + now.minute
-
-    if freq == "daily":
-        reset_minutes = rh * 60 + rm
-        if now_time_minutes >= reset_minutes:
-            return now.strftime("%Y-%m-%d")
-        else:
-            yesterday = now - timedelta(days=1)
-            return yesterday.strftime("%Y-%m-%d")
-
-    elif freq == "weekly":
-        cfg_dow = config.get("reset_day_of_week", 0)  # 0=Mon
-        if not isinstance(cfg_dow, int) or not (0 <= cfg_dow <= 6):
-            cfg_dow = 0
-        # How many days since the configured weekday?
-        days_since = (now.weekday() - cfg_dow) % 7
-        candidate = now - timedelta(days=days_since)
-        boundary = candidate.replace(hour=rh, minute=rm, second=0, microsecond=0)
-        if now < boundary:
-            # Haven't reached reset time on this weekday yet — go back 7 days
-            candidate = candidate - timedelta(days=7)
-        return candidate.strftime("%G-W%V-%a")
-
-    elif freq == "monthly":
-        cfg_dom = config.get("reset_day_of_month", 1)
-        if not isinstance(cfg_dom, int) or not (1 <= cfg_dom <= 31):
-            cfg_dom = 1
-        # Clamp to last day of current month
-        last_day = calendar.monthrange(now.year, now.month)[1]
-        actual_day = min(cfg_dom, last_day)
-        boundary = now.replace(day=actual_day, hour=rh, minute=rm,
-                               second=0, microsecond=0)
-        if now >= boundary:
-            return now.strftime("%Y-%m")
-        else:
-            # Before boundary — still in previous month's period
-            prev = now.replace(day=1) - timedelta(days=1)
-            return prev.strftime("%Y-%m")
-
-    elif freq == "yearly":
-        cfg_month = config.get("reset_month", 1)
-        cfg_day = config.get("reset_day_of_year", 1)
-        if not isinstance(cfg_month, int) or not (1 <= cfg_month <= 12):
-            cfg_month = 1
-        if not isinstance(cfg_day, int) or not (1 <= cfg_day <= 31):
-            cfg_day = 1
-        last_day = calendar.monthrange(now.year, cfg_month)[1]
-        actual_day = min(cfg_day, last_day)
-        try:
-            boundary = now.replace(month=cfg_month, day=actual_day,
-                                   hour=rh, minute=rm, second=0, microsecond=0)
-        except ValueError:
-            boundary = now.replace(month=cfg_month, day=1,
-                                   hour=rh, minute=rm, second=0, microsecond=0)
-        if now >= boundary:
-            return now.strftime("%Y")
-        else:
-            return str(now.year - 1)
-
-    # Fallback: daily
-    return now.strftime("%Y-%m-%d")
-
-
-def _check_daily_limit(user, action_type, action_count=1):
-    """
-    Check if user has room for action_count more items under the daily limit.
-    Returns (allowed: bool, current_count: int, max_count: int).
-    """
-    config = _read_limit_config()
-    max_count = config.get(action_type, DEFAULT_LIMITS.get(action_type, 999))
-
-    counters = _read_daily_limits()
-    today = _get_counter_period_key()
-
-    user_counts = counters.get(today, {}).get(user, {})
-    current = user_counts.get(action_type, 0)
-
-    return current + action_count <= max_count, current, max_count
 
 
 # ── Human-readable labels for limit_type keys ──────────────────────
@@ -1394,39 +1094,6 @@ def _log_superadmin_exemption(user, action_type, detail=""):
     _logger.info(
         "SUPERADMIN_EXEMPTION user=%s action=%s detail=%s",
         user, action_type, detail)
-
-
-def _increment_daily_limit(user, action_type, count=1):
-    """Increment the daily limit counter for a user and action type."""
-    counters = _read_daily_limits()
-    today = _get_counter_period_key()
-
-    # Clean up old period keys (keep only current period)
-    # For "permanent" mode, never discard; for date-based keys, drop older ones
-    if today == "permanent":
-        counters = {k: v for k, v in counters.items() if k == "permanent"}
-    else:
-        counters = {k: v for k, v in counters.items()
-                    if k == today or k >= today}
-    if today not in counters:
-        counters[today] = {}
-    if user not in counters[today]:
-        # Cap tracked analysts per day to prevent unbounded growth.
-        # If cap is hit, log a warning and track under __overflow__ to
-        # still enforce limits rather than silently allowing unlimited.
-        if len(counters[today]) >= MAX_TRACKED_ANALYSTS:
-            _logger.warning(
-                "MAX_TRACKED_ANALYSTS (%d) reached — tracking '%s' "
-                "under overflow bucket", MAX_TRACKED_ANALYSTS, user)
-            user = "__overflow__"
-            if user not in counters[today]:
-                counters[today][user] = {}
-        else:
-            counters[today][user] = {}
-
-    prev = counters[today][user].get(action_type, 0)
-    counters[today][user][action_type] = prev + count
-    _write_daily_limits(counters)
 
 
 def _expire_pending_approvals():
