@@ -7,8 +7,9 @@
 require([
     "jquery",
     "underscore",
-    "splunkjs/mvc/utils"
-], function ($, _, utils) {
+    "splunkjs/mvc/utils",
+    "app/wl_manager/modules/wl_rest"
+], function ($, _, utils, REST) {
 
     var POLL_INTERVAL = 30000;  // 30 seconds
     var bellInjected = false;
@@ -22,31 +23,13 @@ require([
     window.__wlNotifCallbacks = window.__wlNotifCallbacks || [];
 
     // ── REST helpers ──────────────────────────────────────────────
-    var BASE_URL = Splunk.util.make_url(
-        "/splunkd/__raw/services/custom/wl_manager");
-
-    function restGet(params) {
-        params.output_mode = "json";
-        return $.ajax({
-            url: BASE_URL,
-            type: "GET",
-            data: params,
-            dataType: "json",
-        });
-    }
-
-    function restPost(data) {
-        return $.ajax({
-            url: BASE_URL + "?output_mode=json",
-            type: "POST",
-            contentType: "application/json",
-            data: JSON.stringify(data),
-            dataType: "json",
-        });
-    }
-
-    // Detect admin via server-verified API call.
-    // MUST be after BASE_URL and restPost are defined.
+    // Phase 3c consolidation: delegate to wl_rest module rather than
+    // shipping a duplicate restGet/restPost pair (CLAUDE.md 2026-04-19).
+    // notifications.js runs on every page in the app, so a drift here
+    // (e.g. different content-type, different error handling) is
+    // especially painful to diagnose.
+    var restGet  = REST.restGet;
+    var restPost = REST.restPost;
     var isAdmin = false;
     var adminCheckDone = false;
     function detectAdmin() {
