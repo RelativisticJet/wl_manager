@@ -49,6 +49,7 @@ __all__ = [
     "expire_pending_approvals",
     "check_conflicts",
     "cancel_conflicts",
+    "generate_request_id",
 ]
 
 # Module-level constants
@@ -68,14 +69,39 @@ def _get_approval_queue_path() -> str:
     return os.path.join(OWN_LOOKUPS, APPROVAL_QUEUE_FILE)
 
 
-def _generate_request_id() -> str:
-    """
-    Generate unique request ID using UUID4.
+def generate_request_id() -> str:
+    """Generate a unique, opaque request ID.
 
-    Returns:
-        Unique request ID string
+    Returns a UUID4 string (122 bits of entropy — collision probability
+    is effectively zero). Chosen over the legacy
+    ``req_<ts>_<rand>_<user>`` format for two reasons:
+
+    - **Collision resistance.** Second-resolution timestamp + 4 decimal
+      digits of randomness gives ~14 bits of entropy per second; under
+      bursty traffic (many approvals submitted within the same second)
+      collisions are realistically possible.
+    - **No PII leak.** Embedding the creator's username in the ID means
+      the ID shows up in URLs, audit events, and shared logs. A URL
+      visible to another admin reveals whose request it is without the
+      viewer needing to open the record. UUIDs leak nothing.
+
+    Per-request metadata (creator, timestamp, csv, detection_rule)
+    still lives in the approval queue entry — the ID is purely an
+    opaque handle.
+
+    Phase 4 consolidation (2026-04-19): ``wl_handler.py`` previously
+    shipped its own ``_generate_request_id(user, csv_file, rule)``
+    producing the legacy format. Both generators were active in
+    production, so the approval queue held IDs in two formats. This
+    is now the single source of truth. See CLAUDE.md Decision Log.
     """
     return str(uuid.uuid4())
+
+
+# Backward-compat alias — kept so any importer that still references
+# the private underscore name doesn't break. Prefer ``generate_request_id``
+# for new code.
+_generate_request_id = generate_request_id
 
 
 def _is_expired(entry: Dict[str, Any]) -> bool:
@@ -337,7 +363,7 @@ def _create_queue_entry(
         On success: (valid_entry_dict, "")
         On failure: ({}, error_message)
     """
-    request_id = _generate_request_id()
+    request_id = generate_request_id()
     now = int(time.time())
 
     entry = {
@@ -400,7 +426,7 @@ def submit_approval(
     # If no approval needed, return success without queueing
     if not needs_approval:
         entry = {
-            "request_id": _generate_request_id(),
+            "request_id": generate_request_id(),
             "status": "approved",
             "timestamp": int(time.time()),
             "analyst": user,

@@ -192,7 +192,12 @@ from wl_filelock import file_lock
 from wl_approval import (
     get_pending_for_csv, get_pending_for_rule, submit_approval,
     submit_dual_approval, check_approval_gate, expire_pending_approvals,
-    check_conflicts, cancel_conflicts
+    check_conflicts, cancel_conflicts,
+    # Canonical request-ID generator (Phase 4 consolidation — CLAUDE.md
+    # 2026-04-19). Prior to this, handler shipped its own version that
+    # produced a different format, so the approval queue held IDs in
+    # two shapes depending on insertion path.
+    generate_request_id as _generate_request_id,
 )
 # Layer 5: Approval replay orchestration
 from wl_replay import execute_approved_action
@@ -1029,19 +1034,6 @@ def _get_threshold(name):
 # ══════════════════════════════════════════════════════════════════
 # Trash / soft-delete helpers
 # ══════════════════════════════════════════════════════════════════
-
-def _generate_request_id(user, csv_file="", detection_rule=""):
-    """Generate a unique approval request ID.
-
-    Format: req_{timestamp}_{random}_{user}
-    """
-    import random
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc)
-    ts = now.strftime("%Y%m%d_%H%M%S")
-    suffix = "{:04d}".format(random.randint(0, 9999))
-    return "req_{}_{}_{}" .format(ts, suffix, user)
-
 
 # ── Human-readable labels for limit_type keys ──────────────────────
 _LIMIT_LABELS = {
@@ -4827,7 +4819,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 "pending_full": True,
             })
 
-        request_id = _generate_request_id(user, csv_file, detection_rule)
+        # Canonical generator takes no args — creator/csv/rule are
+        # already stored as sibling fields on the queue entry, so the
+        # ID doesn't need to carry them. See wl_approval.generate_request_id.
+        request_id = _generate_request_id()
         raw_description = payload.get("description", "")
         ascii_err = validate_ascii_text(raw_description)
         if ascii_err:
@@ -5195,7 +5190,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                              "first.".format(len(sa_users))})
 
         # Create the dual-approval request in the queue
-        request_id = _generate_request_id(user)
+        request_id = _generate_request_id()
         now = int(time.time())
         entry = {
             "request_id": request_id,
