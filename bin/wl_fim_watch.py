@@ -54,6 +54,11 @@ from wl_hmac_key import (  # noqa: E402
     read_expected_hashes as _hmac_read_expected_hashes,
     write_expected_hashes as _hmac_write_expected_hashes,
 )
+# Shared FIM helpers (Phase 3b consolidation — see CLAUDE.md 2026-04-19).
+from wl_fim_common import (  # noqa: E402
+    file_hash_sha256 as _file_hash,
+    queue_fim_notification,
+)
 LOOKUPS_DIR = os.path.join(APP_DIR, "lookups")
 VERSIONS_DIR = os.path.join(LOOKUPS_DIR, "_versions")
 MAPPING_FILE = os.path.join(LOOKUPS_DIR, "rule_csv_map.csv")
@@ -110,39 +115,14 @@ FIM_NOTIFY_SEVERITIES = {"HIGH", "CRITICAL"}
 
 
 def _queue_fim_notification(event):
-    """Append HIGH/CRITICAL event to the alert queue for in-app bell.
+    """Push a watcher event into the FIM bell-notification queue.
 
-    Matches wl_fim.py's helper so both scripts share the format. Handler
-    drains lazily on next superadmin poll.
-
-    Events use `monitored_path` (filesystem) and/or `csv_file` (CSVs).
-    Prefer monitored_path > path > csv_file for the identifier.
+    Thin wrapper over ``wl_fim_common.queue_fim_notification`` that
+    bakes in this script's queue path. The caller's ``_emit`` sets
+    ``source_script = "wl_fim_watch"`` before invoking, so the event
+    remains traceable back to this daemon.
     """
-    try:
-        path = (event.get("monitored_path", "")
-                or event.get("path", "")
-                or event.get("csv_file", ""))
-        key_parts = [
-            str(event.get("timestamp", "")),
-            event.get("action", ""),
-            path,
-        ]
-        event_id = "fim_" + "_".join(p.replace("/", "-") for p in key_parts)
-        queued = {
-            "id": event_id,
-            "timestamp": event.get("timestamp"),
-            "action": event.get("action"),
-            "severity": event.get("severity"),
-            "path": path,
-            "lockdown_active": event.get("lockdown_active", False),
-            "details": event.get("details", "")[:500],
-            "source_script": event.get("source_script", "wl_fim_watch"),
-        }
-        os.makedirs(os.path.dirname(FIM_ALERT_QUEUE_PATH), exist_ok=True)
-        with open(FIM_ALERT_QUEUE_PATH, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(queued) + "\n")
-    except OSError:
-        pass
+    queue_fim_notification(event, FIM_ALERT_QUEUE_PATH)
 
 
 def _is_lockdown_active():
@@ -190,17 +170,7 @@ def _emit(event):
     sys.stdout.flush()
 
 
-def _file_hash(path):
-    if not os.path.isfile(path):
-        return None
-    try:
-        h = hashlib.sha256()
-        with open(path, "rb") as fh:
-            for chunk in iter(lambda: fh.read(65536), b""):
-                h.update(chunk)
-        return h.hexdigest()
-    except OSError:
-        return None
+# ``_file_hash`` is imported from wl_fim_common as the canonical helper.
 
 
 def _stat_key(path):

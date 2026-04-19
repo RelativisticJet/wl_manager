@@ -24,22 +24,23 @@ APPS_DIR = os.path.join(SPLUNK_HOME, "etc", "apps")
 OWN_LOOKUPS = os.path.join(APPS_DIR, APP_NAME, "lookups")
 MAPPING_FILE = os.path.join(OWN_LOOKUPS, "rule_csv_map.csv")
 
+# Make the app's ``bin/`` directory importable when this script runs
+# as a Splunk custom command (bundled Python may omit it).
+_BIN_DIR = os.path.join(APPS_DIR, APP_NAME, "bin")
+if _BIN_DIR not in sys.path:
+    sys.path.insert(0, _BIN_DIR)
+
 EXPIRE_FORMATS = ("%Y-%m-%d %H:%M", "%Y-%m-%d")
 HIDDEN_FIELDS = {"_added_by", "_added_at", "_review_status"}
 
-# Column names treated as expiration dates (case-insensitive matching).
-EXPIRE_COLUMN_NAMES = {
-    "expires", "expire", "expiration", "expiration_date",
-    "expiry", "termination", "termination_date",
-}
-
-
-def find_expire_column(headers):
-    """Return the first header that matches an expiration column name, or None."""
-    for h in headers:
-        if h.lower() in EXPIRE_COLUMN_NAMES:
-            return h
-    return None
+# Delegate expiration-column detection to the canonical wl_csv helper
+# so this script, the scheduled cleanup job, and the handler all agree
+# on which headers count as "the expires column" (Phase 3b consolidation
+# — see CLAUDE.md 2026-04-19).
+from wl_csv import get_expire_column as find_expire_column  # noqa: E402
+# Re-export EXPIRE_COLUMN_NAMES for any callers still referencing the
+# module-level constant.
+from wl_constants import EXPIRE_COLUMN_NAMES  # noqa: E402,F401
 
 
 def parse_expires(val):
