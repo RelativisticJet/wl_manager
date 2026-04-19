@@ -31,6 +31,9 @@ help: ## Show this help message
 validate: ## Run all validation checks (syntax, security, structure)
 	@bash scripts/validate.sh
 
+doc-check: ## Check docs for drift against app.conf + missing file refs
+	@bash scripts/pre-commit-doc-drift.sh
+
 appinspect: validate ## Run Splunk AppInspect validation (standard + cloud tag sets)
 	@bash scripts/verify_appinspect.sh --both
 
