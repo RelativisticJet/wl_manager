@@ -248,6 +248,60 @@ def test_generate_request_id_format():
     assert req_id.count("-") == 4
 
 
+def test_generate_request_id_is_uuid4_regex():
+    """Regression lock for Phase 4 (2026-04-19).
+
+    Prior to the merge, wl_handler.py shipped an independent generator
+    that produced ``req_<timestamp>_<random>_<user>`` — a different
+    shape entirely, and one that leaked the creator's username into
+    any URL or log that referenced the ID.
+
+    This test locks in the canonical UUID4 format so anyone who
+    re-introduces a custom scheme fails loudly instead of silently
+    producing mixed-format IDs in the approval queue.
+    """
+    import re
+    from wl_approval import generate_request_id  # public canonical name
+    pattern = re.compile(
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
+        r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    )
+    for _ in range(20):
+        req_id = generate_request_id()
+        assert pattern.match(req_id), (
+            f"Request ID {req_id!r} does not match UUID4 pattern. "
+            "Consolidation with handler's legacy format broken.")
+
+
+def test_handler_has_no_local_generate_request_id_def():
+    """Regression lock (Phase 4): catches the consolidation silently
+    reverting.
+
+    If someone re-adds a local ``def _generate_request_id(`` in
+    ``bin/wl_handler.py``, the aliased import from wl_approval gets
+    shadowed and the two-format bug returns without any runtime
+    signal. A source-level text check catches this at test time,
+    before anything reaches production.
+
+    We scan the file instead of importing it because wl_handler pulls
+    in ``splunk.rest`` stubs that aren't always available in isolated
+    unit-test runs.
+    """
+    import re
+    from pathlib import Path
+    handler = (Path(__file__).parent.parent.parent
+               / "bin" / "wl_handler.py")
+    text = handler.read_text(encoding="utf-8")
+    # Match any local def, not just the exact legacy signature.
+    matches = re.findall(
+        r"^def\s+_generate_request_id\s*\(", text, re.MULTILINE)
+    assert not matches, (
+        f"wl_handler.py defines _generate_request_id locally "
+        f"({len(matches)} def(s)) — this shadows the canonical import "
+        "from wl_approval and re-introduces the Phase 4 drift. Delete "
+        "the local def; handler imports it already.")
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Tests: _is_expired
 # ═══════════════════════════════════════════════════════════════════════════
