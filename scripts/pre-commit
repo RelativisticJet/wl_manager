@@ -79,6 +79,17 @@ for f in $STAGED; do
     fi
 done
 
+# ── 7. Documentation drift guard ──
+# Runs only when a doc covered by the guard is staged (avoids slowing down
+# pure code commits). See scripts/pre-commit-doc-drift.sh for the policy.
+DOC_CHANGES=$(echo "$STAGED" | grep -E '^(CLAUDE|README|CONTRIBUTING|ARCHITECTURE|INSTALLATION|SECURITY|CODE_OF_CONDUCT|CHANGELOG)\.md$|^docs/.*\.md$|^default/app\.conf$' || true)
+if [ -n "$DOC_CHANGES" ]; then
+    REPO_ROOT=$(git rev-parse --show-toplevel)
+    if ! bash "$REPO_ROOT/scripts/pre-commit-doc-drift.sh"; then
+        ERRORS=$((ERRORS + 1))
+    fi
+fi
+
 # ── Result ──
 if [ $ERRORS -gt 0 ]; then
     echo ""

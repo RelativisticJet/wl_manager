@@ -28,9 +28,9 @@ wl_handler.py  ------>  wl_audit.py  ------>  index=wl_audit
 
 All backend code lives in `bin/`. There are **no external Python dependencies** — only the standard library and Splunk's bundled SDK.
 
-### The Handler (`wl_handler.py` — 5,223 lines)
+### The Handler (`bin/wl_handler.py`)
 
-This is the REST endpoint. It uses a dispatch-table pattern:
+This is the REST endpoint and the largest file in the backend. It uses a dispatch-table pattern:
 
 ```python
 GET_ACTIONS = {
@@ -47,28 +47,35 @@ POST_ACTIONS = {
 
 Each action maps to a `(required_roles, method_name)` tuple. The dispatcher checks RBAC, then calls `getattr(self, method_name)`. Action wrappers validate input and delegate to domain modules.
 
-> **Known limitation:** `wl_handler.py` is large. The action wrappers have been partially extracted into domain modules (see below), but the wrappers themselves remain. This is the top candidate for future refactoring. See [CODE_METRICS.md](docs/CODE_METRICS.md) for complexity analysis.
+> **Known limitation:** `wl_handler.py` is large. The action wrappers have been partially extracted into domain modules (see below), but the wrappers themselves remain. This is the top candidate for future refactoring. Run `make metrics` (or `pytest --cov=bin` + `radon cc bin/`) for current complexity and coverage numbers — we do not check in a metrics file because it drifts the moment anyone refactors.
 
 ### Domain Modules
 
-| Module | Lines | What it does |
-|--------|-------|-------------|
-| `wl_csv.py` | 1,069 | Read/write CSV files, compute diffs (similarity-based matching), column width tracking |
-| `wl_trash.py` | 765 | Soft-delete with retention policy, restore, purge (dual-admin for permanent delete) |
-| `wl_versions.py` | 643 | Snapshot last 6 versions per CSV, manifest tracking, revert support |
-| `wl_approval.py` | 620 | Approval queue CRUD, expiration (30 days), conflict cancellation |
-| `wl_rules.py` | 538 | Detection rule registry, create/delete pipelines, mapping file management |
-| `wl_replay.py` | 508 | Replay approved requests (re-executes the action the admin approved) |
-| `wl_limits.py` | 474 | Per-analyst daily limits, per-admin limits, configurable reset schedules |
-| `wl_constants.py` | 463 | All paths, thresholds, role sets, regex patterns — single source of truth |
-| `wl_notify.py` | 238 | Notification storage, delivery, auto-cleanup (90-day max, 500 per user) |
-| `wl_validation.py` | 202 | Filename validation, ASCII enforcement, path traversal prevention |
-| `wl_audit.py` | 191 | Build and POST audit events to `wl_audit` index via Splunk REST API |
-| `wl_rbac.py` | 169 | Role extraction, `is_admin()`, `is_superadmin()`, `is_editor()` |
-| `wl_presence.py` | 160 | Track which users are editing which CSV (5-minute timeout) |
-| `wl_filelock.py` | 104 | Cross-platform file locking for concurrent write safety |
-| `wl_ratelimit.py` | 66 | Per-user rate limiting (requests per second) |
-| `wl_logging.py` | 57 | Structured logging setup |
+Backend modules live under `bin/`. Run `ls bin/*.py` for the complete
+current inventory — this table describes what each module owns, not how
+large it is (line counts drift on every refactor and we do not keep them
+synced by hand).
+
+| Module | What it does |
+|--------|--------------|
+| `wl_csv.py` | Read/write CSV files, compute diffs (similarity-based matching), column width tracking |
+| `wl_trash.py` | Soft-delete with retention policy, restore, purge (dual-admin for permanent delete) |
+| `wl_versions.py` | Snapshot last 6 versions per CSV, manifest tracking, revert support |
+| `wl_approval.py` | Approval queue CRUD, expiration (30 days), conflict cancellation |
+| `wl_rules.py` | Detection rule registry, create/delete pipelines, mapping file management |
+| `wl_replay.py` | Replay approved requests (re-executes the action the admin approved) |
+| `wl_limits.py` | Per-analyst daily limits, per-admin limits, configurable reset schedules |
+| `wl_constants.py` | All paths, thresholds, role sets, regex patterns — single source of truth |
+| `wl_notify.py` | Notification storage, delivery, auto-cleanup (90-day max, 500 per user) |
+| `wl_validation.py` | Filename validation, ASCII enforcement, path traversal prevention |
+| `wl_audit.py` | Build and POST audit events to `wl_audit` index via Splunk REST API |
+| `wl_rbac.py` | Role extraction, `is_admin()`, `is_superadmin()`, `is_editor()` |
+| `wl_presence.py` | Track which users are editing which CSV (5-minute timeout) |
+| `wl_filelock.py` | Cross-platform file locking for concurrent write safety |
+| `wl_ratelimit.py` | Per-user rate limiting (requests per second) |
+| `wl_logging.py` | Structured logging setup |
+| `wl_fim_common.py` | Shared FIM helpers: GUID resolution, hashing, KV helpers |
+| `wl_hmac_key.py` | Runtime HMAC key derivation and caching |
 
 ### Scheduled Scripts
 
@@ -94,37 +101,45 @@ The frontend runs inside Splunk's SimpleXML dashboard framework. All dynamic UI 
 
 ### Entry Points
 
-| File | Lines | Dashboard |
-|------|-------|-----------|
-| `whitelist_manager.js` | 517 | Main CSV editor |
-| `control_panel.js` | 2,012 | Admin settings |
-| `notifications.js` | 327 | Bell icon + dropdown (injected into all views) |
-| `application.js` | 52 | Nav visibility (hides Control Panel for non-admins) |
-| `audit_trail.js` | 51 | Audit dashboard helpers |
+Frontend entry points live directly under `appserver/static/`.
+
+| File | Dashboard |
+|------|-----------|
+| `whitelist_manager.js` | Main CSV editor |
+| `control_panel.js` | Admin settings |
+| `notifications.js` | Bell icon + dropdown (injected into all views) |
+| `application.js` | Nav visibility (hides Control Panel for non-admins) |
+| `audit_trail.js` | Audit dashboard helpers |
 
 Entry points use `require()` (Splunk AMD). Modules use `define()` and return a public API object.
 
-### Modules (13 total, in `appserver/static/modules/`)
+### Modules
 
-```
-wl_constants.js (40)  ─┐
-wl_rest.js      (43)  ─┤  Foundation (no cross-module deps)
-wl_ui.js       (129)  ─┘
-       │
-       v
-wl_table.js    (1,537) ── Table rendering, inline editing, pagination,
-       │                   column resize, drag-reorder, row selection
-       │
-       ├── wl_nav.js        (457) ── Rule/CSV dropdowns, URL params
-       ├── wl_save.js     (1,023) ── Save pipeline, undo, change detection,
-       │                              loadCsv, optimistic locking
-       ├── wl_modals.js   (1,320) ── All modal dialogs
-       ├── wl_csv_io.js   (1,177) ── Import/export, merge/replace
-       ├── wl_approval_ui.js (631) ── Approval highlighting, submit, admin actions
-       ├── wl_versions.js   (333) ── Version dropdown, revert flow
-       ├── wl_diff.js       (277) ── Git-style diff display
-       ├── wl_datepicker.js (178) ── Date/time picker for Expires column
-       └── wl_presence.js   (241) ── User presence indicators
+AMD modules live under `appserver/static/modules/`. Run
+`ls appserver/static/modules/` for the current inventory — the grouping
+below shows the dependency layers, not the file-by-file sizes:
+
+```text
+Foundation layer (no cross-module deps):
+  wl_constants.js   ─┐
+  wl_rest.js        ─┤
+  wl_ui.js          ─┘
+
+Core UI layer:
+  wl_table.js      ── Table rendering, inline editing, pagination,
+                       column resize, drag-reorder, row selection
+
+Feature layer (depend on foundation + wl_table.js):
+  wl_nav.js         ── Rule/CSV dropdowns, URL params
+  wl_save.js        ── Save pipeline, undo, change detection,
+                       loadCsv, optimistic locking
+  wl_modals.js      ── All modal dialogs
+  wl_csv_io.js      ── Import/export, merge/replace
+  wl_approval_ui.js ── Approval highlighting, submit, admin actions
+  wl_versions.js    ── Version dropdown, revert flow
+  wl_diff.js        ── Git-style diff display
+  wl_datepicker.js  ── Date/time picker for Expires column
+  wl_presence.js    ── User presence indicators
 ```
 
 ### Shared State Pattern
@@ -195,55 +210,31 @@ Splunk bundles jQuery and underscore. Adding external libraries requires Splunk 
 
 ## File Map
 
-```
+This is a directory-level overview. For the current file inventory, run
+`ls bin/` or `ls appserver/static/modules/` — we do not enumerate every
+file here because the list drifts on every new module.
+
+```text
 wl_manager/
-  bin/                          # Backend (Python)
-    wl_handler.py               #   REST endpoint + dispatch tables
-    wl_csv.py                   #   CSV read/write/diff
-    wl_rules.py                 #   Detection rule CRUD
-    wl_approval.py              #   Approval queue
-    wl_replay.py                #   Replay approved actions
-    wl_limits.py                #   Daily limits
-    wl_versions.py              #   Version snapshots
-    wl_trash.py                 #   Soft-delete / recycle bin
-    wl_audit.py                 #   Audit event posting
-    wl_rbac.py                  #   Role-based access control
-    wl_validation.py            #   Input sanitization
-    wl_constants.py             #   All constants and paths
-    wl_notify.py                #   Notifications
-    wl_presence.py              #   User presence tracking
-    wl_filelock.py              #   File locking
-    wl_ratelimit.py             #   Rate limiting
-    wl_logging.py               #   Logging setup
-    wl_expiration_cleanup.py    #   Scheduled: remove expired rows
-    wl_expiring_soon.py         #   Scheduled: expiration alerts
-  appserver/static/             # Frontend (JavaScript)
+  bin/                          # Backend (Python) — REST handler, domain
+                                #   modules, scheduled scripts, FIM tooling.
+                                #   Domain-module table above covers the
+                                #   main responsibilities.
+  appserver/static/             # Frontend (JavaScript + CSS)
     whitelist_manager.js        #   Main dashboard entry point
     control_panel.js            #   Admin panel entry point
     notifications.js            #   Notification bell (all views)
     application.js              #   Nav visibility control
     audit_trail.js              #   Audit dashboard helpers
     whitelist_manager.css       #   Styles (dark/light theme)
-    modules/                    #   AMD modules (13 files)
-      wl_table.js               #     Table rendering + editing
-      wl_modals.js              #     All modal dialogs
-      wl_csv_io.js              #     CSV import/export
-      wl_save.js                #     Save pipeline + undo
-      wl_approval_ui.js         #     Approval UI
-      wl_nav.js                 #     Dropdown navigation
-      wl_versions.js            #     Version/revert UI
-      wl_diff.js                #     Diff display
-      wl_presence.js            #     Presence indicators
-      wl_datepicker.js          #     Date picker
-      wl_ui.js                  #     Message banner, theme
-      wl_rest.js                #     REST helpers, CSRF
-      wl_constants.js           #     Frontend constants
+    modules/                    #   AMD modules — dependency layers above
   default/                      # Splunk configuration
     app.conf                    #   App metadata + build number
     restmap.conf                #   REST endpoint mapping
     indexes.conf                #   wl_audit index definition
     authorize.conf              #   RBAC roles
     savedsearches.conf          #   Scheduled searches
+    collections.conf            #   KV store collections
     data/ui/views/              #   Dashboard XML files
   lookups/                      # Data files
     rule_csv_map.csv            #   Detection rule -> CSV mapping

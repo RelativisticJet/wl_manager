@@ -71,11 +71,24 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) for the full codebase map, module depend
 
 ### Known Limitations
 
-**`wl_handler.py` (5,200+ lines)** is the main REST endpoint and the largest file. It uses a dispatch-table pattern where each action maps to a wrapper method. The core business logic has been extracted into domain modules (`wl_csv.py`, `wl_rules.py`, `wl_approval.py`, etc.), but the action wrappers remain in the handler. Splitting the handler further is the top refactoring priority.
+**`wl_handler.py`** is the main REST endpoint and the largest file in the
+codebase. It uses a dispatch-table pattern where each action maps to a
+wrapper method. The core business logic has been extracted into domain
+modules (`wl_csv.py`, `wl_rules.py`, `wl_approval.py`, etc.), but the
+action wrappers remain in the handler. Splitting the handler further is
+the top refactoring priority.
 
-**Test coverage is 32%** (target: 80%). The extracted domain modules have good coverage (80-100%), but `wl_handler.py` itself has 0% — contributions that add handler-level tests are especially welcome. See [docs/CODE_METRICS.md](docs/CODE_METRICS.md) for per-module coverage.
+**Test coverage is below the 80% target.** The extracted domain modules
+have good coverage, but `wl_handler.py` itself has no direct unit tests
+(all handler-path testing is E2E). Contributions that add handler-level
+unit tests are especially welcome. Run `make metrics` (if present in your
+branch) or `pytest --cov=bin` for current per-module numbers — we do not
+keep a checked-in metrics file because it drifts the moment anyone
+refactors.
 
-**`control_panel.js` (2,000 lines)** has not yet been modularized like the main editor. The same AMD module pattern used in `whitelist_manager.js` can be applied here.
+**`control_panel.js`** has not yet been modularized like the main editor.
+The same AMD module pattern used in `whitelist_manager.js` can be applied
+here.
 
 ## Guidelines
 

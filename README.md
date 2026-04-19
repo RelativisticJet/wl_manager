@@ -1,6 +1,11 @@
 # Whitelist Manager for Splunk
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/RelativisticJet/wl_manager/releases)
+<!--
+  Version badge auto-updates from the latest GitHub Release once the repo is
+  public AND a release is tagged. Until then it shows "no release" — which is
+  the correct signal for an unreleased app. Do NOT hardcode the version here.
+-->
+[![Version](https://img.shields.io/github/v/release/RelativisticJet/wl_manager?label=version&color=blue)](https://github.com/RelativisticJet/wl_manager/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Splunk](https://img.shields.io/badge/Splunk-8.x%20%7C%209.x-orange.svg)](https://www.splunk.com/)
 [![Python](https://img.shields.io/badge/Python-3.9+-yellow.svg)](https://www.python.org/)
@@ -91,25 +96,25 @@ Navigate to **Apps > Whitelist Manager** to start using the app.
 
 ### Install on Existing Splunk
 
-Download the latest `.spl` from the [Releases](https://github.com/RelativisticJet/wl_manager/releases) page.
+Download the latest `.spl` from the [Releases](https://github.com/RelativisticJet/wl_manager/releases) page. Replace `<VERSION>` in the commands below with the release tag you downloaded (e.g., `2.0.0`).
 
 **Option A — Splunk Web UI:**
 
 1. Go to **Apps > Manage Apps > Install app from file**
-2. Upload `wl_manager-2.0.0.spl`
+2. Upload `wl_manager-<VERSION>.spl`
 3. Restart Splunk when prompted
 
 **Option B — CLI:**
 
 ```bash
-$SPLUNK_HOME/bin/splunk install app wl_manager-2.0.0.spl
+$SPLUNK_HOME/bin/splunk install app wl_manager-<VERSION>.spl
 $SPLUNK_HOME/bin/splunk restart
 ```
 
 **Option C — Manual:**
 
 ```bash
-tar -xzf wl_manager-2.0.0.spl -C $SPLUNK_HOME/etc/apps/
+tar -xzf wl_manager-<VERSION>.spl -C $SPLUNK_HOME/etc/apps/
 chown -R splunk:splunk $SPLUNK_HOME/etc/apps/wl_manager
 $SPLUNK_HOME/bin/splunk restart
 ```
