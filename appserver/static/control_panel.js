@@ -530,7 +530,7 @@ require([
         }
 
         $("#wl-cp-approval-queue").html(html);
-        bindApprovalActions();
+        bindApprovalActionsCP();
         bindPagination();
     }
 
@@ -580,7 +580,7 @@ require([
         });
     }
 
-    function bindApprovalActions() {
+    function bindApprovalActionsCP() {
         $(".wl-cp-approve-btn").off("click").on("click", function () {
             var requestId = $(this).data("id");
             var isDual = $(this).data("dual") === true || $(this).data("dual") === "true";
@@ -778,7 +778,7 @@ require([
 
         // ── Type-specific rendering ──
         if (at === "bulk_row_addition") {
-            return meta + renderAdditionPreview(payload, hl);
+            return meta + renderAdditionPreviewCP(payload, hl);
         } else if (at === "bulk_row_removal") {
             return meta + renderRemovalPreview(payload, hl);
         } else if (at === "bulk_row_edit") {
@@ -788,7 +788,7 @@ require([
         } else if (at === "revert") {
             return meta + renderRevertPreview(payload, hl, item);
         } else if (at === "csv_import_replace") {
-            return meta + renderImportPreview(payload, hl);
+            return meta + renderImportPreviewCP(payload, hl);
         } else if (at === "create_csv") {
             return meta + renderCreateCsvPreview(payload, item);
         } else if (at === "create_rule") {
@@ -831,7 +831,7 @@ require([
     }
 
     // ── Addition: show the new rows to be added ──
-    function renderAdditionPreview(payload, hl) {
+    function renderAdditionPreviewCP(payload, hl) {
         var headers = hl.headers || payload.headers || [];
         var rowKeys = hl.row_keys || [];
         if (!headers.length || !rowKeys.length) {
@@ -1025,7 +1025,7 @@ require([
     }
 
     // ── Import replace: show the replacement data ──
-    function renderImportPreview(payload, hl) {
+    function renderImportPreviewCP(payload, hl) {
         var headers = payload.headers || [];
         var rows = payload.initial_rows || payload.rows || [];
         if (!headers.length) {
