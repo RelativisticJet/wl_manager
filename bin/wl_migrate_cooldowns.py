@@ -76,16 +76,19 @@ except ImportError:
           "failed). Ensure the salt matches wl_constants.py.",
           file=sys.stderr)
 
+# Shared FIM/KV helpers (Phase 3b consolidation — CLAUDE.md 2026-04-19).
+# This migration tool uses ``strict=True`` so a missing GUID fails loud
+# instead of silently producing a zero-entropy key and re-signing every
+# record under a predictable HMAC.
+from wl_fim_common import (
+    kv_collection_url as _kv_collection_url,
+    read_splunk_guid,
+)
+
 
 def _read_guid():
-    with open(INSTANCE_CFG, "r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line.startswith("guid"):
-                parts = line.split("=", 1)
-                if len(parts) == 2:
-                    return parts[1].strip()
-    raise RuntimeError("Cannot read server GUID from " + INSTANCE_CFG)
+    """Strict GUID read — migrations must fail loud on missing GUID."""
+    return read_splunk_guid(INSTANCE_CFG, strict=True)
 
 
 def _derive_key(salt):
@@ -139,9 +142,8 @@ MIGRATIONS = {
 
 
 def _kv_url(suffix=""):
-    base = ("https://localhost:8089/servicesNS/nobody/{}"
-            "/storage/collections/data/{}").format(APP_NAME, COLLECTION)
-    return base + suffix
+    """Build the KV-store REST URL for the wl_cooldowns collection."""
+    return _kv_collection_url(APP_NAME, COLLECTION, suffix)
 
 
 def _http(method, url, auth, body=None):

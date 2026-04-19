@@ -42,6 +42,22 @@ import sys
 import time
 from datetime import datetime, timezone
 
+# Make ``bin/`` importable when launched by splunkd (scripted-input
+# context may omit it from sys.path).
+_BIN_DIR = os.path.dirname(os.path.abspath(__file__))
+if _BIN_DIR not in sys.path:
+    sys.path.insert(0, _BIN_DIR)
+
+# Shared helpers (Phase 3b consolidation — see CLAUDE.md 2026-04-19).
+# Exposed under the historical underscore-prefixed names so call sites
+# stay unchanged.
+from wl_fim_common import (  # noqa: E402
+    file_hash_sha256 as _file_hash,
+    kv_collection_url,
+    queue_fim_notification,
+    read_splunk_guid,
+)
+
 # ssl + urllib are imported lazily inside _kv_request so that a
 # misconfigured Python environment (e.g. Splunk bundled Python
 # without LD_LIBRARY_PATH pointing to /opt/splunk/lib when invoked
@@ -153,17 +169,12 @@ WATCH_SENTINELS = [
 # ────────────────────────────────────────────────────────────────
 
 def _read_guid():
-    try:
-        with open(INSTANCE_CFG, "r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if line.startswith("guid"):
-                    parts = line.split("=", 1)
-                    if len(parts) == 2:
-                        return parts[1].strip()
-    except OSError:
-        pass
-    return ""
+    """Best-effort GUID read (wraps wl_fim_common.read_splunk_guid).
+
+    Scheduled input must not crash on missing/unreadable instance.cfg;
+    fall back to empty string so key derivation uses the unkeyed path.
+    """
+    return read_splunk_guid(INSTANCE_CFG, strict=False)
 
 
 def _derive_hmac_key():
@@ -189,17 +200,7 @@ def _compute_window_checksum(body, key):
 # Filesystem baseline
 # ────────────────────────────────────────────────────────────────
 
-def _file_hash(path):
-    if not os.path.isfile(path):
-        return None
-    try:
-        h = hashlib.sha256()
-        with open(path, "rb") as fh:
-            for chunk in iter(lambda: fh.read(65536), b""):
-                h.update(chunk)
-        return h.hexdigest()
-    except OSError:
-        return None
+# ``_file_hash`` is imported from wl_fim_common as the canonical helper.
 
 
 def _read_fs_baseline(key):
@@ -253,9 +254,8 @@ def _write_fs_baseline(baseline, key):
 # ────────────────────────────────────────────────────────────────
 
 def _kv_url(suffix=""):
-    return ("https://localhost:8089/servicesNS/nobody/{}"
-            "/storage/collections/data/{}"
-            .format(APP_NAME, KV_COLLECTION) + suffix)
+    """Build a KV-store REST URL under this script's collection."""
+    return kv_collection_url(APP_NAME, KV_COLLECTION, suffix)
 
 
 def _kv_request(method, url, session_key, body=None):
@@ -423,48 +423,12 @@ def _refresh_lockdown_state():
 
 
 def _queue_fim_notification(event):
-    """Append a HIGH/CRITICAL event to the alert queue for in-app bell.
+    """Push an event into the FIM bell-notification queue.
 
-    JSONL append-only file. Handler's get_notifications action drains
-    pending entries into each superadmin's per-user notification list
-    lazily (on next poll). Uses POSIX O_APPEND semantics — short writes
-    are atomic on Linux, so we don't need a lock.
-
-    A stable event ID based on (timestamp, action, path/csv_file) lets
-    the handler dedupe across multiple superadmin poll races.
-
-    Events emitted by wl_fim use `monitored_path` for filesystem paths
-    and some use `path`. CSV-specific events use `csv_file`. Prefer
-    monitored_path > path > csv_file for the identifier.
+    Thin wrapper over ``wl_fim_common.queue_fim_notification`` that
+    bakes in this script's queue path.
     """
-    try:
-        path = (event.get("monitored_path", "")
-                or event.get("path", "")
-                or event.get("csv_file", ""))
-        key_parts = [
-            str(event.get("timestamp", "")),
-            event.get("action", ""),
-            path,
-        ]
-        event_id = "fim_" + "_".join(p.replace("/", "-") for p in key_parts)
-        queued = {
-            "id": event_id,
-            "timestamp": event.get("timestamp"),
-            "action": event.get("action"),
-            "severity": event.get("severity"),
-            "path": path,
-            "lockdown_active": event.get("lockdown_active", False),
-            "details": event.get("details", "")[:500],
-            "source_script": event.get("source_script", "wl_fim"),
-        }
-        os.makedirs(os.path.dirname(FIM_ALERT_QUEUE_PATH), exist_ok=True)
-        with open(FIM_ALERT_QUEUE_PATH, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(queued) + "\n")
-    except OSError:
-        # Don't let notification failure prevent the event from reaching
-        # the audit index — the indexed event is still the authoritative
-        # record. The bell is a UX convenience.
-        pass
+    queue_fim_notification(event, FIM_ALERT_QUEUE_PATH)
 
 
 # ────────────────────────────────────────────────────────────────
