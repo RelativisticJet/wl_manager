@@ -1,0 +1,49 @@
+# Splunk-adapted SSRF taint rule.
+#
+# Derived from gadievron/raptor engine/semgrep/rules/sinks/ssrf.yaml.
+# Only the taint rule is shipped in CI — the companion non-taint
+# `splunk.ssrf.dynamic-url` rule (which flags EVERY outbound HTTP call
+# for human review) lives in .audit/ and is run manually. Including the
+# non-taint rule in CI would produce 8 permanent "findings" on
+# legitimate hardcoded splunkd management-port calls (127.0.0.1:8089),
+# drowning the signal.
+#
+# Changes from the RAPTOR original:
+#   - pattern-sources: replaced Flask/Django shapes with Splunk
+#     BaseRestHandler patterns (request.get, payload.get, payload[$_]).
+#   - pattern-sinks: added urllib.request.urlopen and urllib.request.Request
+#     — wl_manager uses stdlib urllib exclusively, never the `requests` lib.
+rules:
+  - id: splunk.ssrf.taint.python
+    message: >-
+      Untrusted Splunk handler payload data flows into an outbound HTTP call.
+      Enforce strict allowlists (host, path) before the request. Typical safe
+      pattern is a module-level URL built from constants; wrap the caller in
+      a validator that rejects non-localhost hosts.
+    languages: [python]
+    severity: ERROR
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: request.get($_)
+          - pattern: payload.get($_)
+          - pattern: payload[$_]
+          - pattern: flask.request.args[$_]
+          - pattern: flask.request.form[$_]
+          - pattern: input(...)
+    pattern-sinks:
+      - pattern-either:
+          - pattern: requests.get($URL, ...)
+          - pattern: requests.post($URL, ...)
+          - pattern: urllib.request.urlopen($URL, ...)
+          - pattern: urllib.request.Request($URL, ...)
+    pattern-sanitizers:
+      - pattern: urllib.parse.urljoin($BASE, $URL)
+      # Any call with a hardcoded localhost splunkd URL prefix is safe —
+      # the host portion is non-tainted, only a constant path suffix
+      # follows.
+      - pattern: $F("https://127.0.0.1:8089" + $PATH, ...)
+      - pattern: $F("https://localhost:8089" + $PATH, ...)
+    metadata:
+      cwe: ["CWE-918"]
+      adapted_from: "gadievron/raptor sinks/ssrf.yaml"

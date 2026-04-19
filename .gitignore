@@ -86,3 +86,6 @@ test-results/
 # Graphify knowledge-graph tooling (local-only audit artifacts)
 .graphifyignore
 graphify-out/
+
+# One-shot audit scratch (Semgrep rules pulled from external sources, raw scan output)
+.audit/
