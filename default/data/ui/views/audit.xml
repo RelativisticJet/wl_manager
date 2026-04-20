@@ -808,6 +808,7 @@
           <query>
             index=wl_audit sourcetype=wl_fim
             | search action=fim_*
+            | where action!="fim_watch_heartbeat"
             | sort -timestamp
             | eval timestamp_human=if(isnull(timestamp_human), strftime(timestamp, "%d-%m-%Y %H:%M:%S UTC"), timestamp_human)
             | eval severity=coalesce(severity, case(
