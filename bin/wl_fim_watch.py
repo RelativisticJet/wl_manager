@@ -27,7 +27,12 @@ Design:
     - Reads ``rule_csv_map.csv`` periodically to discover managed CSVs.
     - Compares CSV hashes against ``.csv_expected_hashes.json`` to
       distinguish legitimate handler writes from external modifications.
-    - Emits heartbeat events every 5 minutes.
+    - Emits only state-change events (``fim_watch_started`` on launch,
+      ``fim_watch_stopped`` on orderly shutdown). No periodic heartbeat
+      — at 288 events/day per instance it floods the index. Splunk
+      supervises this process (``interval=0``) and auto-restarts it on
+      exit, so a flapping watcher surfaces as repeated
+      ``fim_watch_started`` events without matching stops.
     - Handles SIGTERM gracefully for clean Splunk shutdown.
 """
 
@@ -68,7 +73,6 @@ INSTANCE_CFG = "/opt/splunk/etc/instance.cfg"
 FAST_INTERVAL = 2           # seconds between stat() sweeps
 CSV_HASH_INTERVAL = 15      # seconds between full CSV hash checks (catches cp -p)
 CSV_MAPPING_REFRESH = 15    # seconds between rule_csv_map.csv re-reads (was 60)
-HEARTBEAT_INTERVAL = 300    # seconds between heartbeat events
 
 # Import watch lists from wl_fim (single source of truth for code/sentinel files)
 try:
@@ -377,7 +381,6 @@ def main():
     lookups_dir_unreadable_last_emit = 0.0
     LOOKUPS_DIR_UNREADABLE_SUPPRESS_SECONDS = 300
 
-    last_heartbeat = time.monotonic()
     last_csv_full_hash = time.monotonic()
     last_csv_mapping_refresh = time.monotonic()
     _force_mapping_refresh = False  # set when rule_csv_map.csv changes
@@ -638,17 +641,12 @@ def main():
             csv_mapping = new_mapping
             last_csv_mapping_refresh = now
 
-        # ── Heartbeat ──
-        if now - last_heartbeat >= HEARTBEAT_INTERVAL:
-            _emit({
-                "action": "fim_watch_heartbeat",
-                "severity": "INFO",
-                "watched_code_files": len(STATIC_PATHS),
-                "watched_csv_files": len(csv_paths),
-                "total_watched": len(STATIC_PATHS) + len(csv_paths),
-            })
-            last_heartbeat = now
-
+    # No periodic heartbeat is emitted: at 288 events/day per instance
+    # the index cost is not worth the liveness signal, and splunkd's
+    # scripted-input supervisor auto-restarts this process on exit, so
+    # each restart fires a fresh fim_watch_started. A flapping watcher
+    # surfaces as repeated starts without matching stops. Tracked in
+    # the CLAUDE.md Decision Log (2026-04-21 row).
     _emit({
         "action": "fim_watch_stopped",
         "severity": "INFO",
