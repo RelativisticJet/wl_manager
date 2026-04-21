@@ -131,7 +131,9 @@
             index=wl_audit sourcetype=wl_audit
               action=$action_filter$*
               analyst=$analyst_filter$ detection_rule=$rule_filter$
-            | stats sum(added_row_count) as r_added sum(removed_row_count) as r_removed sum(edited_row_count) as r_edited sum(auto_removed_count) as r_auto sum(eval(if(action="revert",1,0))) as r_revert sum(eval(if(action="column_removed" OR action="column_added",column_count,0))) as r_cols sum(eval(if(action="row_reordered" OR action="column_reordered",1,0))) as r_reorder sum(eval(if(action="column_renamed",1,0))) as r_rename
+            | eval rem_user_rows = case(action="row_removed" OR action="row_removed_multiple", removed_row_count, true(), 0)
+            | eval rem_auto_rows = case(action="auto_removed", removed_row_count, true(), 0)
+            | stats sum(added_row_count) as r_added sum(rem_user_rows) as r_removed sum(edited_row_count) as r_edited sum(rem_auto_rows) as r_auto sum(eval(if(action="revert",1,0))) as r_revert sum(eval(if(action="column_removed" OR action="column_added",column_count,0))) as r_cols sum(eval(if(action="row_reordered" OR action="column_reordered",1,0))) as r_reorder sum(eval(if(action="column_renamed",1,0))) as r_rename
             | eval total_changes=coalesce(r_added,0)+coalesce(r_removed,0)+coalesce(r_edited,0)+coalesce(r_auto,0)+coalesce(r_revert,0)+coalesce(r_cols,0)+coalesce(r_reorder,0)+coalesce(r_rename,0)
             | table total_changes
           </query>
@@ -164,8 +166,24 @@
             index=wl_audit sourcetype=wl_audit
               action=$action_filter$*
               analyst=$analyst_filter$ detection_rule=$rule_filter$
-            | where action="row_removed" OR action="row_removed_multiple" OR action="auto_removed"
+            | where action="row_removed" OR action="row_removed_multiple"
             | stats sum(removed_row_count) as total_rows_removed
+          </query>
+          <earliest>$time_token.earliest$</earliest>
+          <latest>$time_token.latest$</latest>
+        </search>
+      </single>
+    </panel>
+    <panel>
+      <title>Rows Auto-Removed (Expired)</title>
+      <single>
+        <search>
+          <query>
+            index=wl_audit sourcetype=wl_audit
+              action=$action_filter$*
+              analyst=$analyst_filter$ detection_rule=$rule_filter$
+            | where action="auto_removed"
+            | stats sum(removed_row_count) as total_rows_auto_removed
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
@@ -571,6 +589,14 @@
           <set token="detail_analyst">$row.analyst$</set>
           <set token="detail_csv">$row.csv_file$</set>
         </drilldown>
+        <!--
+          _raw_ts must remain in `| table` above so drilldown row-context
+          ($row._raw_ts$) can resolve it. <fields> below controls which
+          columns are VISIBLE in the rendered table — _raw_ts is omitted
+          so the epoch integer doesn't clutter the UI next to the
+          human-readable timestamp.
+        -->
+        <fields>["timestamp","action","analyst","csv_file","detection_rule","reason","row_change_count","column_change_count","request_id","value","summary"]</fields>
         <option name="count">5</option>
         <option name="wrap">true</option>
       </table>
