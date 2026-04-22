@@ -396,15 +396,21 @@ require([
     var pendingPage = 0;
     var historyPage = 0;
 
-    // Dual-admin queue entries store csv_file / rule_name inside item.meta,
-    // not at top level. Hoist them so the pending/history tables and the
-    // Show Data preview header can read the same fields as single-admin
-    // entries without special-casing every render path.
+    // Dual-admin queue entries store csv_file / rule_name inside item.meta
+    // and use `submitted_at` instead of `timestamp`. Hoist them so the
+    // pending/history tables and the Show Data preview header can read
+    // the same fields as single-admin entries without special-casing
+    // every render path. Found during real-E2E testing 2026-04-23: the
+    // pending table rendered "Invalid Date" for every dual-admin request
+    // because new Date(undefined * 1000) is NaN.
     function normalizeDualAdminItem(item) {
         if (!item || !item.is_dual_admin) return item;
         var m = item.meta || {};
         if (!item.csv_file && m.csv_file) { item.csv_file = m.csv_file; }
         if (!item.detection_rule && m.rule_name) { item.detection_rule = m.rule_name; }
+        if (!item.timestamp && item.submitted_at) {
+            item.timestamp = item.submitted_at;
+        }
         return item;
     }
 
