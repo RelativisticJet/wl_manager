@@ -30,14 +30,49 @@
       <default>browser</default>
     </input>
 
+    <!--
+      Analyst dropdown. The population search annotates offboarded
+      users with a " (retired)" suffix: we cross-check every analyst
+      seen in wl_audit against the live Splunk user list, and tag
+      those not present as retired. Investigators can still filter
+      by a retired name — fieldForValue stays the raw `analyst`
+      (no suffix), fieldForLabel is the annotated `analyst_label`.
+
+      Uses `| append` + `stats values()` instead of `| join` because
+      `| join` drops rows from the `| rest` subsearch in this context
+      (subsearch row/time limit interaction); `| append` merges cleanly
+      and `| stats values(_live) by analyst` collapses the two sources
+      into one row per analyst.
+
+      Graceful degradation: `| rest /services/authentication/users`
+      requires the `list_users` capability (built-in admin/sc_admin).
+      If the caller lacks it, the append adds no rows, `_known_users`
+      stays 0, and the case-expression falls back to plain analyst
+      names with no suffix. Non-admin analysts see the original
+      behavior — no errors, no misleading mass-retirement.
+    -->
     <input type="dropdown" token="analyst_filter" searchWhenChanged="true">
       <label>Analyst</label>
       <search>
-        <query>index=wl_audit sourcetype=wl_audit | dedup analyst | sort analyst | table analyst</query>
+        <query>
+          index=wl_audit sourcetype=wl_audit
+          | stats count by analyst
+          | fields analyst
+          | append
+              [| rest /services/authentication/users
+               | rename title AS analyst
+               | eval _live="1"
+               | fields analyst _live]
+          | stats values(_live) as _live by analyst
+          | eventstats count(_live) as _known_users
+          | eval analyst_label=case(_known_users==0, analyst, isnull(_live), analyst." (retired)", true(), analyst)
+          | sort analyst
+          | table analyst_label analyst
+        </query>
         <earliest>$time_token.earliest$</earliest>
         <latest>$time_token.latest$</latest>
       </search>
-      <fieldForLabel>analyst</fieldForLabel>
+      <fieldForLabel>analyst_label</fieldForLabel>
       <fieldForValue>analyst</fieldForValue>
       <choice value="*">All Analysts</choice>
       <default>*</default>
