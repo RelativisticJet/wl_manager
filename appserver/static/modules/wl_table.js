@@ -1222,6 +1222,7 @@ define([
         refreshTable();
         showMsg("Reordering row&hellip;", "info");
 
+        S.saving = true;
         restPost({
             action:          "save_csv",
             csv_file:        S.selectedCsv,
@@ -1246,6 +1247,7 @@ define([
             showMsg("Row moved from #" + fromPos + " to #" + toPos + ". Changes saved", "success");
             S.originalRows = S.currentRows.map(function (r) { return $.extend({}, r); });
             if (data.file_mtime) { S.loadedMtime = data.file_mtime; }
+            if (typeof data.content_hash === "string" && data.content_hash) { S.loadedContentHash = data.content_hash; }
             refreshTable();
             _actions.loadVersions(S.selectedCsv, S.selectedApp);
         })
@@ -1254,7 +1256,8 @@ define([
             S.currentRows = prevRows;
             S.originalRows = prevOriginal;
             refreshTable();
-        });
+        })
+        .always(function () { S.saving = false; });
     }
 
     function doColumnReorder(fromCol, toCol) {
@@ -1289,6 +1292,7 @@ define([
         refreshTable();
         showMsg("Reordering column&hellip;", "info");
 
+        S.saving = true;
         restPost({
             action:          "save_csv",
             csv_file:        S.selectedCsv,
@@ -1314,6 +1318,7 @@ define([
             S.originalHeaders = S.currentHeaders.slice();
             S.originalRows = S.currentRows.map(function (r) { return $.extend({}, r); });
             if (data.file_mtime) { S.loadedMtime = data.file_mtime; }
+            if (typeof data.content_hash === "string" && data.content_hash) { S.loadedContentHash = data.content_hash; }
             refreshTable();
             _actions.loadVersions(S.selectedCsv, S.selectedApp);
         })
@@ -1322,7 +1327,8 @@ define([
             S.currentHeaders = prevHeaders;
             S.originalHeaders = prevOrigHeaders;
             refreshTable();
-        });
+        })
+        .always(function () { S.saving = false; });
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -1348,6 +1354,7 @@ define([
         refreshTable();
         showMsg("Renaming column and saving&hellip;", "info");
 
+        S.saving = true;
         restPost({
             action:          "save_csv",
             csv_file:        S.selectedCsv,
@@ -1370,6 +1377,7 @@ define([
                 return;
             }
             S.loadedMtime = data.file_mtime || S.loadedMtime;
+            if (typeof data.content_hash === "string" && data.content_hash) { S.loadedContentHash = data.content_hash; }
             S.originalHeaders = S.currentHeaders.slice();
             S.originalRows = S.currentRows.map(function (r) { return $.extend({}, r); });
             if (colWidths[oldName]) {
@@ -1385,7 +1393,8 @@ define([
             S.currentRows = snapRows;
             refreshTable();
             _actions.handleSaveError(xhr, "Column rename failed");
-        });
+        })
+        .always(function () { S.saving = false; });
     }
 
     // ══════════════════════════════════════════════════════════════════

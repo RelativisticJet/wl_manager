@@ -7,6 +7,11 @@
  */
 
 /*global require, Splunk */
+// Cache-bust AMD module URLs so future builds auto-invalidate the browser's
+// disk cache. Splunk serves /static/@<server-hash>/... with Cache-Control:
+// public, max-age=31536000; without urlArgs, bumped build numbers don't force
+// a re-fetch and clients run stale JS until they hard-refresh.
+require.config({ urlArgs: "_b=609" });
 require([
     "jquery",
     "underscore",
