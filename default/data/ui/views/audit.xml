@@ -678,6 +678,7 @@
             | eval csv_file=if(isnull(csv_file) OR csv_file="", "N/A", csv_file)
             | stats values(*) as * by action csv_file analyst timestamp
             | sort -timestamp
+            | eval epoch_ts=timestamp
             | eval timestamp=if(match(timestamp, "^\d+\.?\d*$"), strftime(timestamp, "%d-%m-%Y %H:%M:%S GMT%:::z"), timestamp)
 
             | eval action_label=case(
@@ -734,11 +735,14 @@
                   "User ".analyst." changed trash retention from ".old_retention_days." to ".new_retention_days." days — ".comment." at ".timestamp
               )
             | eval reason=coalesce(row_remove_reason, row_add_reason, revert_reason, row_edit_reason, column_remove_reason, rejection_reason, failure_reason, cancellation_reason, comment, "")
-            | table timestamp action analyst csv_file detection_rule reason request_id approval_action_type requester status export_file summary
+            | table timestamp epoch_ts action analyst csv_file detection_rule reason request_id approval_action_type requester status export_file summary
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
         </search>
+        <!-- epoch_ts is LAST so audit_tz.js can CSS-hide it + read the
+             raw epoch for client-side TZ reformatting. -->
+        <fields>["timestamp","action","analyst","csv_file","detection_rule","reason","request_id","approval_action_type","requester","status","export_file","summary","epoch_ts"]</fields>
         <option name="drilldown">none</option>
         <option name="count">5</option>
         <option name="wrap">true</option>
@@ -759,9 +763,10 @@
               action=$action_filter$*
               analyst=$analyst_filter$
             | where match(action, "^(limit_change|admin_limit_change|limit_defaults_saved|dual_approval_submitted|dual_approval_approved|dual_approval_rejected|factory_reset_executed|mass_usage_reset_executed|emergency_lockdown_activated|emergency_lockdown_deactivated|trash_purged|bootstrap_csv_hashes|bootstrap_csv_hash_changed|fim_deploy_window_start|fim_deploy_window_end)$")
-            | stats values(*) as * by action analyst timestamp
-            | sort -timestamp
-            | eval timestamp=if(match(timestamp, "^\d+\.?\d*$"), strftime(timestamp, "%d-%m-%Y %H:%M:%S GMT%:::z"), timestamp)
+            | eval epoch_ts=_time
+            | stats values(*) as * by action analyst epoch_ts
+            | sort -epoch_ts
+            | eval timestamp=strftime(epoch_ts, "%d-%m-%Y %H:%M:%S GMT%:::z")
 
             | eval severity=case(
                 action=="emergency_lockdown_activated",   "CRITICAL",
@@ -835,11 +840,13 @@
                 1==1, coalesce(comment, "")
               )
 
-            | table timestamp severity action_label analyst details request_id
+            | table timestamp epoch_ts severity action_label analyst details request_id
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
         </search>
+        <!-- epoch_ts is LAST (hidden via CSS, read by audit_tz.js). -->
+        <fields>["timestamp","severity","action_label","analyst","details","request_id","epoch_ts"]</fields>
         <option name="drilldown">none</option>
         <option name="count">10</option>
         <option name="wrap">true</option>
@@ -860,6 +867,7 @@
             | search action=fim_*
             | where action!="fim_watch_heartbeat"
             | sort -timestamp
+            | eval epoch_ts=_time
             | eval timestamp_human=if(isnull(timestamp_human), strftime(timestamp, "%d-%m-%Y %H:%M:%S UTC"), timestamp_human)
             | eval severity=coalesce(severity, case(
                 action=="fim_baseline_tampered",            "CRITICAL",
@@ -940,12 +948,17 @@
                 action=="fim_watch_heartbeat", "Watcher heartbeat (still alive)",
                 1==1, coalesce(details, action)
               )
-            | table timestamp_human severity action _path old_hash new_hash summary
+            | table timestamp_human severity action _path old_hash new_hash summary epoch_ts
             | rename _path AS path
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
         </search>
+        <!-- epoch_ts is LAST (hidden via CSS, read by audit_tz.js). First
+             column uses timestamp_human (not timestamp) because FIM events
+             sometimes ship a pre-formatted string; audit_tz.js reformats
+             the first column based on the raw epoch regardless. -->
+        <fields>["timestamp_human","severity","action","path","old_hash","new_hash","summary","epoch_ts"]</fields>
         <option name="drilldown">none</option>
         <option name="count">10</option>
         <option name="wrap">true</option>
@@ -964,6 +977,7 @@
           <query>
             index=wl_audit sourcetype=wl_audit_recovery
             | sort -timestamp
+            | eval epoch_ts=_time
             | eval timestamp_human=if(isnull(timestamp_human), strftime(timestamp, "%d-%m-%Y %H:%M:%S UTC"), timestamp_human)
             | eval severity=case(
                 action=="emergency_unlock",       "CRITICAL",
@@ -992,12 +1006,14 @@
                 1==1,
                   coalesce(details, "Recovery action: " . action . " — script=" . _script . " by=" . _by)
               )
-            | table timestamp_human severity action _script _by _ctx summary
+            | table timestamp_human severity action _script _by _ctx summary epoch_ts
             | rename _script AS script, _by AS host_user, _ctx AS context
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
         </search>
+        <!-- epoch_ts is LAST (hidden via CSS, read by audit_tz.js). -->
+        <fields>["timestamp_human","severity","action","script","host_user","context","summary","epoch_ts"]</fields>
         <option name="drilldown">none</option>
         <option name="count">5</option>
         <option name="wrap">true</option>

@@ -1,10 +1,16 @@
 /**
- * Audit Trail — Timezone Display Toggle (Phase A: Data Changes panel)
+ * Audit Trail — Timezone Display Toggle (Phase A + B: all 5 panels)
  *
- * Reformats the "timestamp" column of #audit_table_changes on the fly
- * based on the tz_display dropdown token. No server-side work — the
- * heavy lifting is done against a hidden epoch_ts column the SPL search
- * puts at the end of the result set.
+ * Reformats the first column (timestamp / timestamp_human) of every
+ * audit-dashboard table on the fly based on the tz_display dropdown.
+ * Panels covered (all in TABLE_IDS below):
+ *   - audit_table_changes    — Data Changes (timestamp)
+ *   - audit_table_activity   — Activity Log (timestamp)
+ *   - audit_table_admin      — Privileged Admin Actions (timestamp)
+ *   - audit_table_fim        — File Integrity Monitor Alerts (timestamp_human)
+ *   - audit_table_recovery   — Out-of-Band Recovery Actions (timestamp_human)
+ * No server-side work — the heavy lifting is done against a hidden
+ * epoch_ts column the SPL search puts at the end of each result set.
  *
  * Why client-side:
  *   Splunk servers run in a single timezone (usually UTC or the host OS
@@ -44,10 +50,36 @@ require([
 
     var STORAGE_KEY = "wl_audit_tz";
     var TOKEN_NAME = "tz_display";
-    var TABLE_SELECTOR = "#audit_table_changes table";
     var POLL_INTERVAL_MS = 500;
     var DEFAULT_MODE = "browser";
     var VALID_MODES = { "browser": true, "utc": true };
+
+    // Every audit-panel table whose first column is a human-readable
+    // timestamp and whose SPL adds `epoch_ts` as the last column. Order
+    // here doesn't matter; each selector is processed independently.
+    var TABLE_IDS = [
+        "audit_table_changes",   // Data Changes
+        "audit_table_activity",  // Activity Log
+        "audit_table_admin",     // Privileged Admin Actions
+        "audit_table_fim",       // File Integrity Monitor Alerts
+        "audit_table_recovery"   // Out-of-Band Recovery Actions
+    ];
+
+    function tableSelector(id) {
+        return "#" + id + " table";
+    }
+
+    // Returns a comma-separated jQuery selector that matches the given
+    // suffix under EVERY audit-panel table (e.g., " tbody td:first-child"
+    // becomes "#audit_table_changes table tbody td:first-child,
+    // #audit_table_activity table tbody td:first-child, ..."). Needed
+    // because naïvely concatenating a suffix to `.join(", ")` only
+    // applies the suffix to the LAST element of the list.
+    function allTablesSelector(suffix) {
+        return TABLE_IDS.map(function (id) {
+            return tableSelector(id) + suffix;
+        }).join(", ");
+    }
 
     // ────────────────────────────────────────────────────────────────
     // localStorage helpers (defensive — some browsers/modes disable it)
@@ -78,7 +110,7 @@ require([
     }
 
     // ────────────────────────────────────────────────────────────────
-    // CSS — hide the last column (epoch_ts) of the Data Changes table
+    // CSS — hide the last column (epoch_ts) of each audit-panel table
     // without touching other tables on the page.
     //
     // Splunk renders both <thead> and <tbody>, so hide :last-child on
@@ -87,12 +119,13 @@ require([
     // ────────────────────────────────────────────────────────────────
 
     function injectStyles() {
-        var css = [
-            TABLE_SELECTOR + " thead th:last-child,",
-            TABLE_SELECTOR + " tbody td:last-child {",
-            "  display: none !important;",
-            "}"
-        ].join("\n");
+        var ruleBodies = [];
+        TABLE_IDS.forEach(function (id) {
+            var sel = tableSelector(id);
+            ruleBodies.push(sel + " thead th:last-child");
+            ruleBodies.push(sel + " tbody td:last-child");
+        });
+        var css = ruleBodies.join(",\n") + " {\n  display: none !important;\n}";
         $("<style>").attr("id", "wl-audit-tz-style").text(css).appendTo("head");
     }
 
@@ -178,11 +211,7 @@ require([
     // Splunk re-renders the table.
     // ────────────────────────────────────────────────────────────────
 
-    function repaintTable(mode) {
-        var $rows = $(TABLE_SELECTOR + " tbody tr");
-        if (!$rows.length) {
-            return;
-        }
+    function repaintRows($rows, mode) {
         $rows.each(function () {
             var $row = $(this);
             var $cells = $row.children("td");
@@ -203,6 +232,15 @@ require([
             }
             $first.text(formatForMode(epoch, mode));
             $first.attr("data-tz-formatted", mode);
+        });
+    }
+
+    function repaintAllTables(mode) {
+        TABLE_IDS.forEach(function (id) {
+            var $rows = $(tableSelector(id) + " tbody tr");
+            if ($rows.length) {
+                repaintRows($rows, mode);
+            }
         });
     }
 
@@ -242,12 +280,12 @@ require([
     injectStyles();
 
     // 2) Start polling immediately. Runs independent of dropdown
-    //    wiring so the table gets repainted even if the dropdown
-    //    never materializes (e.g., browser extension removes it).
+    //    wiring so tables get repainted even if the dropdown never
+    //    materializes (e.g., browser extension removes it).
     setInterval(function () {
-        repaintTable(currentMode);
+        repaintAllTables(currentMode);
     }, POLL_INTERVAL_MS);
-    repaintTable(currentMode); // eager paint for the initial render
+    repaintAllTables(currentMode); // eager paint for the initial render
 
     // 3) Wire the dropdown widget. Retry until it shows up — the
     //    dashboard's ready event fires before all child views finish
@@ -312,10 +350,11 @@ require([
                 var defaultTokens = mvc.Components.get("default");
                 if (submittedTokens) submittedTokens.set(TOKEN_NAME, newValue);
                 if (defaultTokens) defaultTokens.set(TOKEN_NAME, newValue);
-                // Invalidate all rows so the next tick repaints them.
-                $(TABLE_SELECTOR + " tbody td:first-child")
+                // Invalidate all rows across all audit tables so the
+                // next tick repaints them in the new mode.
+                $(allTablesSelector(" tbody td:first-child"))
                     .removeAttr("data-tz-formatted");
-                repaintTable(currentMode);
+                repaintAllTables(currentMode);
             });
         });
     }
