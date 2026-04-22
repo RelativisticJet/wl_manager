@@ -1,4 +1,4 @@
-<dashboard version="1.1" theme="dark" refresh="60" script="audit_trail.js,notifications.js" stylesheet="whitelist_manager.css">
+<dashboard version="1.1" theme="dark" refresh="60" script="audit_trail.js,audit_tz.js,notifications.js" stylesheet="whitelist_manager.css">
   <label>Audit Trail</label>
   <description></description>
 
@@ -13,6 +13,21 @@
         <earliest>-7d@h</earliest>
         <latest>now</latest>
       </default>
+    </input>
+
+    <!--
+      Timezone display toggle. Cosmetic-only: searchWhenChanged="false"
+      because toggling does NOT re-run any SPL search — the actual
+      reformatting is done client-side in audit_tz.js against the hidden
+      _raw_ts column. Default is Browser Local so analysts in any timezone
+      see familiar wall-clock times on first load; their choice is then
+      remembered in localStorage per browser (key: wl_audit_tz).
+    -->
+    <input type="dropdown" token="tz_display" searchWhenChanged="false">
+      <label>Time Display</label>
+      <choice value="browser">Browser Local</choice>
+      <choice value="utc">UTC</choice>
+      <default>browser</default>
     </input>
 
     <input type="dropdown" token="analyst_filter" searchWhenChanged="true">
@@ -517,7 +532,7 @@
             | where match(action, "^(row_added|row_removed|row_removed_multiple|row_edited|row_reordered|auto_removed|revert|column_added|column_removed|column_renamed|column_reordered)$")
             | stats values(value{}) as value values(*) as * by action csv_file analyst timestamp
             | sort -timestamp
-            | eval _raw_ts=timestamp
+            | eval epoch_ts=timestamp
             | eval timestamp=if(match(timestamp, "^\d+\.?\d*$"), strftime(timestamp, "%d-%m-%Y %H:%M:%S GMT%:::z"), timestamp)
 
             | eval action_label=case(
@@ -577,26 +592,35 @@
 ... +" . (value_count - 10) . " more field entries" . if(_total_rows > 0 AND _total_rows != value_count, " (" . _total_rows . " rows affected — click row for details)", " (click row for details)"),
                 mvjoin(value, "
 "))
-            | table timestamp _raw_ts action analyst csv_file detection_rule reason row_change_count column_change_count request_id value_preview summary
+            | table timestamp epoch_ts action analyst csv_file detection_rule reason row_change_count column_change_count request_id value_preview summary
             | rename value_preview AS value
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
         </search>
         <drilldown>
-          <set token="detail_ts">$row._raw_ts$</set>
+          <set token="detail_ts">$row.epoch_ts$</set>
           <set token="detail_action">$row.action$</set>
           <set token="detail_analyst">$row.analyst$</set>
           <set token="detail_csv">$row.csv_file$</set>
         </drilldown>
         <!--
-          _raw_ts must remain in `| table` above so drilldown row-context
-          ($row._raw_ts$) can resolve it. <fields> below controls which
-          columns are VISIBLE in the rendered table — _raw_ts is omitted
-          so the epoch integer doesn't clutter the UI next to the
-          human-readable timestamp.
+          epoch_ts must remain in `| table` above so drilldown row-context
+          ($row.epoch_ts$) can resolve it. <fields> below controls column
+          order — epoch_ts is placed LAST so audit_tz.js can:
+            (1) CSS-hide the last column in #audit_table_changes (so the
+                epoch integer doesn't clutter the UI), and
+            (2) read the epoch out of the hidden cell to reformat the
+                first "timestamp" column in Browser Local or UTC per the
+                tz_display token. See appserver/static/audit_tz.js.
+
+          Named "epoch_ts" (not "_raw_ts"): Splunk treats underscore-
+          prefixed field names as internal/hidden by default, and in
+          some builds they are silently dropped from <fields>-controlled
+          display even when explicitly listed. Using a plain identifier
+          sidesteps that quirk.
         -->
-        <fields>["timestamp","action","analyst","csv_file","detection_rule","reason","row_change_count","column_change_count","request_id","value","summary"]</fields>
+        <fields>["timestamp","action","analyst","csv_file","detection_rule","reason","row_change_count","column_change_count","request_id","value","summary","epoch_ts"]</fields>
         <option name="count">5</option>
         <option name="wrap">true</option>
       </table>
