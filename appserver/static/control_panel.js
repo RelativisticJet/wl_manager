@@ -396,7 +396,20 @@ require([
     var pendingPage = 0;
     var historyPage = 0;
 
+    // Dual-admin queue entries store csv_file / rule_name inside item.meta,
+    // not at top level. Hoist them so the pending/history tables and the
+    // Show Data preview header can read the same fields as single-admin
+    // entries without special-casing every render path.
+    function normalizeDualAdminItem(item) {
+        if (!item || !item.is_dual_admin) return item;
+        var m = item.meta || {};
+        if (!item.csv_file && m.csv_file) { item.csv_file = m.csv_file; }
+        if (!item.detection_rule && m.rule_name) { item.detection_rule = m.rule_name; }
+        return item;
+    }
+
     function renderApprovalQueue(queue) {
+        (queue || []).forEach(normalizeDualAdminItem);
         allPending = queue.filter(function (q) { return q.status === "pending"; });
         allResolved = queue.filter(function (q) { return q.status !== "pending"; });
         // Sort newest first so latest approvals appear on page 1
@@ -698,8 +711,20 @@ require([
 
         $(".wl-modal-overlay").remove();
 
+        // __rule_operation__ is an internal sentinel used for create_rule /
+        // remove_rule entries that target a rule, not a CSV. Don't leak it
+        // into the UI — the pending table already shows "N/A" in its CSV
+        // column for the same reason.
+        function cleanCsvName(v) {
+            return (v === "__rule_operation__") ? "" : (v || "");
+        }
+        var displayCsv = cleanCsvName(item.csv_file);
+        var displayRule = item.detection_rule || "";
+
         var actionLabel = (item.action_type || "").replace(/_/g, " ");
-        var title = actionLabel + " — " + _.escape(item.csv_file || item.detection_rule || "");
+        var subject = displayCsv || displayRule || "";
+        var title = subject ? (actionLabel + " — " + _.escape(subject))
+                            : actionLabel;
         var bodyHtml;
 
         try {
@@ -768,10 +793,13 @@ require([
         var hl = item.pending_highlight || {};
 
         // ── Metadata header (always shown) ──
+        // Hide the __rule_operation__ sentinel; show N/A like the pending table.
+        var csvMeta = (item.csv_file && item.csv_file !== "__rule_operation__")
+            ? item.csv_file : "N/A";
         var meta = '<div style="margin-bottom:12px;font-size:12px;color:var(--wl-muted,#888)">' +
             '<strong>Analyst:</strong> ' + _.escape(item.analyst) +
             ' &nbsp;|&nbsp; <strong>Rule:</strong> ' + _.escape(item.detection_rule || "N/A") +
-            ' &nbsp;|&nbsp; <strong>CSV:</strong> ' + _.escape(item.csv_file || "N/A") +
+            ' &nbsp;|&nbsp; <strong>CSV:</strong> ' + _.escape(csvMeta) +
             ' &nbsp;|&nbsp; <strong>Reason:</strong> ' +
             _.escape(item.comment || item.description || extractRequestReason(item) || "none") +
             '</div>';
@@ -795,6 +823,16 @@ require([
             return meta + renderCreateRulePreview(payload, item);
         } else if (at === "remove_csv" || at === "remove_rule") {
             return meta + renderDeletePreview(item);
+        } else if (at === "admin_delete_rule") {
+            return meta + renderAdminDeleteRulePreview(item);
+        } else if (at === "admin_delete_csv") {
+            return meta + renderAdminDeleteCsvPreview(item);
+        } else if (at === "admin_purge_trash") {
+            return meta + renderAdminPurgeTrashPreview(item);
+        } else if (at === "admin_factory_reset") {
+            return meta + renderAdminFactoryResetPreview(item);
+        } else if (at === "admin_mass_usage_reset") {
+            return meta + renderAdminMassUsageResetPreview(item);
         }
         return meta + '<p style="color:var(--wl-muted,#888)">No data preview available for this action type.</p>';
     }
@@ -1087,6 +1125,98 @@ require([
             _.escape(item.detection_rule || "") + '</p>' +
             '<p style="font-size:12px;color:var(--wl-muted,#888);margin:4px 0 0">' +
             'The rule and all its CSV mappings will be moved to Trash.</p>';
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Dual-admin previews — destructive admin actions that need a second
+    // approver. These entries store context in item.meta rather than
+    // payload/pending_highlight, so each renderer pulls from meta.*
+    // ══════════════════════════════════════════════════════════════════
+
+    function renderAdminDeleteRulePreview(item) {
+        var m = item.meta || {};
+        var name = m.rule_name || item.detection_rule || "(unknown)";
+        var csvCount = m.csv_count_at_submission;
+        var countLine = (csvCount != null)
+            ? '<p style="margin:0 0 6px">This rule had <strong>' +
+                _.escape(String(csvCount)) + '</strong> CSV mapping(s) at submission time.</p>'
+            : '';
+        return '<p style="color:#e74c3c;margin:0 0 6px">' +
+                '<strong>Delete detection rule:</strong> ' + _.escape(name) +
+            '</p>' +
+            countLine +
+            '<p style="font-size:12px;color:var(--wl-muted,#888);margin:0 0 4px">' +
+                'Dual-approval is required because the rule has 3 or more mapped CSVs.' +
+            '</p>' +
+            '<p style="color:#e74c3c;margin:6px 0 0">' +
+                'The rule and ALL its CSV mappings will be moved to Trash. ' +
+                'They can be restored by an admin until permanently purged.' +
+            '</p>';
+    }
+
+    function renderAdminDeleteCsvPreview(item) {
+        var m = item.meta || {};
+        var name = m.csv_file || item.csv_file || "(unknown)";
+        var removalType = m.removal_type || "permanent";
+        return '<p style="color:#e74c3c;margin:0 0 6px">' +
+                '<strong>Delete CSV:</strong> ' + _.escape(name) +
+            '</p>' +
+            '<p style="margin:0 0 6px">' +
+                'Removal type: <strong>' + _.escape(removalType) + '</strong>' +
+            '</p>' +
+            '<p style="font-size:12px;color:var(--wl-muted,#888);margin:0 0 4px">' +
+                'Dual-approval is required because the submitting admin exceeded ' +
+                'their daily CSV-deletion limit.' +
+            '</p>' +
+            '<p style="color:#e74c3c;margin:6px 0 0">' +
+                'The CSV will be moved to Trash. It can be restored by an admin ' +
+                'until permanently purged.' +
+            '</p>';
+    }
+
+    function renderAdminPurgeTrashPreview(item) {
+        var m = item.meta || {};
+        var tid = m.trash_id || "(unknown)";
+        return '<p style="color:#e74c3c;margin:0 0 6px">' +
+                '<strong>Permanently purge from Trash</strong>' +
+            '</p>' +
+            '<p style="margin:0 0 6px">' +
+                'Trash ID: <code style="font-family:monospace;background:rgba(128,128,128,0.15);' +
+                'padding:1px 4px;border-radius:3px">' + _.escape(tid) + '</code>' +
+            '</p>' +
+            '<p style="color:#e74c3c;margin:6px 0 0;font-weight:600">' +
+                '⚠ This action is IRREVERSIBLE. The trashed item and its ' +
+                'contents will be permanently deleted from disk.' +
+            '</p>';
+    }
+
+    function renderAdminFactoryResetPreview(item) {
+        return '<p style="color:#e74c3c;margin:0 0 6px">' +
+                '<strong>Reset ALL analyst limits to factory defaults</strong>' +
+            '</p>' +
+            '<p style="margin:0 0 6px">' +
+                'Every analyst-limit field (row additions, removals, edits, reverts, ' +
+                'column removals, imports, etc.) will be overwritten with the built-in ' +
+                'defaults. Currently-configured values will be lost.' +
+            '</p>' +
+            '<p style="color:#e74c3c;margin:6px 0 0;font-weight:600">' +
+                '⚠ This is app-wide — it affects every analyst, not a single user.' +
+            '</p>';
+    }
+
+    function renderAdminMassUsageResetPreview(item) {
+        return '<p style="color:#e74c3c;margin:0 0 6px">' +
+                '<strong>Reset ALL analyst daily usage counters to zero</strong>' +
+            '</p>' +
+            '<p style="margin:0 0 6px">' +
+                'Every analyst\'s remaining daily quota across all action types ' +
+                'will be cleared. Individual per-analyst resets do not require ' +
+                'dual-approval — this dual-approval gate exists specifically ' +
+                'because the effect is app-wide.' +
+            '</p>' +
+            '<p style="color:#e74c3c;margin:6px 0 0;font-weight:600">' +
+                '⚠ All analysts will regain full daily quota simultaneously.' +
+            '</p>';
     }
 
     function showCancelModal(requestId) {
