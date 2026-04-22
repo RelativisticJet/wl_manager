@@ -15,11 +15,14 @@ The tests below drive that refactor and lock in the behavior.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Tuple
+from unittest import mock
 
 # Make bin/ importable so ``import wl_expiration_cleanup`` works.
 BIN_DIR = os.path.join(os.path.dirname(__file__), "..", "bin")
@@ -198,6 +201,134 @@ class TestPartitionExpiredIdentityAndCounts(unittest.TestCase):
         _, expired = partition_expired(HEADERS, list(rows))
         self.assertEqual(wl_csv_count, len(expired))
         self.assertEqual(wl_csv_count, 7)
+
+
+class TestIndexAuditRetryAndFallback(unittest.TestCase):
+    """index_audit() must never lose a record. CSV mutation has already
+    happened by the time we get here; a silent 401 means a whitelist row
+    vanished without a trail — exactly the compliance failure that drove
+    this fix. The contract:
+
+    * Successful POST on first try            → no recovery-log write
+    * POST succeeds on retry                  → no recovery-log write
+    * All POST attempts fail                  → fall back to recovery log
+    * Empty session key                       → straight to recovery log
+      (skip the REST call that's doomed to 401)
+    * Recovery log itself fails to write      → splunkd.log CRITICAL msg
+    """
+
+    def setUp(self) -> None:
+        # Re-import fresh each test so module-level patches don't leak.
+        import importlib
+
+        import wl_expiration_cleanup as module
+        importlib.reload(module)
+        self.module = module
+
+        self.tmpdir = tempfile.mkdtemp(prefix="wl_exp_test_")
+        self.recovery_path = os.path.join(self.tmpdir, "_recovery_log.jsonl")
+
+        # Point RECOVERY_LOG at a tempdir so tests don't touch anything real.
+        self._patcher = mock.patch.object(
+            self.module, "RECOVERY_LOG", self.recovery_path
+        )
+        self._patcher.start()
+        # Kill the retry sleep so tests are fast.
+        self._sleep_patcher = mock.patch.object(
+            self.module, "AUDIT_POST_RETRY_SLEEP", 0
+        )
+        self._sleep_patcher.start()
+
+    def tearDown(self) -> None:
+        self._patcher.stop()
+        self._sleep_patcher.stop()
+        # Best-effort cleanup
+        try:
+            if os.path.isfile(self.recovery_path):
+                os.unlink(self.recovery_path)
+            os.rmdir(self.tmpdir)
+        except OSError:
+            pass
+
+    def _event(self) -> Dict:
+        return {"action": "auto_removed", "csv_file": "DRxxx.csv",
+                "removed_row_count": 1}
+
+    def test_success_on_first_attempt_no_recovery_log(self) -> None:
+        with mock.patch.object(
+            self.module, "_post_audit_once", return_value=(True, "")
+        ) as post:
+            self.module.index_audit("abc", self._event())
+        self.assertEqual(post.call_count, 1,
+                         "should stop calling POST after first success")
+        self.assertFalse(os.path.exists(self.recovery_path),
+                         "no fallback write when POST succeeded")
+
+    def test_retries_then_succeeds_no_recovery_log(self) -> None:
+        # Fail once, then succeed.
+        results = [(False, "HTTP 401"), (True, "")]
+        with mock.patch.object(
+            self.module, "_post_audit_once", side_effect=results
+        ) as post:
+            self.module.index_audit("abc", self._event())
+        self.assertEqual(post.call_count, 2)
+        self.assertFalse(os.path.exists(self.recovery_path),
+                         "retry success must not write to recovery log")
+
+    def test_persistent_401_falls_back_to_recovery_log(self) -> None:
+        with mock.patch.object(
+            self.module, "_post_audit_once",
+            return_value=(False, "HTTP 401")
+        ) as post:
+            self.module.index_audit("abc", self._event())
+        # 1 initial + AUDIT_POST_RETRIES attempts = 3 total
+        self.assertEqual(post.call_count,
+                         1 + self.module.AUDIT_POST_RETRIES)
+        self.assertTrue(os.path.isfile(self.recovery_path))
+        with open(self.recovery_path, encoding="utf-8") as fh:
+            lines = [json.loads(line) for line in fh if line.strip()]
+        self.assertEqual(len(lines), 1)
+        rec = lines[0]
+        self.assertEqual(rec["action"], "auto_removed")
+        self.assertEqual(rec["source_script"], "wl_expiration_cleanup")
+        self.assertTrue(rec["audit_post_failed"])
+        self.assertEqual(rec["audit_post_error"], "HTTP 401")
+
+    def test_empty_session_key_goes_straight_to_recovery_log(self) -> None:
+        """When stdin delivered no session key (observed during splunkd
+        restart races), skip the guaranteed-401 REST call and write the
+        event directly to the fallback."""
+        with mock.patch.object(
+            self.module, "_post_audit_once"
+        ) as post:
+            self.module.index_audit("", self._event())
+        self.assertEqual(post.call_count, 0,
+                         "must not attempt authenticated POST with empty key")
+        self.assertTrue(os.path.isfile(self.recovery_path))
+        with open(self.recovery_path, encoding="utf-8") as fh:
+            rec = json.loads(fh.readline())
+        self.assertEqual(rec["audit_post_error"], "empty_session_key")
+
+    def test_fallback_failure_logs_critical_to_stderr(self) -> None:
+        # Point RECOVERY_LOG at a path we can't write to.
+        unwritable = os.path.join(self.tmpdir, "nonexistent_dir",
+                                  "cannot_create_here", "log.jsonl")
+        with mock.patch.object(self.module, "RECOVERY_LOG", unwritable):
+            with mock.patch.object(
+                self.module, "_post_audit_once",
+                return_value=(False, "HTTP 401")
+            ):
+                with mock.patch("os.makedirs",
+                                side_effect=OSError("no perms")):
+                    with mock.patch("sys.stderr") as fake_err:
+                        self.module.index_audit("abc", self._event())
+        # Expect at least one stderr write that contains CRITICAL.
+        joined = "".join(
+            call.args[0] for call in fake_err.write.call_args_list
+            if call.args
+        )
+        self.assertIn("CRITICAL", joined)
+        self.assertIn("LOST", joined)
 
 
 if __name__ == "__main__":
