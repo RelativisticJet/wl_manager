@@ -4276,10 +4276,13 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 update_csv_expected_hash(path)
             except Exception:
                 pass
+            _st = os.stat(path)
+            _mt = int(_st.st_mtime)
             return self._resp(200, {
                 "message": "No changes detected",
                 "diff": diff,
-                "file_mtime": int(os.path.getmtime(path)),
+                "file_mtime": _mt,
+                "content_hash": _get_csv_content_hash(path, _mt, _st.st_size),
             })
 
         # ── Full file lock — block ALL saves when approval pending ──
@@ -4438,12 +4441,15 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 actual_count = 1
             _increment_daily_limit(user, limit_action, count=actual_count)
 
+        _st = os.stat(path)
+        _mt = int(_st.st_mtime)
         return self._resp(200, {
             "message": "CSV saved successfully",
             "diff": diff,
             "rows_before": len(old_rows),
             "rows_after": len(new_rows),
-            "file_mtime": int(os.path.getmtime(path)),
+            "file_mtime": _mt,
+            "content_hash": _get_csv_content_hash(path, _mt, _st.st_size),
         })
 
 
@@ -4644,6 +4650,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         old_vis_hdrs = [h for h in old_headers if not h.startswith("_")]
         new_vis_hdrs = [h for h in new_headers if not h.startswith("_")]
 
+        _st = os.stat(path)
+        _mt = int(_st.st_mtime)
         return self._resp(200, {
             "message": "CSV reverted successfully",
             "diff": pipeline_diff,
@@ -4651,7 +4659,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "rows_after": len(new_rows),
             "cols_before": len(old_vis_hdrs),
             "cols_after": len(new_vis_hdrs),
-            "file_mtime": int(os.path.getmtime(path)),
+            "file_mtime": _mt,
+            "content_hash": _get_csv_content_hash(path, _mt, _st.st_size),
         })
 
     # ------------------------------------------------------------------

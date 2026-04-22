@@ -54,6 +54,9 @@ define([
             if (xhr.status === 409 && resp.current_mtime) {
                 _state.loadedMtime = resp.current_mtime;
             }
+            if (xhr.status === 409 && typeof resp.current_content_hash === "string" && resp.current_content_hash) {
+                _state.loadedContentHash = resp.current_content_hash;
+            }
         } catch (e) { console.warn("wl_manager: failed to parse error response", e); }
         var safeErr = _.escape(err);
         if (xhr.status === 409) {
@@ -88,6 +91,7 @@ define([
         _actions.refreshTable();
         showMsg("Adding column and saving&hellip;", "info");
 
+        _state.saving = true;
         restPost({
             action:          "save_csv",
             csv_file:        _state.selectedCsv,
@@ -115,6 +119,7 @@ define([
             _state.originalRows = _state.currentRows.map(function (r) { return $.extend({}, r); });
             _state.originalHeaders = _state.currentHeaders.slice();
             if (data.file_mtime) { _state.loadedMtime = data.file_mtime; }
+            if (typeof data.content_hash === "string" && data.content_hash) { _state.loadedContentHash = data.content_hash; }
 
             if (data.diff && data.diff.text_diff && data.diff.text_diff.length) {
                 _actions.renderDiff(data.diff);
@@ -129,7 +134,8 @@ define([
             _state.currentRows = prevRows.map(function (r) { return $.extend({}, r); });
             _state.originalRows = prevOriginal.map(function (r) { return $.extend({}, r); });
             _actions.refreshTable();
-        });
+        })
+        .always(function () { _state.saving = false; });
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -216,6 +222,7 @@ define([
 
         showMsg("Saving column removal&hellip;", "info");
 
+        _state.saving = true;
         restPost({
             action:          "save_csv",
             csv_file:        _state.selectedCsv,
@@ -249,6 +256,7 @@ define([
             _state.originalRows = _state.currentRows.map(function (r) { return $.extend({}, r); });
             _state.originalHeaders = _state.currentHeaders.slice();
             if (data.file_mtime) { _state.loadedMtime = data.file_mtime; }
+            if (typeof data.content_hash === "string" && data.content_hash) { _state.loadedContentHash = data.content_hash; }
             if (diffInfo.text_diff && diffInfo.text_diff.length) {
                 _actions.renderDiff(diffInfo);
             }
@@ -261,7 +269,8 @@ define([
             _state.currentRows = pcr.prevRows.map(function (r) { return $.extend({}, r); });
             _state.originalRows = pcr.prevOriginal.map(function (r) { return $.extend({}, r); });
             _actions.refreshTable();
-        });
+        })
+        .always(function () { _state.saving = false; });
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -774,6 +783,7 @@ define([
         if (_state.pendingBulkEditCount > 0) {
             rmPayload._bulk_edit_count = _state.pendingBulkEditCount;
         }
+        _state.saving = true;
         restPost(rmPayload)
         .done(function (data) {
             if (data.error) {
@@ -794,6 +804,7 @@ define([
             _state.originalHeaders = _state.currentHeaders.slice();
             _state.pendingBulkEditCount = 0;
             if (data.file_mtime) { _state.loadedMtime = data.file_mtime; }
+            if (typeof data.content_hash === "string" && data.content_hash) { _state.loadedContentHash = data.content_hash; }
             _actions.refreshTable();
 
             if (diffInfo.text_diff && diffInfo.text_diff.length) {
@@ -808,7 +819,8 @@ define([
             _state.currentRows = prr.prevRows.map(function (r) { return $.extend({}, r); });
             _state.originalRows = prr.prevOriginal.map(function (r) { return $.extend({}, r); });
             _actions.refreshTable();
-        });
+        })
+        .always(function () { _state.saving = false; });
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -846,6 +858,7 @@ define([
         if (_state.pendingBulkEditCount > 0) {
             bulkRmPayload._bulk_edit_count = _state.pendingBulkEditCount;
         }
+        _state.saving = true;
         restPost(bulkRmPayload)
         .done(function (data) {
             if (data.error) {
@@ -866,6 +879,7 @@ define([
             _state.originalHeaders = _state.currentHeaders.slice();
             _state.pendingBulkEditCount = 0;
             if (data.file_mtime) { _state.loadedMtime = data.file_mtime; }
+            if (typeof data.content_hash === "string" && data.content_hash) { _state.loadedContentHash = data.content_hash; }
             _actions.refreshTable();
             if (diffInfo.text_diff && diffInfo.text_diff.length) {
                 _actions.renderDiff(diffInfo);
@@ -879,7 +893,8 @@ define([
             _state.currentRows = prevRows.map(function (r) { return $.extend({}, r); });
             _state.originalRows = prevOriginal.map(function (r) { return $.extend({}, r); });
             _actions.refreshTable();
-        });
+        })
+        .always(function () { _state.saving = false; });
     }
 
     // ══════════════════════════════════════════════════════════════════
