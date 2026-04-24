@@ -1,5 +1,43 @@
 # E2E Tests — Test Harness Gate
 
+## READ BEFORE WRITING A NEW E2E TEST — No Synthetic State Injection
+
+E2E tests in this directory MUST drive the feature through the real
+production code path — a real user (analyst1 / wladmin1 / superadmin1)
+clicking the real UI, or an authenticated REST call to
+`POST /custom/wl_manager` with the correct `action=`.
+
+**Do NOT** start a test by writing directly to
+`lookups/_versions/_approval_queue.json`, `.fim_baseline.json`,
+`_daily_limits.json`, KV collections, or any other Splunk-internal
+storage to "set up" queue entries, counter values, or baseline state.
+Synthetic fixtures populate both sides of the handler/frontend
+contract and hide schema drift — the exact failure mode that let the
+build 614 dual-admin "Invalid Date" bug reach production. If the
+state you need did not get there by a real user doing a real thing,
+your test is not an E2E test.
+
+The PreToolUse hook at `scripts/hooks/block-synthetic-fixtures.js`
+blocks most such writes at the tool level. This banner is the
+human-reader reminder that covers paths the hook cannot see (e.g. a
+test that shells out through a subprocess, or a test added on another
+machine without the hook wired up).
+
+**Legitimate setup patterns:**
+
+- `setup_test_env.sh` — stands up the container and seeds baseline
+  state that exists for ALL E2E tests (not per-test fixtures).
+- `lib_helpers.cjs :: assertTestHarness()` — the destructive-ops gate
+  (see below). Destructive ops are allowed because they EMULATE
+  real disaster-recovery scenarios, not because they bypass the
+  handler during feature verification.
+- `tests/unit/**` — pure-helper tests with synthetic inputs. Not E2E.
+
+See `CLAUDE.md` → "Synthetic Fixtures — Banned for Feature
+Verification (mechanically enforced)" for the full policy, and
+`~/.claude/projects/c--Users-PC-wl-manager/memory/feedback_synthetic_fixtures_mask_schema_drift.md`
+for the origin incident.
+
 ## STOP — READ THIS FIRST
 
 Several tests in this directory run **destructive operations** against

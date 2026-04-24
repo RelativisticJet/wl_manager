@@ -116,6 +116,43 @@ echo "exit=$?"
 4. Smoke-test with at least one blocking and one allowing case.
 5. Commit. Collaborators opt in individually via step 3.
 
+## Known Limitations
+
+### Subagents bypass the hook
+
+Smoke-test on 2026-04-24: a subagent dispatched via the `Agent` tool
+(subagent_type: `general-purpose`) was able to execute
+`echo "{}" > lookups/_versions/_fim_deploy_window.json` without the
+hook firing. The parent session has the hook wired in
+`.claude/settings.json`, but the subagent ran in an isolated Claude
+Code context that does not inherit project-local PreToolUse hooks.
+
+**Until this gap is closed, do not delegate writes to protected
+Splunk state to subagents.** The `Agent` tool is safe for research,
+exploration, and read-only analysis; reserve mutations for the
+parent session where the hook applies.
+
+**Mitigation options** (none implemented today):
+
+- Duplicate the hook at `~/.claude/hooks/` referenced from
+  `~/.claude/settings.json` — may propagate to subagents because
+  user-level settings can inherit differently than project-level.
+  Needs verification.
+- File system ACL on `lookups/_versions/*.json` granting write only
+  to the Splunk container user. Tradeoff: breaks hand-editing for
+  debugging and may break deploy scripts.
+- Explicit CLAUDE.md rule forbidding subagent delegation for writes.
+  Prose-only, relies on self-discipline; the same kind of rule that
+  failed to prevent the incident this hook exists to address.
+
+### Obfuscated Bash bypasses the write indicators
+
+The Bash matcher uses a regex for `WRITE_INDICATORS`. A heavily
+obfuscated command (e.g. base64-encoded Python, multi-stage shell
+expansion) could evade it. The threat model is "Claude talking itself
+into shortcuts", not "a motivated attacker" — obfuscation is not
+a pattern I use, so this is an accepted gap.
+
 ## Related
 
 - `CLAUDE.md` → "Synthetic Fixtures — Banned for Feature Verification
