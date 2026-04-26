@@ -20,6 +20,7 @@ __all__ = [
     "sanitize_text",
     "validate_ascii_text",
     "is_ascii_name",
+    "is_valid_app_context",
     "is_safe_filename",
     "safe_realpath",
     "build_csv_path",
@@ -102,12 +103,49 @@ def is_ascii_name(text, allow_spaces=True):
     titles). Pass allow_spaces=False for fields that must not contain
     spaces (e.g. CSV filenames where space → "_" replacement is the
     pipeline norm).
+
+    Also rejects whitespace-only strings (e.g. "   ") even though spaces
+    pass the regex — a name with no actual content would create blank-
+    titled rules and downstream display bugs.
     """
     if not text or not isinstance(text, str):
         return False
     if allow_spaces:
-        return bool(_ASCII_NAME_RE.match(text))
-    return bool(_ASCII_FILENAME_STEM_RE.match(text))
+        if not _ASCII_NAME_RE.match(text):
+            return False
+    else:
+        if not _ASCII_FILENAME_STEM_RE.match(text):
+            return False
+    # Defense-in-depth: require at least one non-space character. Without
+    # this, "   " would pass the spaces-allowed regex.
+    return any(not c.isspace() for c in text)
+
+
+# Splunk app names by convention are alphanumeric + underscore + hyphen.
+# We never allow spaces, dots, slashes, or non-ASCII because the value is
+# joined into a filesystem path: etc/apps/<app_context>/lookups/...
+# Length cap of 100 matches typical Splunk app naming and protects against
+# pathological input.
+_APP_CONTEXT_RE = re.compile(r'^[A-Za-z0-9_\-]{1,100}$')
+
+
+def is_valid_app_context(text):
+    """Return True if text is a valid Splunk app context name.
+
+    Splunk app names follow the convention `[a-zA-Z0-9_-]+`. The value
+    flows into `os.path.join(APPS_DIR, app_context, "lookups", ...)` so
+    we must reject path separators, dots (no traversal), and any
+    non-ASCII characters before the path is constructed.
+
+    Empty string is considered valid here — the caller is expected to
+    apply a default (typically APP_NAME / "wl_manager") when the field
+    is omitted.
+    """
+    if not text:
+        return True  # empty → caller substitutes default
+    if not isinstance(text, str):
+        return False
+    return bool(_APP_CONTEXT_RE.match(text))
 
 
 def is_safe_filename(name: str, allowed_extensions: Tuple[str, ...] = (".csv",)) -> bool:
@@ -153,6 +191,14 @@ def is_safe_filename(name: str, allowed_extensions: Tuple[str, ...] = (".csv",))
     # Reject non-ASCII characters anywhere in the filename
     if _NON_ASCII_RE.search(name):
         return False
+    # Reject control characters (NUL, BEL, BS, etc.) anywhere — null
+    # bytes in particular are a classic C-string path-truncation attack.
+    # ASCII range \x00-\x1f and \x7f (DEL) are never legitimate in
+    # filenames; the only allowable whitespace control char (TAB) would
+    # also break CSV/SPL downstream so we block all of them.
+    for c in name:
+        if ord(c) < 0x20 or ord(c) == 0x7f:
+            return False
     if not any(c.isascii() and c.isalnum() for c in stem):
         return False
 
