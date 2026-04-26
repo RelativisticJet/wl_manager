@@ -19,6 +19,7 @@ from typing import Optional, Tuple
 __all__ = [
     "sanitize_text",
     "validate_ascii_text",
+    "is_ascii_name",
     "is_safe_filename",
     "safe_realpath",
     "build_csv_path",
@@ -68,6 +69,20 @@ def sanitize_text(text: str, max_length: int = 500) -> str:
 
 _NON_ASCII_RE = re.compile(r'[^\x00-\x7F]')
 
+# ASCII identifier regex — used by detection rule names and CSV filenames.
+# We must NOT use Python's c.isalnum() here because it is Unicode-aware and
+# accepts CJK ideographs (e.g. '检' is a Unicode "letter"), Cyrillic, Greek,
+# Arabic, etc. ASCII-only is enforced because:
+#   1. Rule names become filesystem paths (lookups/_versions/{rule}_versions/)
+#   2. CSV filenames need to be safe for SPL search expressions, dashboard
+#      drilldowns, audit log readability, and cross-platform copy/backup
+#   3. Defense against homoglyph attacks (zero-width spaces, lookalike chars)
+# See discussion 2026-04-26 with user — gap was found via stress test that
+# accidentally allowed `DR_压力测试_检...` through both create_rule and
+# create_csv submission paths.
+_ASCII_NAME_RE = re.compile(r'^[A-Za-z0-9_\-. ]+$')
+_ASCII_FILENAME_STEM_RE = re.compile(r'^[A-Za-z0-9_\-]+$')
+
 
 def validate_ascii_text(text):
     """Return an error string if text contains non-ASCII characters, else None."""
@@ -77,6 +92,22 @@ def validate_ascii_text(text):
     if match:
         return "Only ASCII characters are allowed in text fields"
     return None
+
+
+def is_ascii_name(text, allow_spaces=True):
+    """Return True if text is a valid ASCII identifier-like name.
+
+    Allowed: a-z, A-Z, 0-9, underscore, hyphen, dot. Spaces are allowed
+    by default (used by detection rule names which can be human-readable
+    titles). Pass allow_spaces=False for fields that must not contain
+    spaces (e.g. CSV filenames where space → "_" replacement is the
+    pipeline norm).
+    """
+    if not text or not isinstance(text, str):
+        return False
+    if allow_spaces:
+        return bool(_ASCII_NAME_RE.match(text))
+    return bool(_ASCII_FILENAME_STEM_RE.match(text))
 
 
 def is_safe_filename(name: str, allowed_extensions: Tuple[str, ...] = (".csv",)) -> bool:
@@ -111,9 +142,18 @@ def is_safe_filename(name: str, allowed_extensions: Tuple[str, ...] = (".csv",))
     if not any(name.lower().endswith(ext) for ext in allowed_extensions):
         return False
 
-    # Stem must contain at least one alphanumeric character
+    # Stem must be ASCII-only and contain at least one alphanumeric.
+    # NOTE: previously used c.isalnum() which is Unicode-aware and would
+    # accept CJK / Cyrillic / Greek filenames. Tightened to ASCII because
+    # CSV filenames are filesystem paths and SPL search identifiers; see
+    # is_ascii_name() above for the full rationale.
     stem = name.rsplit(".", 1)[0]
-    if not stem or not any(c.isalnum() for c in stem):
+    if not stem:
+        return False
+    # Reject non-ASCII characters anywhere in the filename
+    if _NON_ASCII_RE.search(name):
+        return False
+    if not any(c.isascii() and c.isalnum() for c in stem):
         return False
 
     return True
