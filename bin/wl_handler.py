@@ -91,6 +91,7 @@ from wl_validation import (
     sanitize_text,
     validate_ascii_text,
     is_ascii_name,
+    is_valid_app_context,
     is_safe_filename,
     safe_realpath,
     build_csv_path,
@@ -1725,6 +1726,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         """Save column widths for a CSV file."""
         csv_file = payload.get("csv_file", "")
         app_context = payload.get("app_context", "")
+        if not is_valid_app_context(app_context):
+            return self._resp(400, {"error": "Invalid app_context"})
         col_widths = payload.get("col_widths", {})
 
         if not is_safe_filename(csv_file):
@@ -3153,11 +3156,18 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             })
         _record_cooldown(user, "purge_trash", sys_key)
 
+        # ASCII-only on the comment that flows into the dual-approval
+        # entry + audit event.
+        raw_comment = payload.get("comment", "Purge trash item")
+        ascii_err = validate_ascii_text(raw_comment)
+        if ascii_err:
+            return self._resp(400, {"error": ascii_err})
+
         # Dual-approval required for ALL roles (defense in depth)
         return self._submit_dual_approval(request, {
             "action_type": "admin_purge_trash",
             "trash_id": payload.get("item_id", ""),
-            "comment": payload.get("comment", "Purge trash item"),
+            "comment": raw_comment,
         }, user)
 
     def _action_restore_from_trash(self, request, payload, user, roles):
@@ -3176,7 +3186,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     "disabled": maximum == 0,
                 })
         item_id = payload.get("item_id", "")
-        comment = payload.get("comment", "")
+        raw_comment = payload.get("comment", "")
+        ascii_err = validate_ascii_text(raw_comment)
+        if ascii_err:
+            return self._resp(400, {"error": ascii_err})
+        comment = raw_comment
         result = restore_from_trash_pipeline(
             item_id, user, self._get_session_key(request), comment=comment)
         if not result.get("success"):
@@ -3215,8 +3229,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         Freezes ALL write operations app-wide until a different
         superadmin deactivates.
         """
-        reason = sanitize_text(
-            (payload.get("reason") or "")[:500])
+        raw_reason = payload.get("reason") or ""
+        ascii_err = validate_ascii_text(raw_reason)
+        if ascii_err:
+            return self._resp(400, {"error": ascii_err})
+        reason = sanitize_text(raw_reason[:500])
         state = _read_lockdown_state()
         if state.get("locked"):
             return self._resp(200, {
@@ -3359,7 +3376,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             return self._resp(200, {
                 "error": "duration_minutes must be between 1 and 60."})
 
-        reason = sanitize_text(str(payload.get("reason", "")))[:500]
+        raw_reason = str(payload.get("reason", ""))
+        ascii_err = validate_ascii_text(raw_reason)
+        if ascii_err:
+            return self._resp(400, {"error": ascii_err})
+        reason = sanitize_text(raw_reason)[:500]
         if not reason.strip():
             return self._resp(200, {
                 "error": "A reason is required for opening a deploy window."})
@@ -3615,7 +3636,10 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         detection_rule = (payload.get("detection_rule") or "").strip()
         csv_filename = (payload.get("csv_file") or "").strip()
         headers_raw = payload.get("headers", [])
-        app_context = (payload.get("app_context") or "").strip() or APP_NAME
+        raw_app_context = (payload.get("app_context") or "").strip()
+        if not is_valid_app_context(raw_app_context):
+            return self._resp(400, {"error": "Invalid app_context"})
+        app_context = raw_app_context or APP_NAME
 
         # ── Validate detection rule ───────────────────────────────────
         if not detection_rule:
@@ -3939,6 +3963,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     def _save_csv(self, request, payload, user, _from_approval=False):
         csv_file = payload.get("csv_file", "")
         app_context = payload.get("app_context", "")
+        if not is_valid_app_context(app_context):
+            return self._resp(400, {"error": "Invalid app_context"})
         detection_rule = payload.get("detection_rule", "")
         new_headers = payload.get("headers", [])
         new_rows = payload.get("rows", [])
@@ -4482,6 +4508,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         """Revert a CSV file to a previous version snapshot."""
         csv_file = payload.get("csv_file", "")
         app_context = payload.get("app_context", "")
+        if not is_valid_app_context(app_context):
+            return self._resp(400, {"error": "Invalid app_context"})
         detection_rule = payload.get("detection_rule", "")
         version_filename = payload.get("version_filename", "")
         version_display = payload.get("version_display", "")
@@ -4738,12 +4766,20 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if ascii_err:
             return self._resp(400, {"error": ascii_err})
 
-        # ASCII-only on the entity name (rule or CSV). Pipeline validation
-        # also runs at replay-time but earlier rejection avoids polluting
-        # the approval queue with entries that will always fail.
+        # ASCII-only + length cap on the entity name (rule or CSV). Pipeline
+        # validation also runs at replay-time but earlier rejection avoids
+        # polluting the approval queue with entries that will always fail.
+        # Length caps mirror create_rule_pipeline (100) and is_safe_filename
+        # (effectively bounded by FS path length, but we enforce 200 at the
+        # gate to keep entries readable in the queue UI).
         if action_type in ("create_rule", "remove_rule"):
             rule_name = (payload.get("detection_rule")
                          or payload.get("rule_name") or "").strip()
+            if rule_name and len(rule_name) > 100:
+                return self._resp(400, {
+                    "error": "Detection rule name too long: {} chars "
+                             "(max 100)".format(len(rule_name))
+                })
             if rule_name and not is_ascii_name(rule_name, allow_spaces=True):
                 return self._resp(400, {
                     "error": "Detection rule name can only contain ASCII "
@@ -4753,9 +4789,14 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         elif action_type in ("create_csv", "remove_csv"):
             csv_file = (payload.get("csv_file") or "").strip()
             # Tolerate the rule-operation sentinel; reject only real names
-            if (csv_file and csv_file != "__rule_operation__"
-                    and not is_safe_filename(csv_file)):
-                return self._resp(400, {"error": "Invalid CSV file name"})
+            if csv_file and csv_file != "__rule_operation__":
+                if len(csv_file) > 200:
+                    return self._resp(400, {
+                        "error": "CSV file name too long: {} chars "
+                                 "(max 200)".format(len(csv_file))
+                    })
+                if not is_safe_filename(csv_file):
+                    return self._resp(400, {"error": "Invalid CSV file name"})
 
         reason = sanitize_text(raw_reason)
         if not reason:
@@ -4792,6 +4833,45 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                                 "create_csv", "create_rule",
                                 "remove_csv", "remove_rule"):
             return self._resp(400, {"error": "Invalid approval action type"})
+
+        # ASCII + length validation on entity names (rule_name / csv_file).
+        # _submit_create_delete_approval is the usual choke point but
+        # _submit_approval is also a publicly-callable action — anyone with
+        # an analyst token can POST {"action":"submit_approval",
+        # "approval_action_type":"create_rule","detection_rule":"DR_压力测试"}
+        # and bypass the wrapper. Guard the inner choke point too.
+        if action_type in ("create_rule", "remove_rule"):
+            rule_name = (payload.get("detection_rule")
+                         or payload.get("rule_name") or "").strip()
+            if rule_name and len(rule_name) > 100:
+                return self._resp(400, {
+                    "error": "Detection rule name too long: {} chars "
+                             "(max 100)".format(len(rule_name))
+                })
+            if rule_name and not is_ascii_name(rule_name, allow_spaces=True):
+                return self._resp(400, {
+                    "error": "Detection rule name can only contain ASCII "
+                             "letters (A-Z, a-z), numbers, underscores, "
+                             "hyphens, dots, and spaces"
+                })
+        elif action_type in ("create_csv", "remove_csv"):
+            csv_name = (payload.get("csv_file") or "").strip()
+            if csv_name and csv_name != "__rule_operation__":
+                if len(csv_name) > 200:
+                    return self._resp(400, {
+                        "error": "CSV file name too long: {} chars "
+                                 "(max 200)".format(len(csv_name))
+                    })
+                if not is_safe_filename(csv_name):
+                    return self._resp(400, {"error": "Invalid CSV file name"})
+
+        # ASCII validation on the description (analyst's reason). The
+        # late-cycle check at line ~4918 also catches this, but failing
+        # early avoids holding queue locks for a doomed submission.
+        raw_desc = payload.get("description", "") or ""
+        ascii_desc_err = validate_ascii_text(raw_desc)
+        if ascii_desc_err:
+            return self._resp(400, {"error": ascii_desc_err})
 
         # Check create/delete permissions before accepting the request
         cfg = _read_limit_config()
@@ -6471,6 +6551,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         action_type = payload.get("gate_action", "")
         csv_file = payload.get("csv_file", "")
         app_context = payload.get("app_context", "")
+        if not is_valid_app_context(app_context):
+            return self._resp(400, {"error": "Invalid app_context"})
 
         requires_approval = False
         reason = ""

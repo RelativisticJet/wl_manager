@@ -112,27 +112,38 @@ const RULE_200  = "DR_" + TAG + "_" + "a".repeat(200 - 3 - TAG.length - 1);
         submitted.push(d.request_id);
     });
 
-    await H.test("LC03 Submit 50-char CJK rule", async () => {
+    // Build 619+: ASCII tightening + 100-char cap rejects these at the
+    // submission gate (not approval time, as the older behavior allowed).
+    // The tests now ASSERT rejection at the gate.
+    await H.test("LC03 CJK rule rejected at submission gate (ASCII policy)", async () => {
         const d = await H.restCall(aPage, "POST", {
             action: "create_rule",
             detection_rule: CJK_RULE,
             approval_reason: TAG + " CJK rule",
             comment: TAG + " CJK rule",
         });
-        if (d.error) throw new Error(`Submit failed: ${d.error}`);
-        submitted.push(d.request_id);
+        if (!d.error) {
+            throw new Error("Expected ASCII rejection but submission succeeded");
+        }
+        if (!/ASCII/i.test(d.error)) {
+            throw new Error(`Expected ASCII error, got: ${d.error}`);
+        }
     });
 
-    await H.test("LC04 Submit 200-char rule (will fail at approval-time validation)",
+    await H.test("LC04 200-char rule rejected at submission gate (length cap)",
         async () => {
             const d = await H.restCall(aPage, "POST", {
                 action: "create_rule",
                 detection_rule: RULE_200,
-                approval_reason: TAG + " 200-char rule, expect approval rejection",
+                approval_reason: TAG + " 200-char rule",
                 comment: TAG + " 200-char rule",
             });
-            if (d.error) throw new Error(`Submit failed: ${d.error}`);
-            submitted.push(d.request_id);
+            if (!d.error) {
+                throw new Error("Expected length-cap rejection but submission succeeded");
+            }
+            if (!/too long|max 100/i.test(d.error)) {
+                throw new Error(`Expected length-cap error, got: ${d.error}`);
+            }
         });
 
     // Switch to admin session for the visual checks. Navigate AFTER all

@@ -419,6 +419,18 @@ def _execute_replay_create_csv(context: Dict[str, Any], request_item: Dict[str, 
     try:
         # Build CSV path
         path = build_csv_path(csv_file, app_context)
+        if path is None:
+            # build_csv_path returns None when csv_file fails is_safe_filename
+            # (non-ASCII, traversal, control chars, etc.). This catches legacy
+            # queue entries submitted before ASCII tightening.
+            return {
+                "success": False,
+                "error": (
+                    f"Invalid CSV file name '{csv_file}' — only ASCII "
+                    "letters, digits, underscores, and hyphens are allowed"
+                ),
+                "error_type": "invalid_csv_name"
+            }
 
         if os.path.isfile(path):
             return {
