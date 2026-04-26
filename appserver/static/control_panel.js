@@ -440,10 +440,16 @@ require([
         if (!pendingTotal) {
             html += '<p style="color:var(--wl-muted,#888)">No pending approval requests.</p>';
         } else {
+            // Wrap the table in an overflow-x:auto container so wide
+            // tables (9 columns × 260px max-width = ~1700px+) scroll inside
+            // their container instead of forcing the whole page to scroll.
+            // Stress-tested 2026-04-25 with 100-char rule, 1520px viewport.
+            html += '<div style="overflow-x:auto">';
             html += '<table class="wl-table"><thead><tr>' +
                 '<th>Request ID</th><th>Timestamp</th><th>Analyst</th>' +
                 '<th>Detection Rule</th><th>CSV File</th><th>Action</th>' +
-                '<th>Analyst Reason</th><th>Actions</th>' +
+                '<th>Analyst Reason</th>' +
+                '<th>Actions</th><th>Inspect</th>' +
                 '</tr></thead><tbody>';
             pendingSlice.forEach(function (item) {
                 var ts = new Date(item.timestamp * 1000);
@@ -456,11 +462,12 @@ require([
                 html += '<tr>' +
                     '<td style="font-size:11px;word-break:break-all">' + _.escape(item.request_id) + '</td>' +
                     '<td>' + _.escape(tsStr) + '</td>' +
-                    '<td>' + _.escape(item.analyst) + '</td>' +
-                    '<td>' + _.escape(ruleDisplay) + '</td>' +
-                    '<td>' + _.escape(csvDisplay) + '</td>' +
+                    '<td class="wl-cp-truncate" title="' + _.escape(item.analyst) + '">' + _.escape(item.analyst) + '</td>' +
+                    '<td class="wl-cp-truncate" title="' + _.escape(ruleDisplay) + '">' + _.escape(ruleDisplay) + '</td>' +
+                    '<td class="wl-cp-truncate" title="' + _.escape(csvDisplay) + '">' + _.escape(csvDisplay) + '</td>' +
                     '<td>' + _.escape(item.action_type.replace(/_/g, " ")) + '</td>' +
                     '<td class="wl-cp-reason-cell" title="' + _.escape(analystReason) + '">' + _.escape(analystReason) + '</td>' +
+                    // Actions column: primary admin actions (Approve/Reject or Cancel)
                     '<td style="white-space:nowrap">' +
                         (cpCurrentUser && item.analyst === cpCurrentUser
                             ? '<span class="btn btn-small wl-cp-cancel-btn" ' +
@@ -473,8 +480,17 @@ require([
                               '<span class="btn btn-small wl-cp-reject-btn" ' +
                                 'data-id="' + _.escape(item.request_id) + '" ' +
                                 'data-dual="' + (item.is_dual_admin ? 'true' : 'false') + '" ' +
-                                'style="background:#e74c3c;color:#fff;margin-right:4px">Reject</span>'
+                                'style="background:#e74c3c;color:#fff">Reject</span>'
                         ) +
+                    '</td>' +
+                    // Inspect column: Show Data is always present (anchor); Download CSV
+                    // is conditional. Show Data goes first so the column has a stable
+                    // left edge across rows; Download CSV (when present) hangs off the right.
+                    '<td style="white-space:nowrap">' +
+                        '<span class="btn btn-small wl-cp-show-data-btn" ' +
+                            'data-id="' + _.escape(item.request_id) + '" ' +
+                            'style="background:#3498db;color:#fff;margin-right:4px"' +
+                            '>Show Data</span>' +
                         (item.csv_file && item.csv_file !== "__rule_operation__"
                             ? '<span class="btn btn-small wl-cp-download-btn" ' +
                                 'data-csv="' + _.escape(item.csv_file) + '" ' +
@@ -483,13 +499,10 @@ require([
                                 'data-action-type="' + _.escape(item.action_type) + '"' +
                                 '>Download CSV</span>'
                             : '') +
-                        '<span class="btn btn-small wl-cp-show-data-btn" ' +
-                            'data-id="' + _.escape(item.request_id) + '" ' +
-                            'style="background:#3498db;color:#fff;margin-left:4px"' +
-                            '>Show Data</span>' +
                     '</td></tr>';
             });
             html += '</tbody></table>';
+            html += '</div>';  // close overflow-x:auto wrapper
             if (pendingPages > 1) {
                 html += renderPagination(pendingPage, pendingPages, pendingTotal, "pending");
             }
@@ -504,11 +517,15 @@ require([
 
         html += '<h3 style="margin:20px 0 8px">Recent History (' + historyTotal + '/100)</h3>';
         if (historyTotal) {
+            // Same horizontal-scroll wrapper as the Pending table — Recent
+            // History has 11 columns and is even more prone to viewport overflow.
+            html += '<div style="overflow-x:auto">';
             html += '<table class="wl-table"><thead><tr>' +
                 '<th>Request ID</th><th>Timestamp</th><th>Analyst</th>' +
                 '<th>Detection Rule</th><th>CSV File</th><th>Action</th>' +
                 '<th>Analyst Reason</th><th>Admin Response</th>' +
                 '<th>Status</th><th>Resolved By</th>' +
+                '<th>Inspect</th>' +
                 '</tr></thead><tbody>';
             historySlice.forEach(function (item) {
                 var ts = new Date(item.timestamp * 1000);
@@ -525,22 +542,27 @@ require([
                 html += '<tr>' +
                     '<td style="font-size:11px;word-break:break-all">' + _.escape(item.request_id) + '</td>' +
                     '<td>' + ts.toLocaleString() + '</td>' +
-                    '<td>' + _.escape(item.analyst) + '</td>' +
-                    '<td>' + _.escape(ruleDisplay) + '</td>' +
-                    '<td>' + _.escape(csvDisplay) + '</td>' +
+                    '<td class="wl-cp-truncate" title="' + _.escape(item.analyst) + '">' + _.escape(item.analyst) + '</td>' +
+                    '<td class="wl-cp-truncate" title="' + _.escape(ruleDisplay) + '">' + _.escape(ruleDisplay) + '</td>' +
+                    '<td class="wl-cp-truncate" title="' + _.escape(csvDisplay) + '">' + _.escape(csvDisplay) + '</td>' +
                     '<td>' + _.escape(item.action_type.replace(/_/g, " ")) + '</td>' +
                     '<td class="wl-cp-reason-cell" title="' + _.escape(analystReason) + '">' + _.escape(analystReason) + '</td>' +
                     '<td class="wl-cp-reason-cell" title="' + _.escape(adminResponse) + '">' + _.escape(adminResponse) + '</td>' +
                     '<td style="font-weight:600;color:' + statusColor + '">' +
                         _.escape(item.status) + '</td>' +
-                    '<td style="white-space:nowrap">' + _.escape(item.resolved_by || "") +
-                        ' <span class="btn btn-small wl-cp-show-data-btn" ' +
+                    // Resolved By is its own column now (no longer doubles as Show Data host).
+                    '<td class="wl-cp-truncate" title="' + _.escape(item.resolved_by || "") + '">' +
+                        _.escape(item.resolved_by || "") + '</td>' +
+                    // New Inspect column — Show Data button aligned across all rows.
+                    '<td style="white-space:nowrap">' +
+                        '<span class="btn btn-small wl-cp-show-data-btn" ' +
                             'data-id="' + _.escape(item.request_id) + '" ' +
-                            'style="background:#3498db;color:#fff;margin-left:4px;font-size:10px"' +
+                            'style="background:#3498db;color:#fff"' +
                             '>Show Data</span>' +
                     '</td></tr>';
             });
             html += '</tbody></table>';
+            html += '</div>';  // close overflow-x:auto wrapper
             if (historyPages > 1) {
                 html += renderPagination(historyPage, historyPages, historyTotal, "history");
             }
@@ -729,8 +751,9 @@ require([
 
         var actionLabel = (item.action_type || "").replace(/_/g, " ");
         var subject = displayCsv || displayRule || "";
-        var title = subject ? (actionLabel + " — " + _.escape(subject))
-                            : actionLabel;
+        // Build the raw title; line 759 _.escape()s the whole string. Don't
+        // pre-escape `subject` here or it gets double-escaped (e.g. `<` → `&amp;lt;`).
+        var title = subject ? (actionLabel + " — " + subject) : actionLabel;
         var bodyHtml;
 
         try {
@@ -743,7 +766,8 @@ require([
         var $modal = $(
             '<div class="wl-modal-overlay">' +
             '<div class="wl-modal" style="max-width:92vw;width:auto;min-width:500px">' +
-                '<div class="wl-modal-header" style="font-size:14px">' +
+                '<div class="wl-modal-header" style="font-size:14px;' +
+                    'word-break:break-word;overflow-wrap:anywhere">' +
                     _.escape(title) +
                 '</div>' +
                 '<div style="padding:8px 12px 0">' +
@@ -802,7 +826,10 @@ require([
         // Hide the __rule_operation__ sentinel; show N/A like the pending table.
         var csvMeta = (item.csv_file && item.csv_file !== "__rule_operation__")
             ? item.csv_file : "N/A";
-        var meta = '<div style="margin-bottom:12px;font-size:12px;color:var(--wl-muted,#888)">' +
+        // Word-break + overflow-wrap so 100-char rule names or 500-char reasons
+        // don't push the modal beyond viewport. Stress-tested 2026-04-25.
+        var meta = '<div style="margin-bottom:12px;font-size:12px;color:var(--wl-muted,#888);' +
+            'word-break:break-word;overflow-wrap:anywhere">' +
             '<strong>Analyst:</strong> ' + _.escape(item.analyst) +
             ' &nbsp;|&nbsp; <strong>Rule:</strong> ' + _.escape(item.detection_rule || "N/A") +
             ' &nbsp;|&nbsp; <strong>CSV:</strong> ' + _.escape(csvMeta) +
@@ -2201,7 +2228,7 @@ require([
 
             pageAnalysts.forEach(function (analyst) {
                 var u = allAnalysts[analyst];
-                html += '<tr><td style="text-align:left">' + _.escape(analyst) + '</td>';
+                html += '<tr><td class="wl-cp-truncate" style="text-align:left" title="' + _.escape(analyst) + '">' + _.escape(analyst) + '</td>';
                 USAGE_COLUMNS.forEach(function (col) {
                     var count = u[col.key] || 0;
                     var limit = limits[col.limitKey];
@@ -2370,9 +2397,9 @@ require([
                 daysLeft <= 14 ? 'color:#ffc107' : '';
 
             html += '<tr>' +
-                '<td>' + _.escape(item.name || "") + '</td>' +
+                '<td class="wl-cp-truncate" title="' + _.escape(item.name || "") + '">' + _.escape(item.name || "") + '</td>' +
                 '<td>' + _.escape(item.item_type || "") + '</td>' +
-                '<td>' + _.escape(item.deleted_by || "") + '</td>' +
+                '<td class="wl-cp-truncate" title="' + _.escape(item.deleted_by || "") + '">' + _.escape(item.deleted_by || "") + '</td>' +
                 '<td>' + _.escape(item.deleted_at_human || "") + '</td>' +
                 '<td style="' + daysClass + '">' + daysLeft + '</td>' +
                 '<td title="' + _.escape(item.comment || "") + '">' +
@@ -2946,7 +2973,7 @@ require([
                 }
                 html += '<tr>' +
                     '<td>' + _.escape(localTs) + '</td>' +
-                    '<td>' + _.escape(entry.admin || "") + '</td>' +
+                    '<td class="wl-cp-truncate" title="' + _.escape(entry.admin || "") + '">' + _.escape(entry.admin || "") + '</td>' +
                     '<td>' + changeDescs.join('<br>') + '</td>' +
                     '</tr>';
             });

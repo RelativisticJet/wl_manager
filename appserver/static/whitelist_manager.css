@@ -1311,11 +1311,29 @@ th.wl-pending-approval-header {
     cursor: pointer;
 }
 
+/* Truncation for variable-content cells in Control Panel tables.
+   Word-break wraps long unbroken strings (long detection rule names,
+   long CSV filenames, long usernames) within the column instead of
+   blowing out the table width. The `title=` attribute on the cell
+   provides hover-tooltip access to the full value when needed.
+
+   Why word-break instead of ellipsis: a 200-char rule name with
+   ellipsis hides 80% of the content, requiring hover for any
+   meaningful read. Word-break keeps everything visible at the cost
+   of taller rows. Stress-tested 2026-04-25 with 100-char rule +
+   500-char reason; rows reach ~3 lines, table stays inside viewport. */
+.wl-cp-truncate {
+    max-width: 260px;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
+/* Legacy class kept as alias for the analyst-reason cell so existing
+   markup keeps working. Same truncation rules as .wl-cp-truncate. */
 .wl-cp-reason-cell {
     max-width: 260px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .wl-addition-preview {
