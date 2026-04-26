@@ -90,6 +90,7 @@ from wl_logging import get_audit_logger
 from wl_validation import (
     sanitize_text,
     validate_ascii_text,
+    is_ascii_name,
     is_safe_filename,
     safe_realpath,
     build_csv_path,
@@ -2601,7 +2602,14 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         csv_file = (payload.get("csv_file") or "").strip()
         rule_name = (payload.get("rule_name") or "").strip()
         removal_type = payload.get("removal_type", "")
-        comment = (payload.get("comment") or "").strip()[:500]
+        raw_comment = (payload.get("comment") or "").strip()[:500]
+        # ASCII-only enforcement on the comment. is_safe_filename below
+        # already rejects non-ASCII csv_file (we tightened it for the same
+        # reason — see is_ascii_name() in wl_validation.py).
+        ascii_err = validate_ascii_text(raw_comment)
+        if ascii_err:
+            return self._resp(400, {"error": ascii_err})
+        comment = raw_comment
 
         if not csv_file:
             return self._resp(400, {"error": "csv_file is required"})
@@ -2691,7 +2699,15 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         """POST action wrapper for remove_rule — delegates to delete_rule_pipeline."""
         rule_name = (payload.get("rule_name") or "").strip()
         removal_type = payload.get("removal_type", "")
-        comment = (payload.get("comment") or "").strip()[:500]
+        raw_comment = (payload.get("comment") or "").strip()[:500]
+        # ASCII-only enforcement on the comment. The rule_name itself is
+        # validated downstream in delete_rule_pipeline — we don't need a
+        # second ASCII check here for it because removal targets an
+        # already-existing rule (whose name was validated at create time).
+        ascii_err = validate_ascii_text(raw_comment)
+        if ascii_err:
+            return self._resp(400, {"error": ascii_err})
+        comment = raw_comment
 
         if not rule_name:
             return self._resp(400, {"error": "rule_name is required"})
@@ -3609,15 +3625,20 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 "error": "Detection rule name too long: {} chars (max 100)".format(
                     len(detection_rule))
             })
-        if not all(c.isalnum() or c in ("_", "-", ".", " ") for c in detection_rule):
+        # ASCII-only — see is_ascii_name() in wl_validation.py for rationale.
+        # Python's c.isalnum() accepts Unicode letters (CJK, Cyrillic, etc.);
+        # we explicitly reject those here because rule names become
+        # filesystem paths and SPL search identifiers.
+        if not is_ascii_name(detection_rule, allow_spaces=True):
             return self._resp(400, {
-                "error": "Detection rule name can only contain letters, "
-                         "numbers, underscores, hyphens, dots, and spaces"
+                "error": "Detection rule name can only contain ASCII letters "
+                         "(A-Z, a-z), numbers, underscores, hyphens, dots, "
+                         "and spaces"
             })
-        if not any(c.isalnum() for c in detection_rule):
+        if not any(c.isascii() and c.isalnum() for c in detection_rule):
             return self._resp(400, {
                 "error": "Detection rule name must contain at least one "
-                         "letter or number"
+                         "ASCII letter or number"
             })
 
         # ── Validate headers ──────────────────────────────────────────
@@ -3768,8 +3789,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # ── Generate or validate CSV filename ─────────────────────────
         if not csv_filename:
             # Auto-generate from rule name: DR102_powershell -> DR102_powershell.csv
+            # Strictly ASCII alphanumeric; everything else (including CJK and
+            # other Unicode letters that c.isalnum() would have accepted)
+            # collapses to "_" so the derived filename is filesystem-safe.
             safe_name = "".join(
-                c if c.isalnum() or c in ("_", "-") else "_"
+                c if (c.isascii() and c.isalnum()) or c in ("_", "-") else "_"
                 for c in detection_rule
             )
             csv_filename = safe_name + ".csv"
@@ -4701,9 +4725,39 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _submit_create_delete_approval(self, request, payload, user,
                                         action_type, description):
-        """Route a create/delete action through the approval queue."""
-        reason = sanitize_text(
-            payload.get("approval_reason") or payload.get("comment") or "")
+        """Route a create/delete action through the approval queue.
+
+        Validates rule_name / csv_file / reason for ASCII strictness BEFORE
+        the entry hits the queue. The pipeline replay (create_rule_pipeline,
+        _create_csv) also validates, but a queue entry that's destined to
+        fail at replay time is debris — better to reject at submission.
+        """
+        raw_reason = payload.get("approval_reason") or payload.get("comment") or ""
+        # ASCII-only on user-supplied reason text. Matches CSV import policy.
+        ascii_err = validate_ascii_text(raw_reason)
+        if ascii_err:
+            return self._resp(400, {"error": ascii_err})
+
+        # ASCII-only on the entity name (rule or CSV). Pipeline validation
+        # also runs at replay-time but earlier rejection avoids polluting
+        # the approval queue with entries that will always fail.
+        if action_type in ("create_rule", "remove_rule"):
+            rule_name = (payload.get("detection_rule")
+                         or payload.get("rule_name") or "").strip()
+            if rule_name and not is_ascii_name(rule_name, allow_spaces=True):
+                return self._resp(400, {
+                    "error": "Detection rule name can only contain ASCII "
+                             "letters (A-Z, a-z), numbers, underscores, "
+                             "hyphens, dots, and spaces"
+                })
+        elif action_type in ("create_csv", "remove_csv"):
+            csv_file = (payload.get("csv_file") or "").strip()
+            # Tolerate the rule-operation sentinel; reject only real names
+            if (csv_file and csv_file != "__rule_operation__"
+                    and not is_safe_filename(csv_file)):
+                return self._resp(400, {"error": "Invalid CSV file name"})
+
+        reason = sanitize_text(raw_reason)
         if not reason:
             return self._resp(400, {
                 "error": "A reason is required for this action. "

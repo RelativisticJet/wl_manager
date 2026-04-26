@@ -27,6 +27,7 @@ from wl_constants import (
     DEFAULT_TRASH_RETENTION_DAYS,
 )
 from wl_csv import update_csv_expected_hash
+from wl_validation import is_ascii_name
 
 
 _logger = logging.getLogger("wl_rules")
@@ -185,12 +186,16 @@ def create_rule_pipeline(detection_rule: str) -> Dict:
         raise ValueError(
             "Detection rule name too long: {} chars (max 100)".format(len(detection_rule))
         )
-    if not all(c.isalnum() or c in ("_", "-", ".", " ") for c in detection_rule):
+    # ASCII-only enforcement. Python's c.isalnum() is Unicode-aware and
+    # accepts CJK ideographs, Cyrillic, Greek, etc. — see is_ascii_name()
+    # in wl_validation.py for the full rationale (filesystem paths,
+    # SPL search, homoglyph attacks).
+    if not is_ascii_name(detection_rule, allow_spaces=True):
         raise ValueError(
-            "Detection rule name can only contain letters, "
+            "Detection rule name can only contain ASCII letters (A-Z, a-z), "
             "numbers, underscores, hyphens, dots, and spaces"
         )
-    if not any(c.isalnum() for c in detection_rule):
+    if not any(c.isascii() and c.isalnum() for c in detection_rule):
         raise ValueError(
             "Detection rule name must contain at least one letter or number"
         )
