@@ -90,6 +90,44 @@ if [ -n "$DOC_CHANGES" ]; then
     fi
 fi
 
+# ── 8. ASCII-validator drift guard ──
+# Background: 2026-04-26 incident — c.isalnum() is Unicode-aware in
+# Python and accepted CJK ideographs as "letters", silently making the
+# rule-name validator a no-op for the homoglyph attacks we care about.
+# Replaced by is_ascii_name() / c.isascii() and c.isalnum() patterns
+# in wl_validation.py. This guard catches anyone re-introducing the bare
+# c.isalnum() pattern in a security-sensitive path under bin/.
+#
+# Allowed: c.isascii() and c.isalnum() (this is the corrected pattern)
+# Allowed: comment-only mentions (the # appears before the call)
+# Allowed: any usage in tests/ or in non-validation contexts via marker
+# Banned : c.isalnum() in a code statement with no isascii() check
+BIN_PY_FILES=$(echo "$STAGED" | grep -E '^bin/.*\.py$' || true)
+if [ -n "$BIN_PY_FILES" ]; then
+    for f in $BIN_PY_FILES; do
+        # Pull staged content; grep for .isalnum() with these exclusions:
+        #   - ASCII-OK marker on same line (intentional non-security use)
+        #   - isascii() check on same line (the corrected pattern)
+        #   - mention inside a comment (the # comes before .isalnum)
+        if git show ":$f" 2>/dev/null | grep -nE '\.isalnum\(\)' \
+            | grep -vE 'isascii\(\).*isalnum\(\)|# ASCII-OK|^[0-9]+:[[:space:]]*#|#[^#]*\.isalnum' \
+            > /tmp/wl_isalnum_hits.txt 2>/dev/null; then
+            if [ -s /tmp/wl_isalnum_hits.txt ]; then
+                echo -e "${RED}BLOCKED:${NC} bare .isalnum() found in $f"
+                echo "  Python's str.isalnum() is Unicode-aware and accepts CJK,"
+                echo "  Cyrillic, Greek, etc. as 'letters'. Use the ASCII-strict"
+                echo "  pattern instead: 'c.isascii() and c.isalnum()'"
+                echo "  Or call is_ascii_name() / is_safe_filename() from wl_validation."
+                echo "  If this usage is intentional and not a security gate,"
+                echo "  add the trailing comment '# ASCII-OK' on the same line."
+                cat /tmp/wl_isalnum_hits.txt | head -5
+                ERRORS=$((ERRORS + 1))
+            fi
+            rm -f /tmp/wl_isalnum_hits.txt
+        fi
+    done
+fi
+
 # ── Result ──
 if [ $ERRORS -gt 0 ]; then
     echo ""

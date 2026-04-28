@@ -53,6 +53,44 @@ __all__ = [
 ]
 
 
+def _safe_trash_item_dir(trash_id: str) -> Optional[str]:
+    """Resolve trash_id to an item directory IFF it stays inside trash_dir.
+
+    Defense-in-depth against `trash_id="../etc"` style traversal. Returns
+    the resolved item directory path on success, or None when:
+    - trash_id is empty / not a string
+    - trash_id contains path separators or starts with '.'
+    - the resolved path escapes trash_dir
+    - the path doesn't exist as a directory
+
+    Caller is responsible for handling the None case (e.g. returning
+    "Trash item not found"). Centralized here so every trash op shares
+    the same containment guarantee — see `purge_trash_item` and
+    `restore_from_trash` which both feed user-supplied trash_id directly
+    into `shutil.rmtree` / `os.path.join`.
+    """
+    if not trash_id or not isinstance(trash_id, str):
+        return None
+    # Reject path separators and dotfiles up front — os.path.basename
+    # would silently strip the directory portion of "../etc" and let
+    # the caller think the input was clean.
+    if os.path.basename(trash_id) != trash_id:
+        return None
+    if trash_id.startswith("."):
+        return None
+    trash_dir = get_trash_dir()
+    item_dir = os.path.realpath(os.path.join(trash_dir, trash_id))
+    real_trash = os.path.realpath(trash_dir)
+    # Containment check — covers the case where trash_id resolved
+    # through a symlink to outside trash_dir.
+    if not (item_dir == real_trash
+            or item_dir.startswith(real_trash + os.sep)):
+        return None
+    if not os.path.isdir(item_dir):
+        return None
+    return item_dir
+
+
 def get_trash_dir() -> str:
     """
     Return the absolute path to the trash directory.
@@ -595,9 +633,8 @@ def restore_from_trash(trash_id: str) -> Tuple[Dict, str]:
                           error_string is empty if successful, or an error message if not.
     """
     try:
-        trash_dir = get_trash_dir()
-        item_dir = os.path.join(trash_dir, trash_id)
-        if not os.path.isdir(item_dir):
+        item_dir = _safe_trash_item_dir(trash_id)
+        if item_dir is None:
             return {}, "Trash item not found"
 
         meta_path = os.path.join(item_dir, "metadata.json")
@@ -644,9 +681,8 @@ def purge_trash_item(trash_id: str) -> Tuple[bool, str]:
                           error_string is empty if successful.
     """
     try:
-        trash_dir = get_trash_dir()
-        item_dir = os.path.join(trash_dir, trash_id)
-        if not os.path.isdir(item_dir):
+        item_dir = _safe_trash_item_dir(trash_id)
+        if item_dir is None:
             return False, "Trash item not found"
         shutil.rmtree(item_dir, ignore_errors=True)
         return True, ""  # Success
