@@ -392,3 +392,119 @@ class TestBuildCsvPathRejectsLegacyCjk:
         result = build_csv_path("DR_clean.csv")
         assert result is not None
         assert result.endswith("DR_clean.csv")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# _SAFE_COLNAME_RE — pin the column-header ASCII contract
+# ─────────────────────────────────────────────────────────────────────────
+
+class TestSafeColnameRegex:
+    """_SAFE_COLNAME_RE governs every column header in this app.
+
+    The regex requires ≥1 ASCII alphanumeric and rejects any non-ASCII
+    character. This test pins that contract — if anyone widens the
+    regex to accept Unicode "letters" (e.g. via re.UNICODE flag drift),
+    these tests will fail and surface the regression."""
+
+    def test_accepts_typical_csv_columns(self):
+        from wl_constants import _SAFE_COLNAME_RE
+        assert _SAFE_COLNAME_RE.match("src_ip")
+        assert _SAFE_COLNAME_RE.match("dest_port")
+        assert _SAFE_COLNAME_RE.match("user_agent")
+        assert _SAFE_COLNAME_RE.match("event-id-1")
+        assert _SAFE_COLNAME_RE.match("col1")
+
+    def test_accepts_allowed_punctuation(self):
+        from wl_constants import _SAFE_COLNAME_RE
+        # Punctuation set: _-.()/:#@&+
+        for ch in "_-.()/:#@&+":
+            assert _SAFE_COLNAME_RE.match("a" + ch + "b"), \
+                f"should accept 'a{ch}b'"
+
+    def test_rejects_cjk_column_name(self):
+        from wl_constants import _SAFE_COLNAME_RE
+        assert not _SAFE_COLNAME_RE.match("源IP")
+        assert not _SAFE_COLNAME_RE.match("规则_id")
+        assert not _SAFE_COLNAME_RE.match("col_检测")
+
+    def test_rejects_cyrillic_column_name(self):
+        from wl_constants import _SAFE_COLNAME_RE
+        assert not _SAFE_COLNAME_RE.match("источник")
+        assert not _SAFE_COLNAME_RE.match("col_правило")
+
+    def test_rejects_emoji(self):
+        from wl_constants import _SAFE_COLNAME_RE
+        assert not _SAFE_COLNAME_RE.match("col_🔥")
+
+    def test_rejects_spaces(self):
+        from wl_constants import _SAFE_COLNAME_RE
+        # Handler enforces no-spaces separately; regex itself rejects too
+        assert not _SAFE_COLNAME_RE.match("col with space")
+        assert not _SAFE_COLNAME_RE.match(" leading_space")
+        assert not _SAFE_COLNAME_RE.match("trailing_space ")
+
+    def test_rejects_purely_punctuation(self):
+        # Lookahead requires ≥1 alphanumeric — "___" or "()()" alone
+        # would create headers that look like data corruption
+        from wl_constants import _SAFE_COLNAME_RE
+        assert not _SAFE_COLNAME_RE.match("___")
+        assert not _SAFE_COLNAME_RE.match("---")
+        assert not _SAFE_COLNAME_RE.match("()/")
+        assert not _SAFE_COLNAME_RE.match(".")
+
+    def test_rejects_empty(self):
+        from wl_constants import _SAFE_COLNAME_RE
+        assert not _SAFE_COLNAME_RE.match("")
+
+    def test_rejects_zero_width_chars(self):
+        from wl_constants import _SAFE_COLNAME_RE
+        assert not _SAFE_COLNAME_RE.match("col​")
+        assert not _SAFE_COLNAME_RE.match("col﻿")
+
+    def test_rejects_null_byte(self):
+        from wl_constants import _SAFE_COLNAME_RE
+        assert not _SAFE_COLNAME_RE.match("col\x00evil")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# _safe_trash_item_dir — defense-in-depth path traversal guard
+# ─────────────────────────────────────────────────────────────────────────
+
+class TestSafeTrashItemDir:
+    """_safe_trash_item_dir() must reject any trash_id that resolves
+    outside trash_dir. Origin: 2026-04-29 audit found purge_trash_item
+    fed user-supplied trash_id directly into shutil.rmtree — a
+    malicious admin sending trash_id='../../tmp' would have silently
+    deleted /opt/splunk/.../tmp."""
+
+    def test_rejects_traversal_dotdot(self):
+        from wl_trash import _safe_trash_item_dir
+        assert _safe_trash_item_dir("..") is None
+        assert _safe_trash_item_dir("../etc") is None
+        assert _safe_trash_item_dir("../../tmp") is None
+
+    def test_rejects_path_separators(self):
+        from wl_trash import _safe_trash_item_dir
+        assert _safe_trash_item_dir("foo/bar") is None
+        assert _safe_trash_item_dir("foo\\bar") is None
+
+    def test_rejects_dotfiles(self):
+        from wl_trash import _safe_trash_item_dir
+        assert _safe_trash_item_dir(".hidden") is None
+        assert _safe_trash_item_dir(".") is None
+
+    def test_rejects_empty_or_none(self):
+        from wl_trash import _safe_trash_item_dir
+        assert _safe_trash_item_dir("") is None
+        assert _safe_trash_item_dir(None) is None
+
+    def test_rejects_non_string(self):
+        from wl_trash import _safe_trash_item_dir
+        assert _safe_trash_item_dir(123) is None
+        assert _safe_trash_item_dir(["x"]) is None
+
+    def test_rejects_nonexistent(self):
+        # Even a clean-looking trash_id should return None if the
+        # directory doesn't exist (caller should treat as "not found")
+        from wl_trash import _safe_trash_item_dir
+        assert _safe_trash_item_dir("nonexistent_trash_id_12345") is None

@@ -5280,6 +5280,26 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "removal_type": payload.get("removal_type", "permanent"),
         }
 
+        # ASCII validation on entity names — even though these reference
+        # existing rules/CSVs (which are already ASCII-validated at create
+        # time), a malicious admin could send CJK directly to pollute the
+        # queue display + audit trail. Rule names are also displayed in
+        # the dual-approval UI summary string. Skip empty values: empty
+        # is a no-op, the action_type-specific check below catches missing
+        # required fields.
+        for fld in ("rule_name", "csv_file"):
+            val = (meta.get(fld) or "").strip()
+            if val:
+                if not is_ascii_name(val, allow_spaces=True):
+                    return self._resp(400, {
+                        "error": "{} must be ASCII-only".format(fld)
+                    })
+        # trash_id is a UUID-like identifier; constrain it tightly.
+        tid_val = (meta.get("trash_id") or "").strip()
+        if tid_val and not is_ascii_name(tid_val, allow_spaces=False):
+            return self._resp(400, {
+                "error": "trash_id contains invalid characters"})
+
         # EC2: Record current state for re-validation at approval time
         if action_type == "admin_delete_rule":
             rule_name = meta["rule_name"]

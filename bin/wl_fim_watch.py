@@ -191,7 +191,15 @@ def _stat_key(path):
 # ────────────────────────────────────────────────────────────────
 
 def _read_csv_mapping():
-    """Read rule_csv_map.csv and return list of (csv_file, app_context) tuples."""
+    """Read rule_csv_map.csv and return list of (csv_file, app_context) tuples.
+
+    Defensive: catches UnicodeDecodeError too, because a single rogue
+    byte (e.g. a non-UTF-8-encoded admin edit, or fs corruption) would
+    otherwise crash the watcher and silently disable CSV integrity
+    monitoring. When the mapping is unreadable we emit a HIGH-severity
+    alert so the SOC notices the gap rather than thinking everything is
+    fine because no FIM events are firing.
+    """
     if not os.path.isfile(MAPPING_FILE):
         return []
     try:
@@ -204,7 +212,22 @@ def _read_csv_mapping():
                 if csv_file:
                     result.append((csv_file, app_ctx))
         return result
-    except (OSError, csv.Error):
+    except (OSError, csv.Error, UnicodeDecodeError) as exc:
+        # Best-effort: emit a HIGH alert so the unreadable-mapping case
+        # surfaces in the audit panel. _emit may not be defined yet if
+        # this is called from _bootstrap_registry_if_empty during early
+        # init, so guard the call.
+        try:
+            _emit({
+                "action": "fim_mapping_unreadable",
+                "severity": "HIGH",
+                "details": "rule_csv_map.csv could not be parsed "
+                           "({}) — CSV integrity monitoring is "
+                           "degraded until the mapping is fixed."
+                           .format(type(exc).__name__),
+            })
+        except Exception:
+            pass
         return []
 
 
