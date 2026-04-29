@@ -28,6 +28,25 @@ define(["jquery", "underscore"], function ($, _) {
     }
 
     // ── Message banner ──────────────────────────────────────────────
+    //
+    // CONTRACT (round 7 C3, 2026-04-29):
+    //   `text` is rendered as HTML inside the alert body. Callers that
+    //   include user-supplied content (rule names, CSV filenames,
+    //   analyst usernames, error messages from the backend) MUST
+    //   pre-escape those substrings with `_.escape(...)` before
+    //   concatenating them into the message string. Failing to do so
+    //   is a stored-XSS bug, not a styling one.
+    //
+    //   The HTML-input contract exists because most call sites need
+    //   `<strong>`, `<br>`, or `&hellip;` markup in the message body
+    //   (e.g., "Request ID: <strong>...</strong>"). A pure-text API
+    //   that rejects all markup would force every caller to pre-render
+    //   HTML through DOM building, which is heavier than the current
+    //   per-substring `_.escape` discipline.
+    //
+    //   When the message is purely text (no markup needed), prefer
+    //   `showTextMsg(text, type)` below — it uses `.text()` and is
+    //   structurally immune to the escape-discipline footgun.
     function showMsg(text, type) {
         if (!$msgContainer) return;
         var cls = {
@@ -46,6 +65,37 @@ define(["jquery", "underscore"], function ($, _) {
             "</div>"
         );
         $msgContainer.children().first().stop(true).css("opacity", 1);
+
+        msgTimer = setTimeout(function () {
+            $msgContainer.children().first().fadeOut(400, function () { $(this).remove(); });
+            msgTimer = null;
+        }, 10000);
+    }
+
+    // Plain-text variant of `showMsg`. Use this when the message body
+    // is a single string with no markup — the alert chrome (CSS class,
+    // close button) is built as DOM nodes and `text` is set via
+    // jQuery's `.text()` so any HTML-shaped content from the caller
+    // is rendered as literal characters. Round 7 C3 — gives new call
+    // sites an XSS-safe path without breaking the existing HTML-aware
+    // `showMsg` callers.
+    function showTextMsg(text, type) {
+        if (!$msgContainer) return;
+        var cls = {
+            error:   "wl-alert wl-alert-error",
+            success: "wl-alert wl-alert-success",
+            info:    "wl-alert wl-alert-info",
+            warning: "wl-alert wl-alert-warning"
+        }[type || "info"] || "wl-alert wl-alert-info";
+
+        if (msgTimer) { clearTimeout(msgTimer); msgTimer = null; }
+
+        var $alert = $('<div>').addClass(cls);
+        $('<span class="wl-alert-close">&times;</span>').appendTo($alert);
+        $('<span>').text(text == null ? "" : String(text)).appendTo($alert);
+
+        $msgContainer.empty().append($alert);
+        $alert.stop(true).css("opacity", 1);
 
         msgTimer = setTimeout(function () {
             $msgContainer.children().first().fadeOut(400, function () { $(this).remove(); });
@@ -122,6 +172,7 @@ define(["jquery", "underscore"], function ($, _) {
         init:                init,
         detectDarkTheme:     detectDarkTheme,
         showMsg:             showMsg,
+        showTextMsg:         showTextMsg,
         clearMsg:            clearMsg,
         getContainer:        getContainer,
         formatDailyLimitMsg: formatDailyLimitMsg

@@ -1,0 +1,58 @@
+{
+  "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:03c7e7d1-8c0b-498e-aa8b-9047da384b84",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-04-29T00:00:00Z",
+    "tools": [
+      {
+        "vendor": "wl_manager",
+        "name": "manual-baseline",
+        "version": "1.0.0"
+      }
+    ],
+    "component": {
+      "type": "application",
+      "bom-ref": "pkg:splunk/wl_manager@2.0.0",
+      "name": "wl_manager",
+      "version": "2.0.0",
+      "description": "Manage detection-rule CSV whitelists with inline editing, approval workflows, version control, and diff-based audit trail",
+      "publisher": "Security Engineering",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:splunk/wl_manager@2.0.0",
+      "properties": [
+        {
+          "name": "splunk:build",
+          "value": "627"
+        },
+        {
+          "name": "splunk:app_id",
+          "value": "wl_manager"
+        }
+      ]
+    }
+  },
+  "components": [],
+  "dependencies": [
+    {
+      "ref": "pkg:splunk/wl_manager@2.0.0",
+      "dependsOn": []
+    }
+  ],
+  "compositions": [
+    {
+      "aggregate": "complete",
+      "assemblies": [
+        "pkg:splunk/wl_manager@2.0.0"
+      ]
+    }
+  ]
+}

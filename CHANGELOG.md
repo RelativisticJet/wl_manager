@@ -2,7 +2,65 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased — 2026-04-29 (build 627)
+## Unreleased — 2026-04-29 (build 628)
+
+### Round 7 C items: SBOM + backup/restore + .html() audit
+
+#### Added
+
+- **`docs/SBOM.md` + `sbom.cdx.json`** — Software Bill of Materials
+  investigation and CycloneDX 1.5 baseline. Documents that the .spl
+  artifact ships zero bundled third-party libraries; all runtime
+  dependencies are Splunk-provided. Per-release SBOM generation
+  flagged as future work.
+- **SRI investigation** (in `docs/SBOM.md`) — concludes SRI is
+  structurally N/A because Splunk-served same-origin assets have no
+  third-party CDN scripts to protect. Documents the existing
+  integrity layers we DO have (server cache hash, urlArgs cache-bust,
+  .spl SHA-256 sidecar).
+- **`scripts/backup_data.sh`** — captures the customer-meaningful
+  data layer (CSVs + mapping + version snapshots) into a single
+  timestamped tarball with SHA-256 + manifest. Excludes HMAC-bound
+  state by design (cooldowns / FIM baselines / hash registry would
+  fail HMAC verification on a different host; rebuild-on-restore is
+  cheaper than back-up-then-fail).
+- **`scripts/test_backup_restore.sh`** — smoke test that runs the
+  backup, verifies the checksum, extracts the archive, and confirms
+  every live file is byte-identical in the restored copy. Validated
+  against a 127-file (964 KB) live state. Exit non-zero on any
+  mismatch so it's CI-pluggable later.
+- **`docs/BACKUP_AND_RESTORE.md`** — consolidated runbook for the
+  three buckets (data layer / audit index / HMAC-bound state) with
+  separate strategies. Replaces scattered guidance previously only
+  in CLAUDE.md. Step-by-step planned-restore procedure including
+  the FIM baseline drop-and-rebuild sequence.
+- **`docs/HTML_INJECTION_AUDIT.md`** — methodology + per-file
+  results of auditing every `.html()` call site in production
+  frontend code (36 sites across 11 files). Result: zero XSS bugs
+  — every user-controlled substring is already `_.escape`-wrapped
+  before concatenation.
+- **`wl_ui.js :: showTextMsg(text, type)`** — XSS-safe companion
+  to `showMsg`. Uses `.text()` for the message body so any
+  HTML-shaped input renders as literal characters. New call sites
+  that don't need markup should prefer this; existing
+  HTML-aware callers stay on `showMsg`.
+
+#### Hardened
+
+- **`wl_ui.js :: showMsg` contract documented** — the implicit
+  caller-must-pre-escape rule was previously undocumented. Future
+  maintainers adding a new call site without reading every existing
+  caller could trivially have introduced an XSS bug. The function
+  now carries an explicit contract docblock + a pointer to
+  `showTextMsg` for cases where the message has no markup.
+
+#### Misc
+
+- `.gitignore` adds `backups/` and `.tmp_smoke_*/` /
+  `.tmp_restore_*/` to keep backup artifacts and smoke-test scratch
+  out of the repo.
+
+## Released — 2026-04-29 (build 627)
 
 ### Round 7 B items: supply-chain + disclosure + audit-volume + dep audit
 
