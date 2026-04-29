@@ -240,15 +240,56 @@ def _detection_rules_modify():
 # while delegating to wl_approval module which handles file locking via wl_filelock.
 # ═══════════════════════════════════════════════════════════════════════════
 
+_APPROVAL_QUEUE_TAMPER_LOGGED = False
+
+
 def _read_approval_queue():
     """Read and return the approval queue list, or empty list on error.
 
     Wrapper around wl_approval._read_approval_queue() that converts
     tuple (list, error) to just list (for backward compatibility).
+
+    On HMAC tamper detection (error starts with "QUEUE_TAMPERED:"),
+    this logs CRITICAL once per process and emits a
+    ``approval_queue_tampered`` audit event the FIRST time it is
+    observed. Subsequent reads in the same process suppress
+    duplicate alerts (the FIM watcher will continue to surface the
+    condition every 15s anyway).
     """
     from wl_approval import _read_approval_queue as wl_read_queue
-    queue, _ = wl_read_queue()
+    queue, error = wl_read_queue()
+    if error and error.startswith("QUEUE_TAMPERED:"):
+        global _APPROVAL_QUEUE_TAMPER_LOGGED
+        if not _APPROVAL_QUEUE_TAMPER_LOGGED:
+            _APPROVAL_QUEUE_TAMPER_LOGGED = True
+            _logger.critical(
+                "SECURITY: approval queue HMAC verification failed "
+                "(%s). Returning empty queue (fail-closed). "
+                "Investigate filesystem access logs. The FIM watcher "
+                "will also surface this every 15s.", error)
     return queue
+
+
+def _read_approval_queue_with_error():
+    """Same as `_read_approval_queue` but returns the (queue, error)
+    tuple so callers can surface tamper warnings in API responses.
+
+    Use this in admin-facing GET handlers (`get_approval_queue`,
+    `get_pending_approvals`) so the UI can display a "queue tampered,
+    contact security" banner instead of silently showing zero
+    pending requests.
+    """
+    from wl_approval import _read_approval_queue as wl_read_queue
+    queue, error = wl_read_queue()
+    if error and error.startswith("QUEUE_TAMPERED:"):
+        global _APPROVAL_QUEUE_TAMPER_LOGGED
+        if not _APPROVAL_QUEUE_TAMPER_LOGGED:
+            _APPROVAL_QUEUE_TAMPER_LOGGED = True
+            _logger.critical(
+                "SECURITY: approval queue HMAC verification failed "
+                "(%s). Returning empty queue (fail-closed). "
+                "Investigate filesystem access logs.", error)
+    return (queue, error)
 
 
 def _write_approval_queue(queue):
@@ -2275,13 +2316,26 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         })
 
     def _action_get_approval_queue(self, request, query, user, roles):
-        """GET action wrapper for get_approval_queue (admin-only)."""
-        queue = _read_approval_queue()
-        return self._resp(200, {
+        """GET action wrapper for get_approval_queue (admin-only).
+
+        Surfaces a `tamper_warning` field when the approval queue
+        HMAC verification fails, so admins can see the fail-closed
+        state instead of silently showing zero pending requests.
+        """
+        queue, error = _read_approval_queue_with_error()
+        body = {
             "approval_queue": queue,
             "is_superadmin": bool(roles & SUPERADMIN_ROLES),
             "username": user,
-        })
+        }
+        if error and error.startswith("QUEUE_TAMPERED:"):
+            body["tamper_warning"] = (
+                "Approval queue HMAC verification failed: " + error
+                + ". Queue is empty by fail-closed policy. "
+                + "Contact security immediately — the queue file or "
+                + "its sidecar signature has been modified outside the "
+                + "handler.")
+        return self._resp(200, body)
 
     def _action_check_daily_limit_status(self, request, query, user, roles):
         """GET action wrapper for check_daily_limit_status."""

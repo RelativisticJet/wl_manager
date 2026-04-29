@@ -2,7 +2,54 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased — 2026-04-29 (build 622)
+## Unreleased — 2026-04-29 (build 623)
+
+### Security — Round 6: structural bypass closeout (HIGH items)
+
+Three structural-bypass items the user flagged in the post-round-5
+gap assessment. Each closes a class of bug rather than a single
+instance.
+
+#### Added
+
+- **HMAC sidecar for `_approval_queue.json`** — `bin/wl_approval.py`
+  now writes a `.approval_queue.sig` sidecar file containing the
+  SHA-256 of the queue file plus an HMAC over that hash signed
+  with the GUID-derived runtime key (same key the CSV expected-hash
+  registry uses). On every read, the sig is verified; on mismatch,
+  the read fails closed (returns empty queue) and the admin-facing
+  `get_approval_queue` action surfaces a `tamper_warning` field.
+  This closes the gap noted in round 5: every other major state
+  file was HMAC-signed; the approval queue was the only one
+  protected by detection-after-the-fact (FIM 15s polling) instead
+  of fail-closed read verification. Bootstrap-on-first-read means
+  zero migration overhead for existing deployments.
+- **Anti-pattern regression test** —
+  `tests/unit/test_ascii_validation.py::TestNoUnderscoreFlagPayloadBypass`
+  mechanically scans every `bin/*.py` for `payload.get("_from_*"...)`
+  and `payload["_from_*"]` (read forms only — server-controlled
+  writes via `replay_payload[...] = True` are allowed by word-
+  boundary regex). Catches the entire bug class that bit us in
+  rounds 1-5 (`_from_approval`) and 5 (`_from_dual_approval`).
+- **Hypothesis fuzz on `compute_diff`** —
+  `tests/unit/test_diff_fuzz.py`: 12 property-based test classes
+  exercising stability, identity, conservation, append-only,
+  delete-only, no-op-reorder, determinism, no-double-classification,
+  and edit-pair invariants. Hits ~2400+ random/mutated CSV pairs.
+  No new bugs found — the diff engine is robust to the historical
+  failure modes (sets-vs-Counter, duplicate row identity,
+  position-iteration) thanks to the targeted fixes that landed
+  rounds 0-3. Property-based coverage now prevents regression.
+- 6 unit tests in `tests/unit/test_approval.py::TestApprovalQueueHmac`
+  covering bootstrap, queue tamper, sig tamper, sig deletion,
+  round-trip preservation, and fresh-install behavior.
+
+#### Security audit — confirmed clean
+
+- Every action wrapper in `bin/wl_handler.py` no longer reads any
+  `_from_*` flag from the user-controlled `payload`. The only
+  remaining `_from_*` references are function kwargs (server-set)
+  and writes to server-constructed `replay_payload` dicts.
 
 ### Security — Round 5: STRIDE + Hypothesis fuzz + attack-surface audit
 
