@@ -11,14 +11,17 @@ jobs:
   release:
     name: Build and attach .spl
     runs-on: ubuntu-latest
-    # Per-job permissions (round 7, 2026-04-29). `contents: write` is
-    # the minimum to upload .spl + .sha256 assets to a published
-    # release via `gh release upload`. No other scopes needed —
-    # explicitly NOT requesting `actions:`, `packages:`, `id-token:`
-    # so a future workflow-level permissions widening can't silently
-    # enrich this job's token.
+    # Per-job permissions (round 7 + round 8, 2026-04-29).
+    # - `contents: write` — upload .spl + .sha256 + .sig + .crt as
+    #   release assets via `gh release upload`.
+    # - `id-token: write` — mint the short-lived OIDC token Sigstore
+    #   uses to prove this run came from THIS workflow at THIS commit
+    #   for THIS tag. Required for cosign keyless signing. Without it
+    #   cosign falls back to interactive browser flow (impossible
+    #   in CI) and the step fails closed.
     permissions:
       contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -33,10 +36,62 @@ jobs:
       - name: Build .spl package
         run: bash scripts/package.sh
 
-      - name: Attach .spl to release
+      # Round 8 (2026-04-29) — Sigstore keyless signing.
+      #
+      # Why this exists: the .spl + .sha256 ride the same channel
+      # (GitHub Releases). A Releases takeover for this repo would
+      # let an attacker swap both files and the SHA-256 sidecar
+      # would still verify against the malicious .spl. Sigstore signs
+      # with a short-lived key minted from the workflow's OIDC token,
+      # records the signature in the immutable Rekor transparency log,
+      # and produces a .sig + .crt pair that customers verify with
+      # `cosign verify-blob` against the `RelativisticJet/wl_manager`
+      # workflow identity — proving the artifact came from THIS
+      # repository's release pipeline, not a Releases-page swap.
+      #
+      # Verification by downstream admins:
+      #   cosign verify-blob \
+      #     --certificate wl_manager-<v>.spl.crt \
+      #     --signature wl_manager-<v>.spl.sig \
+      #     --certificate-identity-regexp 'https://github.com/RelativisticJet/wl_manager/.github/workflows/release.yml@refs/tags/.*' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      #     wl_manager-<v>.spl
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Sign .spl with Sigstore (keyless)
+        run: |
+          for spl in dist/*.spl; do
+            echo "Signing $spl..."
+            cosign sign-blob --yes \
+              --output-signature "${spl}.sig" \
+              --output-certificate "${spl}.crt" \
+              "$spl"
+          done
+
+      # The SBOM is also signed so a downstream verifier can confirm
+      # both the artifact AND its bill of materials came from THIS
+      # workflow run (a Releases takeover would need to forge both).
+      - name: Sign per-release SBOM with Sigstore (keyless)
+        run: |
+          for sbom in dist/*.cdx.json; do
+            [ -f "$sbom" ] || continue
+            echo "Signing $sbom..."
+            cosign sign-blob --yes \
+              --output-signature "${sbom}.sig" \
+              --output-certificate "${sbom}.crt" \
+              "$sbom"
+          done
+
+      - name: Attach .spl + checksum + SBOM + signatures to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${{ github.event.release.tag_name }}" \
             dist/*.spl \
-            dist/*.sha256
+            dist/*.sha256 \
+            dist/*.cdx.json \
+            dist/*.sig \
+            dist/*.crt
