@@ -6211,7 +6211,6 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                            "Approved bulk removal"),
                 "bulk_removal": removed_entries,
                 "expected_mtime": None,
-                "_approval_request_id": request_id,
             }
 
         elif action_type == "column_removal":
@@ -6241,7 +6240,6 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     {"column": col_name, "reason": reason}
                 ],
                 "expected_mtime": None,
-                "_approval_request_id": request_id,
             }
 
         elif action_type == "bulk_row_addition":
@@ -6313,14 +6311,12 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                                len(new_rows_to_add))),
                 "row_add_reason": stored_payload.get("row_add_reason", ""),
                 "expected_mtime": None,
-                "_approval_request_id": request_id,
             }
 
         elif action_type == "csv_import_replace":
             # Use the stored payload as-is (contains replacement data)
             replay_payload = dict(stored_payload)
             replay_payload["expected_mtime"] = None
-            replay_payload["_approval_request_id"] = request_id
 
         elif action_type == "bulk_row_edit":
             edit_col = stored_payload.get("bulk_edit_column", "")
@@ -6330,10 +6326,12 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             # store the full modified rows.  Replay as a full save_csv.
             if not edit_col and stored_payload.get("rows"):
                 replay_payload = dict(stored_payload)
-                replay_payload["_from_approval"] = True
-                replay_payload["_approval_request_id"] = request_id
                 replay_payload["_bulk_edit_count"] = stored_payload.get(
                     "_bulk_edit_count", 0)
+                # Note: `_from_approval` is passed as a kwarg to
+                # `_save_csv` (server-controlled), NOT stored in the
+                # payload — see TestNoUnderscoreFlagPayloadBypass for
+                # the regression check that enforces this.
                 result = self._save_csv(
                     request, replay_payload, target["analyst"],
                     _from_approval=True)
@@ -6450,7 +6448,6 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 "comment": "Approved bulk edit ({} rows, column '{}')".format(
                     edited_count, edit_col),
                 "expected_mtime": None,
-                "_approval_request_id": request_id,
                 "_bulk_edit_count": edited_count,
             }
 

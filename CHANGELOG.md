@@ -2,7 +2,79 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased — 2026-04-29 (build 625)
+## Unreleased — 2026-04-29 (build 626)
+
+### Round 7: residue cleanup + 2 fuzz-discovered bugs (A items)
+
+#### Fixed
+
+- **CRITICAL — newline-injection bypass in 3 validator regexes**
+  (Hypothesis fuzz finding). `_ASCII_NAME_RE`, `_ASCII_FILENAME_STEM_RE`,
+  and `_APP_CONTEXT_RE` in `bin/wl_validation.py` used `$` as the
+  end-of-string anchor. Python's `$` matches BEFORE a trailing
+  newline by default, so `is_ascii_name("DR_test\n")` was returning
+  True. An attacker could submit rule names / CSV filenames /
+  app-context values containing `\n` or `\r`, corrupting:
+  audit-log readability (newline mid-event), dashboard rendering
+  (line-break in display strings), SPL expressions consuming the
+  identifiers, and filesystem path components. Switched all three
+  regexes to `\Z` (absolute end-of-string). Deterministic regression
+  test `test_trailing_newline_rejected` pins rejection of `\n`,
+  `\r`, `\r\n`, `\t`, `\x00`, `\x1f` trailers.
+- **HIGH — `read_expected_hashes` crashed on non-UTF-8 bytes**
+  (Hypothesis fuzz finding). Catch-clause caught `OSError` and
+  `JSONDecodeError` but not `UnicodeDecodeError`. An attacker who
+  wrote garbage bytes to the registry would crash the FIM watcher,
+  silently disabling integrity monitoring. Fixed by extending the
+  exception list and adding a top-level dict-type guard.
+- **`check_admin_daily_limit` -1=unlimited semantics** —
+  `bin/wl_limits.py` now short-circuits `max_count == -1` to
+  `(True, 0, -1)` matching `check_analyst_limit`. Previously took
+  -1 literally (`current + 1 <= -1` is always False), so an admin
+  with `-1` configured for an action was completely blocked. Round
+  6 surfaced and pinned this asymmetry; round 7 fixes it. 5 new
+  unit tests verify: short-circuit, ignores huge action_count,
+  doesn't consult counters (mocked-to-raise check), 0 takes
+  priority over -1, normal enforcement still works.
+
+#### Cleaned up
+
+- 7 dead `replay_payload["_from_approval"] = True` and
+  `replay_payload["_approval_request_id"] = request_id` writes in
+  `bin/wl_handler.py` removed. They were written but never read by
+  any function — leftover from an earlier refactor. Future
+  maintainers might mistake them for meaningful security flags.
+  The `_from_approval` kwarg passed to `_save_csv` is the
+  authoritative path; payload writes are noise.
+
+#### Added
+
+- **`_recovery_log.jsonl` append-only FIM watch** (`bin/wl_fim.py`).
+  Round 6 added recovery SCRIPTS to FIM coverage but not the LOG
+  they write to. Different alert model from WATCH_CODE because
+  legitimate appends must NOT alert. New `WATCH_APPEND_ONLY` list,
+  `_append_only_state()` snapshot helper, and per-cycle
+  `(size, prefix_hash)` check. Alerts on:
+  - `fim_append_only_truncated` — size DECREASED (entries removed)
+  - `fim_append_only_rewritten` — prefix at previous size doesn't
+    match the recorded prefix hash (entries edited in place)
+  - `fim_append_only_removed` — file disappeared
+  Closes the visibility gap: an attacker who runs
+  `emergency_unlock.sh` maliciously and then truncates the
+  recovery log to hide the entry now triggers a CRITICAL alert.
+- 16 unit tests for the append-only watch logic
+  (`tests/unit/test_fim_append_only.py`): zero-length prefix,
+  partial prefix, length-exceeds-file, missing-file, legitimate
+  append, no-change-silent, truncation, removal, same-size
+  rewrite, partial-rewrite-with-append, first-baseline transitions.
+- 10 Hypothesis fuzz tests for the HMAC sig path
+  (`tests/unit/test_hmac_sig_fuzz.py`): stability against random
+  bytes, malformed sig dicts, type confusion in sig fields.
+  Determinism + correctness: same input → same checksum, any
+  change to data → different checksum, round-trip preserves data,
+  tampered data fails-closed to empty dict. ~1300 fuzz cases
+  total. Found 1 real bug (`read_expected_hashes`
+  UnicodeDecodeError) which is now fixed.
 
 ### Round 6: LOW items — infrastructure (CI, recovery-script FIM, version audit)
 

@@ -274,6 +274,39 @@ class TestAdversarialEdgeCases:
         assert not is_ascii_name("ＤＲ＿ｔｅｓｔ")
         assert validate_ascii_text("ｒｅａｓｏｎ") is not None
 
+    def test_trailing_newline_rejected(self):
+        """SECURITY: Python's `$` regex anchor matches before a
+        trailing newline, so `re.match(r'^[A-Za-z]+$', "abc\\n")`
+        was silently accepting newline-injected input. Round 7
+        switched all three validators to `\\Z` (absolute end-of-
+        string).
+
+        Falsifying example surfaced by Hypothesis fuzz on
+        2026-04-29: `is_ascii_name('0\\n')` was returning True.
+
+        These cases must be rejected:
+        """
+        # Newline-only trailers
+        assert not is_ascii_name("DR_test\n")
+        assert not is_ascii_name("DR_test\r")
+        assert not is_ascii_name("DR_test\r\n")
+        assert not is_ascii_name("DR_test\n", allow_spaces=False)
+        # Newline-injection attempts inside the value
+        assert not is_ascii_name("DR_test\nattacker")
+        assert not is_ascii_name("DR_test\rinjected")
+        # Filename validators must reject too
+        assert not is_safe_filename("evil\n.csv")
+        assert not is_safe_filename("evil\r.csv")
+        # App-context (path-component) validator must reject
+        assert not is_valid_app_context("wl_manager\n")
+        assert not is_valid_app_context("wl_manager\r")
+        # Tab and other control chars (not just \n) — defense in
+        # depth, since validate_ascii_text already rejects these
+        # but is_ascii_name also should.
+        assert not is_ascii_name("DR_test\t")
+        assert not is_ascii_name("DR_test\x00")
+        assert not is_ascii_name("DR_test\x1f")
+
     def test_combining_marks_rejected(self):
         # ASCII letter + combining diacritic (U+0301) — visually 'á'
         # but byte-wise NOT ASCII. Must reject.

@@ -234,19 +234,18 @@ def test_admin_limit_respects_zero_semantics(mock_daily_limits):
 
 
 @pytest.mark.unit
-def test_admin_limit_unlimited_semantics_NOT_supported():
-    """Pin the current production semantics: admin limits do NOT
-    special-case `-1` as unlimited.
+def test_admin_limit_respects_unlimited():
+    """Test: admin limits respect -1=unlimited (round 7 fix).
 
-    Asymmetry vs analyst limits — `check_analyst_limit` short-circuits
-    `max_count == -1` to `(True, 0, -1)`. `check_admin_daily_limit`
-    treats -1 as a literal cap, so any positive `current + action_count`
-    fails. If a future round wants to align them, update the
-    production code AND this test together.
+    Round 6 surfaced an asymmetry — `check_analyst_limit` short-
+    circuits `max_count == -1` to (True, 0, -1) but
+    `check_admin_daily_limit` previously took -1 literally so any
+    positive count failed. Round 7 aligned them; this test now
+    asserts the correct semantics.
 
-    Documented in MEMORY.md and CHANGELOG round 6 known-asymmetries
-    list. The Control Panel admin-limit input enforces minimum 1 to
-    avoid users discovering this asymmetry through the UI.
+    Counters are NOT consulted for unlimited (returns
+    `(True, 0, -1)`) — the function should short-circuit before
+    even reading daily_limits / period_key.
     """
     config = {"admin_limits": {"approval_count": -1}}
     with patch('wl_limits.read_daily_limits', return_value={}):
@@ -254,9 +253,91 @@ def test_admin_limit_unlimited_semantics_NOT_supported():
             allowed, current, max_val = wl_limits.check_admin_limit(
                 "admin", "approval_count"
             )
-            # Currently: -1 is taken literally → 0+1 <= -1 is False.
-            assert allowed is False
+            assert allowed is True, (
+                "max_count=-1 must allow regardless of current count")
+            assert current == 0, (
+                "current must be reported as 0 when short-circuiting "
+                "(no counter lookup performed)")
             assert max_val == -1
+
+
+@pytest.mark.unit
+def test_admin_limit_unlimited_ignores_huge_action_count():
+    """An unlimited admin action accepts any action_count, not
+    just count=1 — the short-circuit must bypass arithmetic
+    entirely. Mirror of test_analyst_limit_unlimited_when_max_is_neg1.
+    """
+    config = {"admin_limits": {"approval_count": -1}}
+    with patch('wl_limits.read_daily_limits', return_value={}):
+        with patch('wl_limits.read_limit_config', return_value=config):
+            allowed, current, max_val = wl_limits.check_admin_limit(
+                "admin", "approval_count", action_count=1000000)
+            assert allowed is True
+            assert max_val == -1
+
+
+@pytest.mark.unit
+def test_admin_limit_unlimited_does_not_consult_counter():
+    """Defense-in-depth: when -1 short-circuits, no counter lookup
+    should happen. We verify by mocking read_daily_limits to RAISE
+    — the call must succeed anyway because the short-circuit
+    fires BEFORE the counter read."""
+    config = {"admin_limits": {"approval_count": -1}}
+
+    def _explode():
+        raise AssertionError("counter lookup should be skipped on -1")
+
+    with patch('wl_limits.read_daily_limits', side_effect=_explode):
+        with patch('wl_limits.read_limit_config', return_value=config):
+            # Should NOT raise — short-circuit must fire first.
+            allowed, current, max_val = wl_limits.check_admin_limit(
+                "admin", "approval_count")
+            assert allowed is True
+            assert max_val == -1
+
+
+@pytest.mark.unit
+def test_admin_limit_zero_disabled_takes_priority_over_unlimited():
+    """Sentinel ordering check: 0 = disabled is checked BEFORE -1
+    = unlimited, so a 0 always wins regardless of code order. Test
+    via the only practical scenario (different action types in
+    same config)."""
+    config = {"admin_limits": {
+        "approval_count": -1,    # unlimited
+        "rule_deletion": 0,       # disabled
+    }}
+    with patch('wl_limits.read_daily_limits', return_value={}):
+        with patch('wl_limits.read_limit_config', return_value=config):
+            ok_unlim, _, max_unlim = wl_limits.check_admin_limit(
+                "admin", "approval_count")
+            ok_disabled, _, max_disabled = wl_limits.check_admin_limit(
+                "admin", "rule_deletion")
+            assert ok_unlim is True and max_unlim == -1
+            assert ok_disabled is False and max_disabled == 0
+
+
+@pytest.mark.unit
+def test_admin_limit_normal_enforcement_still_works():
+    """Sanity: positive max_count still enforces normally — the new
+    -1 short-circuit must not regress the common path."""
+    config = {"admin_limits": {"approval_count": 3}}
+    counters = {
+        wl_limits.get_admin_counter_period_key(): {
+            "admin": {"admin_approval_count": 2}
+        }
+    }
+    with patch('wl_limits.read_daily_limits', return_value=counters):
+        with patch('wl_limits.read_limit_config', return_value=config):
+            # 2 + 1 <= 3 — allowed
+            ok, cur, mx = wl_limits.check_admin_limit(
+                "admin", "approval_count", action_count=1)
+            assert ok is True
+            assert cur == 2 and mx == 3
+            # 2 + 2 > 3 — blocked
+            ok, cur, mx = wl_limits.check_admin_limit(
+                "admin", "approval_count", action_count=2)
+            assert ok is False
+            assert cur == 2 and mx == 3
 
 
 # ═══════════════════════════════════════════════════════════════════════════
