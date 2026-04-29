@@ -154,6 +154,16 @@ WATCH_CODE = _expand_globs([
     # Our app's frontend JS — entry points + extracted modules.
     os.path.join(APP_DIR, "appserver", "static", "*.js"),
     os.path.join(APP_DIR, "appserver", "static", "modules", "*.js"),
+    # Recovery scripts (round 6, 2026-04-29). These are unsigned bash
+    # that perform privileged operations (clear tamper flags, delete
+    # KV records, append to recovery log). An attacker with file
+    # write could modify them to skip the audit log append or to
+    # silently no-op. FIM coverage means tampering surfaces as a
+    # `fim_code_modified` event within 15s.
+    os.path.join(APP_DIR, "scripts", "emergency_unlock.sh"),
+    os.path.join(APP_DIR, "scripts", "reset_cooldowns.sh"),
+    os.path.join(APP_DIR, "scripts", "fim_deploy_window.sh"),
+    os.path.join(APP_DIR, "scripts", "pre-commit-doc-drift.sh"),
 ])
 
 WATCH_SENTINELS = [

@@ -63,3 +63,52 @@ jobs:
           name: wl_manager-spl
           path: dist/*.spl
           retention-days: 30
+
+  doc-drift:
+    name: Doc Drift Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run doc-drift guard
+        # Same script the pre-commit hook runs locally. Verifies
+        # file paths in the docs exist + that bare "Build NNN" prose
+        # stays in sync with default/app.conf. Origin: 2026-04-19
+        # incident where build numbers drifted across 6 builds
+        # before the user noticed.
+        run: bash scripts/pre-commit-doc-drift.sh
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install Python dev deps
+        # Pytest + hypothesis + freezegun. Excludes Playwright (the
+        # E2E tests are gated by WL_TEST_HARNESS=1 and need a real
+        # Splunk container — see the gate notice at top of file).
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest==8.1.1 pytest-cov==5.0.0 freezegun==1.5.1 \
+                      hypothesis==6.90.0 pytest-timeout==2.1.0
+
+      - name: Run unit tests
+        # The unit suite mocks Splunk REST + filesystem layers; no
+        # Splunk container required. ~7s for 539 tests locally.
+        run: python -m pytest tests/unit/ -q --tb=short
+
+      - name: Run module-level tests
+        # Top-level tests/test_*.py files cover lower-layer modules
+        # (wl_limits, wl_hmac_key, wl_filelock) with HMAC and
+        # period-boundary coverage that tests/unit/ does not
+        # duplicate.
+        run: |
+          python -m pytest tests/test_wl_limits.py \
+                          tests/test_wl_hmac_key.py \
+                          tests/test_wl_filelock.py -q --tb=short
