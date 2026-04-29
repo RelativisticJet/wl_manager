@@ -89,3 +89,13 @@ graphify-out/
 
 # One-shot audit scratch (Semgrep rules pulled from external sources, raw scan output)
 .audit/
+
+# Backup artifacts produced by scripts/backup_data.sh — keep them
+# out of the repo. Restore from a real backup target (S3, NAS,
+# admin's offsite store), not from a checked-in tarball.
+backups/
+
+# Smoke-test temp dirs created by scripts/test_backup_restore.sh —
+# auto-cleaned on success but leftover after a failed run.
+.tmp_smoke_*/
+.tmp_restore_*/
