@@ -1482,6 +1482,26 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         return self._resp(200, {"csv_files": entries})
 
     def _get_csv_content(self, request, csv_file, app_context, tz_offset="0"):
+        # Insider-threat audit: emit BEFORE the 404/200 split so probing
+        # attempts (failed reads) are also captured. Skipped for own-app
+        # reads to keep noise low — those are the 99.9% case. Splunk
+        # RBAC gates whether the read is allowed; this event just
+        # provides forensic visibility into cross-app access patterns
+        # by which user, including failed probes.
+        if app_context and app_context != APP_NAME:
+            try:
+                self._index_audit(request, {
+                    "timestamp": int(time.time()),
+                    "analyst": get_user(request),
+                    "action": "cross_app_csv_read",
+                    "csv_file": csv_file,
+                    "app_context": app_context,
+                    "severity": "INFO",
+                })
+            except Exception:
+                # Best-effort — never block a read on audit emission
+                pass
+
         path = resolve_csv_path(csv_file, app_context)
         if path is None:
             # Try own lookups as fallback (with symlink check)
@@ -1770,6 +1790,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         """GET action wrapper for get_csv_content."""
         csv_file = query.get("csv_file", "")
         app_context = query.get("app", "")
+        if not is_valid_app_context(app_context):
+            return self._resp(400, {"error": "Invalid app_context"})
         tz_offset = query.get("tz_offset", "0")
         return self._get_csv_content(request, csv_file, app_context, tz_offset)
 
@@ -1781,18 +1803,24 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         """GET action wrapper for get_versions."""
         csv_file = query.get("csv_file", "")
         app_context = query.get("app", "")
+        if not is_valid_app_context(app_context):
+            return self._resp(400, {"error": "Invalid app_context"})
         return self._get_versions(csv_file, app_context)
 
     def _action_check_csv_status(self, request, query, user, roles):
         """GET action wrapper for check_csv_status."""
         csv_file = query.get("csv_file", "")
         app_context = query.get("app", "")
+        if not is_valid_app_context(app_context):
+            return self._resp(400, {"error": "Invalid app_context"})
         return self._check_csv_status(csv_file, app_context)
 
     def _action_get_col_widths(self, request, query, user, roles):
         """GET action wrapper for get_col_widths."""
         csv_file = query.get("csv_file", "")
         app_context = query.get("app", "")
+        if not is_valid_app_context(app_context):
+            return self._resp(400, {"error": "Invalid app_context"})
         return self._get_col_widths(csv_file, app_context)
 
     def _action_get_apps(self, request, query, user, roles):

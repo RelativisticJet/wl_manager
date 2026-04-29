@@ -74,7 +74,8 @@ _NON_ASCII_RE = re.compile(r'[^\x00-\x7F]')
 # We must NOT use Python's c.isalnum() here because it is Unicode-aware and
 # accepts CJK ideographs (e.g. '检' is a Unicode "letter"), Cyrillic, Greek,
 # Arabic, etc. ASCII-only is enforced because:
-#   1. Rule names become filesystem paths (lookups/_versions/{rule}_versions/)
+#   1. Rule names become parts of filesystem paths (CSVs live at
+#      lookups/<csv>.csv; version manifests at lookups/_versions/<csv>_versions.json)
 #   2. CSV filenames need to be safe for SPL search expressions, dashboard
 #      drilldowns, audit log readability, and cross-platform copy/backup
 #   3. Defense against homoglyph attacks (zero-width spaces, lookalike chars)

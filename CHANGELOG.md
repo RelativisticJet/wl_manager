@@ -2,6 +2,82 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased — 2026-04-29 (build 620)
+
+### Security — ASCII validation tightening (rounds 1-4)
+
+**Breaking change**: detection rule names, CSV filenames, approval reasons,
+comments, and `app_context` values are now strictly ASCII. Submissions
+containing CJK ideographs, Cyrillic, Greek, Arabic, emoji, zero-width
+characters, bidi-override marks, fullwidth ASCII lookalikes, combining
+diacritics, null bytes, or other control characters are rejected with
+HTTP 400. Length caps also enforced at the submission gate (rule names
+≤100 chars, CSV filenames ≤200 chars).
+
+If you have external automation that submits requests via REST and was
+relying on the historical Unicode-permissive behavior of `c.isalnum()`,
+those calls now return 400 instead of being queued for approval.
+Migrate to ASCII-only payloads.
+
+### Added
+
+- `bin/wl_validation.py`: `is_ascii_name()`, `is_valid_app_context()`,
+  `validate_ascii_text()` (round 1)
+- `bin/wl_trash.py`: `_safe_trash_item_dir()` containment helper used
+  by `purge_trash_item` and `restore_from_trash` (round 3)
+- `tests/unit/test_ascii_validation.py`: 69 unit tests covering
+  adversarial Unicode edge cases (rounds 1-3)
+- `tests/e2e/test_concurrent_save_race.cjs`: characterizes the
+  optimistic-lock behavior under concurrent saves (round 4)
+- `scripts/pre-commit`: section #8 blocks new `c.isalnum()` usage in
+  `bin/` to prevent regression to the Unicode-permissive pattern
+  (round 3)
+- `cross_app_csv_read` audit event: emitted when a user reads a CSV
+  from an `app_context` other than `wl_manager` — provides forensic
+  visibility into cross-app lookups for insider-threat investigations
+  (round 4)
+- `fim_mapping_unreadable` audit event: emitted by FIM watcher when
+  `rule_csv_map.csv` cannot be parsed (e.g. UTF-8 corruption); this
+  prevents silent loss of CSV integrity monitoring (round 3)
+
+### Fixed
+
+- **HIGH** Trash item path traversal: `purge_trash_item` and
+  `restore_from_trash` previously fed user-supplied `trash_id`
+  directly into `os.path.join` and `shutil.rmtree` without
+  containment checks. A malicious admin sending
+  `trash_id="../../tmp"` would have silently deleted
+  `/opt/splunk/.../tmp` (round 3)
+- **MED** Dual-admin meta validation: `_submit_dual_approval`
+  accepted CJK in `rule_name`, `csv_file`, and `trash_id` fields
+  even though POST-action wrappers had been tightened. Pollution
+  of the dual-approval queue and audit trail prevented (round 3)
+- **MED** Submit-approval bypass: a direct
+  `action=submit_approval` POST bypassed the ASCII validation that
+  was wired into `_submit_create_delete_approval`. Inner choke
+  point now validates too (round 2)
+- **MED** GET handler `app_context` validation: 4 GET endpoints
+  (`get_csv_content`, `get_versions`, `check_csv_status`,
+  `get_col_widths`) now reject malformed `app_context` at the
+  wrapper instead of relying on lower-layer `resolve_csv_path`
+  (round 4)
+- **MED** FIM watcher resilient to UnicodeDecodeError on
+  `rule_csv_map.csv` — single rogue byte previously crashed the
+  watcher and silently disabled CSV integrity monitoring (round 3)
+- **LOW** `is_ascii_name` rejects whitespace-only strings; previously
+  `"   "` would pass the regex
+- **LOW** `is_safe_filename` rejects null bytes and other ASCII
+  control characters (round 2)
+- **LOW** `_execute_replay_create_csv` returns clear "Invalid CSV
+  file name" error for legacy CJK queue entries instead of crashing
+  with `NoneType` from `write_csv(None, ...)` (round 2)
+
+### Changed
+
+- Build numbers 618 → 620 over 4 hardening rounds in this release
+- Pre-commit hook now runs additional drift guard for `c.isalnum()`
+  pattern in `bin/`
+
 ## [2.0.0] - 2026-03-22
 
 ### Added
