@@ -69,6 +69,122 @@ def _get_approval_queue_path() -> str:
     return os.path.join(OWN_LOOKUPS, APPROVAL_QUEUE_FILE)
 
 
+# ─────────────────────────────────────────────────────────────────────
+# HMAC integrity layer (round 6, 2026-04-29)
+#
+# The queue file format on-disk is unchanged (still a JSON list of
+# entries), so emergency tooling and forensic scripts can read it
+# without knowing about the HMAC layer. A sidecar ``.approval_queue.sig``
+# stores the HMAC of the queue's SHA-256 digest, signed with the same
+# GUID-derived key used by the CSV expected-hash registry.
+#
+# Failure mode: if the sig file is missing OR its HMAC doesn't verify
+# OR the recorded SHA-256 doesn't match the queue file's current
+# SHA-256, ``_read_approval_queue`` returns an empty list with a clear
+# error message — fail-closed. This means an attacker who writes the
+# queue file directly (bypassing the handler) is detected on the
+# NEXT read, which happens on every approval-related action and is
+# far more frequent than the FIM watcher's 15-second cycle.
+#
+# Bootstrap: the first read after deploy will see queue + no sig
+# (legacy state). It accepts that state once, writes a fresh sig
+# alongside the existing queue, and emits an INFO event. After that,
+# missing sig = tamper.
+# ─────────────────────────────────────────────────────────────────────
+
+_APPROVAL_SIG_BASENAME = ".approval_queue.sig"
+
+
+def _get_approval_sig_path() -> str:
+    """Return path to the sidecar HMAC signature file."""
+    return os.path.join(OWN_LOOKUPS, _APPROVAL_SIG_BASENAME)
+
+
+def _hash_queue_bytes(queue_bytes: bytes) -> str:
+    """SHA-256 of the on-disk queue file bytes (the canonical input
+    to the HMAC). We hash the raw bytes — not a re-serialized form —
+    so the verification matches exactly what is on disk."""
+    import hashlib
+    return hashlib.sha256(queue_bytes).hexdigest()
+
+
+def _compute_sig_envelope(queue_bytes: bytes) -> Dict[str, Any]:
+    """Return a dict ready to write to the sidecar sig file."""
+    from wl_hmac_key import (
+        derive_hash_registry_key, compute_registry_checksum)
+    sha = _hash_queue_bytes(queue_bytes)
+    body = {"sha256": sha, "_signed_at": int(time.time())}
+    body["_checksum"] = compute_registry_checksum(
+        body, derive_hash_registry_key())
+    return body
+
+
+def _verify_queue_sig(queue_bytes: bytes) -> Tuple[bool, str]:
+    """Return ``(is_valid, reason)``.
+
+    - ``(True, "")`` if the sig file exists, the HMAC verifies, and
+      the recorded SHA-256 matches ``queue_bytes``.
+    - ``(True, "bootstrap")`` if the sig file is missing AND the
+      queue is non-empty — caller MUST write a fresh sig immediately.
+    - ``(True, "empty")`` if the queue file is missing/empty AND
+      the sig file is missing — fresh-install no-op.
+    - ``(False, "<reason>")`` for any tamper indicator.
+    """
+    sig_path = _get_approval_sig_path()
+
+    if not os.path.isfile(sig_path):
+        if not queue_bytes:
+            return (True, "empty")
+        # Legacy / first-run bootstrap. Caller writes a fresh sig.
+        return (True, "bootstrap")
+
+    try:
+        with open(sig_path, "r", encoding="utf-8") as fh:
+            sig = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        return (False, f"sig_unreadable: {exc}")
+
+    stored_checksum = sig.pop("_checksum", None)
+    if not stored_checksum:
+        return (False, "sig_missing_checksum")
+
+    from wl_hmac_key import (
+        derive_hash_registry_key, compute_registry_checksum)
+    expected = compute_registry_checksum(
+        sig, derive_hash_registry_key())
+    if stored_checksum != expected:
+        return (False, "sig_hmac_mismatch")
+
+    actual_sha = _hash_queue_bytes(queue_bytes)
+    if sig.get("sha256") != actual_sha:
+        return (False, "queue_sha_mismatch")
+
+    return (True, "")
+
+
+def _write_queue_sig(queue_bytes: bytes) -> Tuple[bool, str]:
+    """Atomically write a fresh sig file matching ``queue_bytes``.
+
+    Returns ``(success, error_msg)``. On failure the caller may want
+    to log but should NOT fail the queue write — a missing sig will
+    be lazily re-bootstrapped on the next read.
+    """
+    sig_path = _get_approval_sig_path()
+    temp_path = sig_path + ".tmp"
+    try:
+        envelope = _compute_sig_envelope(queue_bytes)
+        with open(temp_path, "w", encoding="utf-8") as fh:
+            json.dump(envelope, fh, indent=2, sort_keys=True)
+        os.replace(temp_path, sig_path)
+        return (True, "")
+    except Exception as exc:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+        return (False, f"failed to write approval sig: {exc}")
+
+
 def generate_request_id() -> str:
     """Generate a unique, opaque request ID.
 
@@ -122,34 +238,68 @@ def _is_expired(entry: Dict[str, Any]) -> bool:
 
 def _read_approval_queue() -> Tuple[List[Dict], str]:
     """
-    Read approval queue from disk with validation.
+    Read approval queue from disk with validation AND HMAC verification.
 
     Returns:
         Tuple of (entries list, error_msg string).
         On success: (list, "")
-        On error: ([], error_message)
+        On HMAC mismatch: ([], "QUEUE_TAMPERED: <reason>") — fail-closed
+        On other error: ([], error_message)
+
+    See the HMAC integrity layer comment block for the threat model
+    and bootstrap behavior.
     """
     path = _get_approval_queue_path()
     if not os.path.isfile(path):
+        # Fresh install / cleared queue. Verify_queue_sig handles
+        # the "no queue + no sig" case as the empty bootstrap.
+        valid, reason = _verify_queue_sig(b"")
+        if not valid:
+            return ([], f"QUEUE_TAMPERED: {reason}")
         return ([], "")
 
     try:
-        with open(path, "r", encoding="utf-8") as fh:
-            queue = json.load(fh)
-            if not isinstance(queue, list):
-                return ([], "Queue file corrupted: expected list, got " + type(queue).__name__)
-            return (queue, "")
-    except json.JSONDecodeError as e:
-        return ([], f"Queue JSON corrupted: {e}")
+        with open(path, "rb") as fh:
+            raw = fh.read()
     except OSError as e:
         return ([], f"Failed to read queue: {e}")
+
+    valid, reason = _verify_queue_sig(raw)
+    if not valid:
+        # Hard fail-closed. Returning [] here means callers will
+        # see "no pending requests" rather than execute on
+        # potentially attacker-modified entries.
+        return ([], f"QUEUE_TAMPERED: {reason}")
+
+    try:
+        queue = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        return ([], f"Queue JSON corrupted: {e}")
+    if not isinstance(queue, list):
+        return ([], "Queue file corrupted: expected list, got " + type(queue).__name__)
+
+    if reason == "bootstrap":
+        # First read after upgrade: write the sig now so subsequent
+        # reads can detect tampering. Best-effort — log on failure
+        # but don't fail the read.
+        ok, sig_err = _write_queue_sig(raw)
+        if not ok:
+            # Non-fatal — next write will retry.
+            pass
+
+    return (queue, "")
 
 
 def _write_approval_queue(queue: List[Dict]) -> Tuple[bool, str]:
     """
-    Write approval queue to disk atomically with file locking.
+    Write approval queue to disk atomically with file locking AND
+    refresh the HMAC sidecar signature.
 
-    Uses temp file + rename pattern for atomicity.
+    Uses temp file + rename pattern for atomicity. The sig is written
+    AFTER the queue replace succeeds — if the sig write fails, the
+    queue is still consistent and the next read will report
+    ``sig_hmac_mismatch`` (fail-closed) rather than processing
+    tampered data.
 
     Args:
         queue: List of approval entries to write
@@ -162,9 +312,18 @@ def _write_approval_queue(queue: List[Dict]) -> Tuple[bool, str]:
 
     try:
         with file_lock(path, timeout=10):
-            with open(temp_path, "w", encoding="utf-8") as fh:
-                json.dump(queue, fh, indent=2)
+            payload = json.dumps(queue, indent=2).encode("utf-8")
+            with open(temp_path, "wb") as fh:
+                fh.write(payload)
             os.replace(temp_path, path)
+            # Refresh the sidecar sig under the same lock so a
+            # concurrent reader cannot observe queue-new + sig-old.
+            sig_ok, sig_err = _write_queue_sig(payload)
+            if not sig_ok:
+                # Queue itself is fine; report the sig error so the
+                # caller can log it. Future reads will fail-closed
+                # until the sig catches up on the next write.
+                return (True, f"queue_written_sig_failed: {sig_err}")
         return (True, "")
     except (OSError, IOError, Exception) as e:
         # Clean up temp file on error

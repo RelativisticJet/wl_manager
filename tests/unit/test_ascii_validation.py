@@ -14,6 +14,7 @@ don't silently relax the policy.
 """
 
 import os
+import re
 import sys
 
 import pytest
@@ -546,3 +547,110 @@ class TestNoDualApprovalPayloadBypass:
             "any attacker can send the flag and skip the dual-admin "
             "gate. Remove the read; the legitimate replay path calls "
             "the pipeline directly, not the action wrapper.")
+
+
+class TestNoUnderscoreFlagPayloadBypass:
+    """No `payload.get("_from_*")` or `payload["_from_*"]` ANYWHERE
+    in `bin/`. This is the broader anti-pattern that bit us twice
+    (`_from_approval` rounds 1-?, `_from_dual_approval` round 5).
+
+    Internal flags (anything that begins with `_from_` and gates a
+    security check) MUST be passed as kwargs from server-controlled
+    callers, not read from `payload` which is user-supplied JSON.
+
+    Origin: round 6 systematic grep, 2026-04-29. Mechanical
+    enforcement so a third instance can't slip in undetected.
+
+    Allow-list: writes (`payload["_from_x"] = True`,
+    `payload.setdefault("_from_x", ...)`) are fine — those are
+    server-controlled mutations, not user-controlled reads. We
+    forbid only the read forms.
+    """
+
+    # Word-boundary patterns: `payload` not preceded by an identifier
+    # character, so `replay_payload` / `stored_payload` / `exec_payload`
+    # don't match — those are server-constructed dicts, not the
+    # user-controlled REST payload.
+    BAD_GET_RE = re.compile(
+        r'(?<![A-Za-z0-9_])payload\.get\(["\']_from_')
+    BAD_SUB_READ_RE = re.compile(
+        # `payload["_from_x"]` NOT followed by `=` (which would be
+        # an assignment / write). The negative lookahead requires
+        # whitespace + something other than `=`, OR closing on a
+        # statement boundary that is unmistakably a read.
+        r'(?<![A-Za-z0-9_])payload\[["\']_from_[^"\']*["\']\]'
+        r'(?!\s*=\s*[^=])')
+
+    def _scan_lines(self, filename):
+        """Return source as a list of (lineno, line) tuples with
+        comments and triple-quoted docstring blocks stripped, so
+        the test class's own docstring discussing the pattern
+        doesn't self-trigger."""
+        import os
+        repo = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "..", ".."))
+        path = os.path.join(repo, "bin", filename)
+        with open(path, "r", encoding="utf-8") as fh:
+            source = fh.read()
+        out = []
+        in_doc = False
+        doc_quote = None
+        for i, raw in enumerate(source.split("\n"), 1):
+            line = raw.split("#", 1)[0]
+            stripped = line.strip()
+            if not in_doc:
+                for q in ('"""', "'''"):
+                    if stripped.startswith(q):
+                        if stripped.count(q) >= 2:
+                            line = ""
+                            break
+                        in_doc = True
+                        doc_quote = q
+                        line = ""
+                        break
+            else:
+                if doc_quote and doc_quote in line:
+                    in_doc = False
+                    doc_quote = None
+                line = ""
+            out.append((i, line))
+        return out
+
+    def _find_offenders(self, filename):
+        """Return list of (lineno, snippet) for forbidden reads."""
+        offenders = []
+        for lineno, line in self._scan_lines(filename):
+            if self.BAD_GET_RE.search(line) or self.BAD_SUB_READ_RE.search(line):
+                offenders.append((lineno, line.strip()))
+        return offenders
+
+    def test_handler_has_no_from_flag_reads(self):
+        offenders = self._find_offenders("wl_handler.py")
+        assert not offenders, (
+            "SECURITY: wl_handler.py reads `_from_*` flags from the "
+            "user-controlled REST `payload`. Each entry is "
+            "(lineno, source_line):\n  {}\n\n"
+            "Move every such flag to a kwarg on the receiving function "
+            "(e.g. `_from_approval=False`) and have the replay path "
+            "set the kwarg directly. Writes via server-constructed "
+            "dicts (e.g. `replay_payload[...] = True`) are allowed."
+            .format("\n  ".join("{}: {}".format(n, s) for n, s in offenders)))
+
+    def test_other_bin_modules_have_no_from_flag_reads(self):
+        import glob
+        import os
+        repo = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "..", ".."))
+        bin_dir = os.path.join(repo, "bin")
+        offenders = {}
+        for path in glob.glob(os.path.join(bin_dir, "*.py")):
+            name = os.path.basename(path)
+            if name == "wl_handler.py":
+                continue
+            hits = self._find_offenders(name)
+            if hits:
+                offenders[name] = hits
+        assert not offenders, (
+            "SECURITY: bin/ modules contain user-controlled `_from_*` "
+            "flag reads from `payload`: {}. See the class docstring "
+            "for why this is banned.".format(offenders))
