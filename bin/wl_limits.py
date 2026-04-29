@@ -447,14 +447,32 @@ def check_admin_daily_limit(
 
     Admin limits live in ``config['admin_limits']`` and counters are
     tracked under ``admin_<action_type>`` to avoid collision with the
-    analyst namespace. A ``max_count`` of ``0`` means the action is
-    disabled (not merely exhausted) — returns ``(False, 0, 0)``.
+    analyst namespace.
+
+    Sentinel semantics (round 7, 2026-04-29 — aligned with
+    ``check_analyst_limit``):
+
+    - ``max_count == 0``  → action is **disabled**. Returns
+      ``(False, 0, 0)``.
+    - ``max_count == -1`` → action is **unlimited**. Returns
+      ``(True, 0, -1)`` without consulting counters.
+    - ``max_count >= 1``  → enforce normally:
+      ``allowed = (current + action_count) <= max_count``.
+
+    Round 6 found that this function previously took ``-1`` literally,
+    so a configured ``-1`` would block every admin action (since
+    ``current + 1 <= -1`` is always False). The Control Panel UI's
+    minimum-1 input prevented users from hitting this through the
+    UI, but a direct REST configuration could trigger it. Aligning
+    with the analyst path closes the asymmetry.
     """
     admin_cfg = read_admin_limits()
     max_count = admin_cfg.get(
         action_type, DEFAULT_ADMIN_LIMITS.get(action_type, 999))
     if max_count == 0:
         return False, 0, 0
+    if max_count == -1:
+        return True, 0, -1
 
     admin_action = "admin_" + action_type
     counters = read_daily_limits()

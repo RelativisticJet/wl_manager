@@ -173,6 +173,26 @@ WATCH_SENTINELS = [
     INSTANCE_CFG,  # GUID rotation invalidates ALL HMAC-signed state
 ]
 
+# Append-only logs (round 7, 2026-04-29).
+#
+# Standard FIM alerts on every hash change, but append-only files
+# legitimately change every time we add an entry. For these we track
+# (size, prefix_hash) and alert only when:
+#   - size DECREASED (truncation — log entries removed)
+#   - prefix at the previous size doesn't match the old hash
+#     (content rewritten in place)
+#   - file disappeared
+#
+# `_recovery_log.jsonl` is the audit trail for out-of-band recovery
+# script runs (`emergency_unlock.sh`, `reset_cooldowns.sh`,
+# `wl_expiration_cleanup.py`). If an attacker silently truncates it,
+# they erase evidence that recovery scripts were used maliciously —
+# closing a gap left by round 6 (which protected the SCRIPTS but
+# not the LOG they write to).
+WATCH_APPEND_ONLY = [
+    os.path.join(VERSIONS_DIR, "_recovery_log.jsonl"),
+]
+
 
 # ────────────────────────────────────────────────────────────────
 # Key derivation (from Splunk server GUID)
@@ -568,7 +588,61 @@ def _snapshot():
             "hash": _file_hash(path),
             "exists": os.path.isfile(path),
         }
+    for path in WATCH_APPEND_ONLY:
+        result[path] = _append_only_state(path)
     return result
+
+
+def _file_size(path):
+    """Return ``os.path.getsize(path)`` or ``None`` if the file is
+    missing/unreadable."""
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return None
+
+
+def _hash_file_prefix(path, length):
+    """SHA-256 of the first ``length`` bytes of ``path``.
+
+    Used by the append-only watch path to verify that a file's
+    historical content hasn't been rewritten in place. Returns
+    ``None`` on any I/O error or if the file is shorter than
+    ``length`` bytes (which would mean truncation).
+    """
+    if length <= 0:
+        import hashlib
+        return hashlib.sha256(b"").hexdigest()
+    try:
+        import hashlib
+        h = hashlib.sha256()
+        remaining = length
+        with open(path, "rb") as fh:
+            while remaining > 0:
+                chunk = fh.read(min(remaining, 65536))
+                if not chunk:
+                    return None  # file shorter than expected
+                h.update(chunk)
+                remaining -= len(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def _append_only_state(path):
+    """Snapshot the (exists, size, prefix_hash) for an append-only
+    watched file. ``prefix_hash`` is the SHA-256 of the entire
+    current file contents — on subsequent checks we use it as the
+    "expected hash of the file's first <previous-size> bytes".
+    """
+    size = _file_size(path)
+    if size is None:
+        return {"exists": False, "size": 0, "prefix_hash": None}
+    return {
+        "exists": True,
+        "size": size,
+        "prefix_hash": _hash_file_prefix(path, size),
+    }
 
 
 def _read_session_key():
@@ -874,6 +948,106 @@ def main():
                     evt["sentinel_alert"] = True
             _emit(evt)
             new_baseline[path] = {"hash": current_hash, "exists": True}
+            changed = True
+
+    # Append-only watch (round 7).
+    #
+    # Different alert model than WATCH_CODE / WATCH_SENTINELS:
+    # legitimate appends MUST NOT alert. We only alert when:
+    #   - file disappeared (truncate-by-removal)
+    #   - size DECREASED (truncation in place)
+    #   - prefix at the previous size doesn't match the previous
+    #     prefix_hash (content rewritten in place, no append)
+    #
+    # On legitimate append, we re-snapshot and update the baseline
+    # silently.
+    for path in WATCH_APPEND_ONLY:
+        prev = baseline.get(path) or {}
+        prev_exists = bool(prev.get("exists"))
+        prev_size = int(prev.get("size") or 0)
+        prev_prefix_hash = prev.get("prefix_hash")
+        cur_state = _append_only_state(path)
+        cur_exists = cur_state["exists"]
+        cur_size = cur_state["size"]
+        cur_prefix_hash = cur_state["prefix_hash"]
+
+        if path not in baseline:
+            new_baseline[path] = cur_state
+            changed = True
+            continue
+
+        if not cur_exists and prev_exists:
+            _emit({
+                "action": "fim_append_only_removed",
+                "monitored_path": path,
+                "old_size": prev_size,
+                "old_prefix_hash": prev_prefix_hash,
+                "severity": "CRITICAL",
+                "details": (
+                    "Append-only log file disappeared. This suggests "
+                    "an attacker removed audit-trail evidence — "
+                    "investigate immediately. The file is recreated "
+                    "by the next legitimate write, so absence is the "
+                    "ONLY observation window."
+                ),
+            })
+            new_baseline[path] = cur_state
+            changed = True
+            continue
+
+        if cur_exists and not prev_exists:
+            # First-time creation of the log (legitimate when no
+            # recovery script has ever run). Just baseline.
+            new_baseline[path] = cur_state
+            changed = True
+            continue
+
+        if cur_size < prev_size:
+            _emit({
+                "action": "fim_append_only_truncated",
+                "monitored_path": path,
+                "old_size": prev_size,
+                "new_size": cur_size,
+                "severity": "CRITICAL",
+                "details": (
+                    "Append-only log file size DECREASED from "
+                    "{} to {} bytes. Truncation is never legitimate "
+                    "for this file class — investigate."
+                ).format(prev_size, cur_size),
+            })
+            new_baseline[path] = cur_state
+            changed = True
+            continue
+
+        # Verify the prefix at prev_size matches prev_prefix_hash.
+        # Pure append leaves bytes [0..prev_size] unchanged.
+        if prev_size > 0 and prev_prefix_hash is not None:
+            current_prefix_at_prev_size = _hash_file_prefix(
+                path, prev_size)
+            if current_prefix_at_prev_size != prev_prefix_hash:
+                _emit({
+                    "action": "fim_append_only_rewritten",
+                    "monitored_path": path,
+                    "old_size": prev_size,
+                    "new_size": cur_size,
+                    "old_prefix_hash": prev_prefix_hash,
+                    "current_prefix_hash": current_prefix_at_prev_size,
+                    "severity": "CRITICAL",
+                    "details": (
+                        "Append-only log file content was rewritten "
+                        "in place (prefix hash mismatch at the "
+                        "previously-known size). An attacker may "
+                        "have edited historical entries — investigate."
+                    ),
+                })
+                new_baseline[path] = cur_state
+                changed = True
+                continue
+
+        # Legitimate append (or no change at all). Update baseline
+        # quietly.
+        if (cur_size != prev_size) or (cur_prefix_hash != prev_prefix_hash):
+            new_baseline[path] = cur_state
             changed = True
 
     # Force-rewrite when the baseline HMAC failed (checksum_mismatch)

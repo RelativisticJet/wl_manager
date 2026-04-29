@@ -82,8 +82,20 @@ _NON_ASCII_RE = re.compile(r'[^\x00-\x7F]')
 # See discussion 2026-04-26 with user — gap was found via stress test that
 # accidentally allowed `DR_压力测试_检...` through both create_rule and
 # create_csv submission paths.
-_ASCII_NAME_RE = re.compile(r'^[A-Za-z0-9_\-. ]+$')
-_ASCII_FILENAME_STEM_RE = re.compile(r'^[A-Za-z0-9_\-]+$')
+# SECURITY: anchor with `\Z` (absolute end-of-string), NOT `$`.
+# Python's `$` matches BEFORE a trailing newline by default, so
+# `re.match(r'^[A-Za-z0-9]+$', "abc\n")` returns a match — silently
+# accepting newline-injected input. `\Z` matches only the absolute
+# end of the string and rejects "abc\n".
+#
+# Origin: round 7 audit, 2026-04-29 — Hypothesis fuzz test
+# `test_accepted_rule_names_only_allowed_chars` flagged the
+# falsifying example `'0\n'` was being accepted. Without this fix,
+# an attacker could submit rule names / filenames containing `\n`,
+# corrupting audit log readability, dashboard rendering, and SPL
+# expressions that consume those identifiers.
+_ASCII_NAME_RE = re.compile(r'^[A-Za-z0-9_\-. ]+\Z')
+_ASCII_FILENAME_STEM_RE = re.compile(r'^[A-Za-z0-9_\-]+\Z')
 
 
 def validate_ascii_text(text):
@@ -127,7 +139,8 @@ def is_ascii_name(text, allow_spaces=True):
 # joined into a filesystem path: etc/apps/<app_context>/lookups/...
 # Length cap of 100 matches typical Splunk app naming and protects against
 # pathological input.
-_APP_CONTEXT_RE = re.compile(r'^[A-Za-z0-9_\-]{1,100}$')
+# Same `\Z` rule as above — see comment on _ASCII_NAME_RE.
+_APP_CONTEXT_RE = re.compile(r'^[A-Za-z0-9_\-]{1,100}\Z')
 
 
 def is_valid_app_context(text):

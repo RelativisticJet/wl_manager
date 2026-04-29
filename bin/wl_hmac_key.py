@@ -113,10 +113,18 @@ def read_expected_hashes(
         on missing file, JSON parse error, or HMAC mismatch — callers
         treat an empty dict as "all CSVs are unregistered" (fail-closed).
     """
+    # Fail-closed on EVERY parse failure: OSError, malformed JSON,
+    # non-UTF-8 bytes (UnicodeDecodeError — found by Hypothesis fuzz
+    # round 7), unexpected top-level type. The registry is purely
+    # security state; if we can't verify it, treat as "no registry
+    # signed for this install" rather than crashing the FIM watcher
+    # (which would silently disable monitoring).
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+    if not isinstance(data, dict):
         return {}
 
     stored = data.pop("_checksum", None)
