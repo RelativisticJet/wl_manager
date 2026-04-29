@@ -79,14 +79,46 @@ Even though no bug was found, two preventive measures landed:
    sites can migrate opportunistically; they don't have to migrate
    all at once.
 
+## Extension audit — round 8 (2026-04-29)
+
+Round 8 extended the same methodology to the remaining jQuery
+DOM-injection sinks: `.append(string)`, `.prepend(string)`,
+`.before(string)`, `.after(string)`, `.replaceWith(string)`, and
+the `$(htmlString)` factory form. Same XSS surface as `.html()` —
+all parse HTML when given a string starting with `<`.
+
+**Sweep**: 62 sites total (40 + 3 + 3 + 1 + 5 + 10). Result: **zero
+XSS bugs found**.
+
+| Sink | Sites | Object args (safe) | String args | Bugs |
+|------|------:|-------------------:|------------:|-----:|
+| `.append()` | 40 | 32 | 8 | 0 |
+| `.prepend()` | 3 | 1 | 2 | 0 |
+| `.before()` | 3 | 1 | 2 | 0 |
+| `.after()` | 1 | 0 | 1 | 0 |
+| `.replaceWith()` | 5 | 3 | 2 | 0 |
+| `$('<...')` factory | 10 | 10 | 0 | 0 |
+
+The string-arg sites that take user data follow the same project
+convention round 7 C3 documented: every user-controlled substring
+is `_.escape`-wrapped before concatenation. Notable patterns:
+
+- `wl_modals.js`, `wl_save.js`, `wl_csv_io.js`, `wl_presence.js`,
+  `wl_datepicker.js`, `wl_table.js` — all modal/popup builders
+  pass already-constructed jQuery objects (`$modal`, `$bubble`,
+  `$datePicker`), so the HTML-parsing path is bypassed entirely.
+- `control_panel.js:1878, 2886` — `replaceWith(renderLimitHistory(...))` /
+  `replaceWith(renderAdminLimitHistory(...))` pass strings, but the
+  builder functions escape every user-controlled field (admin name,
+  timestamp, change values).
+- `wl_versions.js:96, 117, 127` — `<option>` tags appended to
+  the revert dropdown; `_.escape` per filename and display string.
+- `wl_approval_ui.js:430, 572, 574` — approval-bar and addition-
+  preview HTML; `_.escape` on every header, cell, action_type,
+  analyst, reason, request_id.
+
 ## What this audit does NOT cover
 
-- jQuery `.append(string)` / `.prepend(string)` / `.before(string)`
-  / `.after(string)` — when called with a string argument, these
-  also parse HTML and have the same XSS surface as `.html()`. Not
-  audited in this round; future work.
-- `$(htmlString)` — the jQuery factory parses HTML when the
-  argument starts with `<`. Not audited.
 - DOM `innerHTML` / `outerHTML` — pure DOM API, search-and-audit
   separately. Quick grep of the codebase: zero hits in production
   code.
@@ -94,12 +126,9 @@ Even though no bug was found, two preventive measures landed:
   would be a different class of bug. Quick grep: zero hits in
   production code.
 
-A follow-up round can extend the same methodology to `.append()`
-et al. The rationale for stopping at `.html()` here is that it
-has the highest concentration of user-data-into-DOM call sites and
-the audit returned a clean result; the cost-to-coverage of going
-deeper drops sharply once we have confidence the discipline is
-consistent.
+The methodology has now covered every realistic XSS sink in
+jQuery + DOM that this codebase actually uses. Going deeper hits
+diminishing returns.
 
 ## Re-audit triggers
 

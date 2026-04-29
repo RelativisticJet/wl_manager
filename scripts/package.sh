@@ -47,7 +47,7 @@ echo "════════════════════════�
 echo ""
 
 # ── Step 1: Clean up build artifacts ──────────────────────────────────
-echo "Step 1/5: Cleaning build artifacts..."
+echo "Step 1/6: Cleaning build artifacts..."
 
 # Remove Python bytecode (py_compile creates these during validation)
 find "$APP_DIR" -name "*.pyc" -delete 2>/dev/null || true
@@ -61,7 +61,7 @@ echo "  Done."
 
 # ── Step 2: Run validation ────────────────────────────────────────────
 echo ""
-echo "Step 2/5: Running validation checks..."
+echo "Step 2/6: Running validation checks..."
 if bash "$APP_DIR/scripts/validate.sh"; then
     echo ""
     echo "  Validation passed. Proceeding to package."
@@ -75,7 +75,7 @@ echo "  Done."
 
 # ── Step 3: Create dist directory ─────────────────────────────────────
 echo ""
-echo "Step 3/5: Preparing dist directory..."
+echo "Step 3/6: Preparing dist directory..."
 mkdir -p "$DIST_DIR"
 
 # Remove old build if it exists
@@ -84,7 +84,7 @@ echo "  Output: $SPL_FILE"
 
 # ── Step 4: Build the .spl (tar.gz) ──────────────────────────────────
 echo ""
-echo "Step 4/5: Creating .spl archive..."
+echo "Step 4/6: Creating .spl archive..."
 
 # IMPORTANT: The .spl must contain a top-level directory named after the app.
 # We tar from the parent of the app directory so the structure is:
@@ -152,7 +152,7 @@ echo "  Archive created."
 
 # ── Step 5: Generate checksum ─────────────────────────────────────────
 echo ""
-echo "Step 5/5: Generating SHA-256 checksum..."
+echo "Step 5/6: Generating SHA-256 checksum..."
 
 # Use sha256sum if available, otherwise fall back to shasum or openssl
 if command -v sha256sum &>/dev/null; then
@@ -167,6 +167,26 @@ fi
 
 if [[ -f "$SPL_FILE.sha256" ]]; then
     echo "  Checksum: $(cat "$SPL_FILE.sha256")"
+fi
+
+# ── Step 6: Generate per-release SBOM ─────────────────────────────────
+# Round 8 (2026-04-29). Replaces the static `sbom.cdx.json` baseline
+# with a per-release SBOM that matches the .spl byte-for-byte. Uses
+# the system Python; the helper has zero third-party deps.
+echo ""
+echo "Step 6/6: Generating CycloneDX SBOM..."
+SBOM_FILE="$SPL_FILE.cdx.json"
+PYTHON_BIN="$(command -v python3 || command -v python || echo '')"
+if [[ -n "$PYTHON_BIN" ]]; then
+    if "$PYTHON_BIN" "$APP_DIR/scripts/generate_sbom.py" \
+            "$SPL_FILE" "$SBOM_FILE"; then
+        echo "  SBOM:     $SBOM_FILE"
+    else
+        echo "  WARNING: SBOM generation failed — continuing anyway."
+        rm -f "$SBOM_FILE" 2>/dev/null || true
+    fi
+else
+    echo "  WARNING: No python3/python found — skipping SBOM."
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────

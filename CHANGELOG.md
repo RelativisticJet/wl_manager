@@ -2,7 +2,80 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased — 2026-04-29 (build 628)
+## Unreleased — 2026-04-29 (build 629)
+
+### Round 8: residue + recurring guards + supply-chain hardening
+
+#### Verified
+
+- **FIM coverage live-tested**. Wrote a probe line to a `WATCH_CODE`
+  file (`default/savedsearches.conf`) inside the container; both the
+  ~2 s stat-based watcher (`wl_fim_watch.py`, action
+  `fim_watch_file_modified`) and the 15 s hash-sweep
+  (`wl_fim.py`, action `fim_file_modified`) emitted audit events
+  with the correct `monitored_path`. Confirms round 6/7 FIM
+  additions (recovery scripts, `scripts/package.sh`, append-only
+  `_recovery_log.jsonl`) fire end-to-end, not just look right
+  in static review.
+- **Documentation cleanup**: prior commit messages and parts of
+  CLAUDE.md called the modify-event `fim_code_modified`. The
+  actual wire-level `action=` field is `fim_file_modified`. The
+  inconsistency surfaced during the live FIM probe — a search for
+  `fim_code_modified` returned no rows. The code is unchanged;
+  only the prose was wrong. Future searches should use
+  `fim_file_modified` (regular file changes) and
+  `fim_watch_file_modified` (stat-watcher events).
+
+#### Added
+
+- **Sigstore keyless signing of the .spl + per-release SBOM** in
+  `.github/workflows/release.yml`. Uses the workflow's OIDC token
+  to mint short-lived ephemeral signing keys via Fulcio, records
+  the signature in the public Rekor transparency log, and
+  produces `<artifact>.sig` + `<artifact>.crt` for each .spl and
+  each .cdx.json. Closes the previously-documented gap in
+  `docs/SBOM.md` where the .sha256 + .spl shared a single channel
+  (GitHub Releases) and a Releases takeover defeated both.
+  Verifier command included in workflow comments.
+- **Quarterly `pip-audit` CI workflow**
+  (`.github/workflows/pip-audit.yml`) — fires Jan 1 / Apr 1 / Jul
+  1 / Oct 1 at 09:00 UTC and on `workflow_dispatch`. Fails the
+  workflow on any vulnerability, surfacing via GitHub's existing
+  notification settings. Origin: round 7 B4 was a one-off run;
+  without recurrence we'd forget to re-audit.
+- **Per-release SBOM generation** (`scripts/generate_sbom.py`) —
+  extracts the .spl tarball, hashes every bundled file, and emits
+  a CycloneDX 1.5 JSON document with one `application:wl_manager`
+  envelope and per-file `component` entries. `scripts/package.sh`
+  now calls it as step 6/6, producing `<artifact>.cdx.json`
+  alongside `<artifact>.spl.sha256`. Replaces the static
+  `sbom.cdx.json` baseline (round 7 C1) with a per-release
+  artifact that matches the .spl byte-for-byte.
+- **`wl_audit` long-term archival guidance** in
+  `default/indexes.conf` — documents two options for going past
+  the default 3-year retention (extend online vs. archive on
+  freeze via `coldToFrozenScript`), with example config blocks
+  and pointers to Splunk's official docs. No default changed —
+  guidance only.
+- **`.append()` / `$(htmlString)` audit extension** appended to
+  `docs/HTML_INJECTION_AUDIT.md`. 62 jQuery DOM-injection sinks
+  beyond `.html()` audited (40 append + 3 prepend + 3 before + 1
+  after + 5 replaceWith + 10 factory). Result: zero XSS bugs —
+  every string-arg site already escapes user-controlled
+  substrings. Same project-wide convention as round 7 C3 found.
+
+#### Operational
+
+- **Q3 2026 Splunk version-pinning audit scheduled**
+  (`run_once_at: 2026-07-18T07:00:00Z` = 09:00 Europe/Warsaw).
+  Remote routine `trig_01QE78KzCtSTuwFv2LjrUQqC` will re-run
+  pip-audit, probe Splunk's supported-versions list, scan for new
+  9.3.x CVEs, assess 10.x compat against the 7 risk areas listed
+  in CLAUDE.md, run the pure-Python test suite, and open a PR
+  with findings. One-shot rather than recurring because each
+  audit's findings shape the next prompt.
+
+## Released — 2026-04-29 (build 628)
 
 ### Round 7 C items: SBOM + backup/restore + .html() audit
 

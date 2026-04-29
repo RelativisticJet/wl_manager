@@ -1,0 +1,61 @@
+name: pip-audit — dev dependency CVE scan
+
+# Quarterly CVE scan of `requirements-dev.txt` against the OSV
+# database + GitHub Advisory Database. Origin: round 7 B4
+# (one-off run, 2026-04-29) found pytest 8.1.1 vulnerable to
+# GHSA-6w46-j5rx-g56g. Round 8 (2026-04-29) wires this as a
+# recurring CI job so we don't forget to re-run.
+#
+# Cadence: 1st of every quarter (Jan 1, Apr 1, Jul 1, Oct 1) at
+# 09:00 UTC. Also runs on demand via workflow_dispatch.
+#
+# Failure mode: the workflow fails when pip-audit finds a vuln,
+# producing a red CI badge + email to the repo owner via GitHub's
+# existing notification settings. No PR is auto-created — the
+# remediation requires human judgment (bump pin? wait for upstream
+# fix? add a known-issue exception?).
+
+on:
+  schedule:
+    # Quarterly: Jan 1, Apr 1, Jul 1, Oct 1 at 09:00 UTC.
+    # Pinned to the 1st (not Sunday-of-week) so audits anchor on
+    # absolute dates that are easy to reason about against the
+    # CHANGELOG and version-pinning audit cadence.
+    - cron: '0 9 1 1,4,7,10 *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pip-audit:
+    name: Audit requirements-dev.txt
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit==2.7.3
+
+      - name: Run pip-audit
+        # `--strict` exits non-zero on ANY finding (including those
+        # without a known fix). Use `--ignore-vuln <ID>` here to
+        # carve out a documented exception with a tracking note.
+        run: |
+          pip-audit --requirement requirements-dev.txt --strict
+
+      - name: Reminder on failure
+        if: failure()
+        run: |
+          echo "::error::pip-audit found at least one vulnerability."
+          echo "::error::Document the finding in docs/PIP_AUDIT_LOG.md and either"
+          echo "::error::bump the pin or add an --ignore-vuln <ID> exception with rationale."
