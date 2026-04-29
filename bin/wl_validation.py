@@ -181,11 +181,16 @@ def is_safe_filename(name: str, allowed_extensions: Tuple[str, ...] = (".csv",))
     if not any(name.lower().endswith(ext) for ext in allowed_extensions):
         return False
 
-    # Stem must be ASCII-only and contain at least one alphanumeric.
-    # NOTE: previously used c.isalnum() which is Unicode-aware and would
-    # accept CJK / Cyrillic / Greek filenames. Tightened to ASCII because
-    # CSV filenames are filesystem paths and SPL search identifiers; see
-    # is_ascii_name() above for the full rationale.
+    # Stem must be ASCII alphanumeric / underscore / hyphen ONLY,
+    # AND contain at least one alphanumeric. This matches the stricter
+    # is_ascii_name(allow_spaces=False) contract.
+    #
+    # Origin: round 5 hypothesis fuzz test (2026-04-29) found that
+    # is_safe_filename was accepting names like "0;.csv" — semicolons
+    # are SPL command separators and would break dashboard renders.
+    # Earlier code only required ≥1 alphanumeric and ASCII-only; that
+    # let through `; & | ( ) @ #` etc. which were never legitimate in
+    # this app's lookups (existing files all use the strict set).
     stem = name.rsplit(".", 1)[0]
     if not stem:
         return False
@@ -194,12 +199,17 @@ def is_safe_filename(name: str, allowed_extensions: Tuple[str, ...] = (".csv",))
         return False
     # Reject control characters (NUL, BEL, BS, etc.) anywhere — null
     # bytes in particular are a classic C-string path-truncation attack.
-    # ASCII range \x00-\x1f and \x7f (DEL) are never legitimate in
-    # filenames; the only allowable whitespace control char (TAB) would
-    # also break CSV/SPL downstream so we block all of them.
-    for c in name:
-        if ord(c) < 0x20 or ord(c) == 0x7f:
-            return False
+    if any(ord(c) < 0x20 or ord(c) == 0x7f for c in name):
+        return False
+    # Stem must match the same regex used for CSV filename stems in
+    # is_ascii_name(allow_spaces=False). This brings the two validators
+    # into alignment — only A-Za-z0-9_- chars allowed.
+    if not _ASCII_FILENAME_STEM_RE.match(stem):
+        return False
+    # ALSO require ≥1 alphanumeric: the regex above accepts pure
+    # `___` or `---` strings, but a filename with no actual letter or
+    # digit is operationally meaningless and would create confusing
+    # entries in the lookups dir.
     if not any(c.isascii() and c.isalnum() for c in stem):
         return False
 
