@@ -11,6 +11,14 @@ jobs:
   release:
     name: Build and attach .spl
     runs-on: ubuntu-latest
+    # Per-job permissions (round 7, 2026-04-29). `contents: write` is
+    # the minimum to upload .spl + .sha256 assets to a published
+    # release via `gh release upload`. No other scopes needed —
+    # explicitly NOT requesting `actions:`, `packages:`, `id-token:`
+    # so a future workflow-level permissions widening can't silently
+    # enrich this job's token.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 

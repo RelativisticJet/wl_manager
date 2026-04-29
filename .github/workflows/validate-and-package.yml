@@ -6,9 +6,18 @@ on:
   pull_request:
     branches: [ main ]
 
+# Workflow-level permissions (round 7, 2026-04-29). Default
+# GITHUB_TOKEN scope on a forked repo is "read" but on this repo
+# was unset — explicitly pin to read so the upload-artifact step
+# cannot accidentally write to PRs/issues/contents.
+permissions:
+  contents: read
+
 jobs:
   validate-and-package:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
     - name: Checkout code
