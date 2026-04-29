@@ -508,3 +508,41 @@ class TestSafeTrashItemDir:
         # directory doesn't exist (caller should treat as "not found")
         from wl_trash import _safe_trash_item_dir
         assert _safe_trash_item_dir("nonexistent_trash_id_12345") is None
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# _from_dual_approval bypass — STRIDE round 2026-04-29 finding
+# ─────────────────────────────────────────────────────────────────────────
+
+class TestNoDualApprovalPayloadBypass:
+    """The `_from_dual_approval` flag must NOT be readable from
+    user-controlled `payload` in any handler action wrapper.
+
+    Origin: STRIDE audit 2026-04-29. Same anti-pattern as the
+    `_from_approval` bypass we fixed earlier — bypass flags from
+    payload are user-controlled and let an attacker skip security
+    gates by simply setting them to true.
+
+    The legitimate dual-approval replay path calls
+    `delete_rule_pipeline()` and `delete_csv_pipeline()` DIRECTLY,
+    not through `_action_remove_rule` / `_action_remove_csv`, so
+    no bypass flag is ever needed in the action wrappers.
+    """
+
+    def test_no_payload_read_of_flag_in_handler(self):
+        import os
+        repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        path = os.path.join(repo, "bin", "wl_handler.py")
+        with open(path, "r", encoding="utf-8") as fh:
+            source = fh.read()
+        # The flag must NEVER be read from `payload` in this file.
+        # Comments mentioning the flag are fine; only actual
+        # `payload.get("_from_dual_approval"...)` is banned.
+        bad_pattern = 'payload.get("_from_dual_approval"'
+        assert bad_pattern not in source, (
+            "SECURITY: _from_dual_approval is being read from payload "
+            "in wl_handler.py. This is the same anti-pattern as the "
+            "_from_approval bypass — payload is user-controlled, so "
+            "any attacker can send the flag and skip the dual-admin "
+            "gate. Remove the read; the legitimate replay path calls "
+            "the pipeline directly, not the action wrapper.")

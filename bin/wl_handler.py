@@ -2777,9 +2777,18 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                         "disabled": maximum == 0,
                     })
 
-        # Dual-admin check for rules with 3+ CSVs
-        _from_dual = payload.get("_from_dual_approval", False)
-        if removal_type == "permanent" and not _from_dual:
+        # Dual-admin check for rules with 3+ CSVs.
+        #
+        # Previously read `_from_dual_approval` from `payload` to allow
+        # the dual-approval replay path to skip this check. That was a
+        # CRITICAL bypass — `payload` is user-controlled, so any attacker
+        # could send `_from_dual_approval: true` and skip the gate. The
+        # legitimate dual-approval replay (in _process_approval_inner)
+        # calls `delete_rule_pipeline()` DIRECTLY, NOT through this
+        # action wrapper, so the bypass flag had no legitimate use here
+        # and is now removed. The wrapper always enforces dual-admin
+        # for non-superadmin callers.
+        if removal_type == "permanent":
             _is_superadmin = bool(roles.intersection(SUPERADMIN_ROLES))
             mapping = self._read_mapping()
             affected_csvs = [e["csv_file"] for e in mapping
@@ -5550,7 +5559,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                             "error": "Rule '{}' no longer exists".format(
                                 rule_name)})
 
-                # Execute the deletion with _from_dual_approval flag
+                # Execute the deletion. The pipeline is called directly
+                # below (not via _action_remove_rule), so the dual-admin
+                # gate that lives in the action wrapper is bypassed by
+                # virtue of code path, not by a payload flag (security
+                # fix 2026-04-29 — see decision log).
                 target["status"] = "approved"
                 target["resolved_by"] = admin_user
                 target["resolved_at"] = now
@@ -5624,12 +5637,16 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         exec_result = None
         if action_type == "admin_delete_rule":
+            # NOTE: this calls delete_rule_pipeline() directly below,
+            # bypassing _action_remove_rule. The pipeline is the
+            # single-instance delete primitive; the dual-admin gate
+            # in _action_remove_rule is for analyst-initiated deletes
+            # only, NOT for legitimate replays of pre-approved actions.
             exec_payload = {
                 "rule_name": meta.get("rule_name", ""),
                 "removal_type": meta.get("removal_type", "permanent"),
                 "comment": "Dual-approved by {}: {}".format(
                     admin_user, meta.get("rule_name", "")),
-                "_from_dual_approval": True,
             }
             pipeline_result = delete_rule_pipeline(
                 exec_payload["rule_name"],
@@ -5649,7 +5666,6 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 "removal_type": meta.get("removal_type", "permanent"),
                 "comment": "Dual-approved by {}: {}".format(
                     admin_user, meta.get("csv_file", "")),
-                "_from_dual_approval": True,
             }
             pipeline_result = delete_csv_pipeline(
                 exec_payload["csv_file"],

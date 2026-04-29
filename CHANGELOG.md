@@ -2,7 +2,91 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased — 2026-04-29 (build 620)
+## Unreleased — 2026-04-29 (build 622)
+
+### Security — Round 5: STRIDE + Hypothesis fuzz + attack-surface audit
+
+Three independent verification techniques applied on top of rounds 1-4
+to surface bugs that line-by-line review missed.
+
+#### Fixed
+
+- **CRITICAL** Dual-admin gate bypass via `_from_dual_approval` payload
+  flag in `_action_remove_rule_csv`. Identical anti-pattern to the
+  `_from_approval` bypass fixed earlier — `payload` is user-controlled,
+  so any analyst could send `{"_from_dual_approval": true}` to skip the
+  3+ CSV dual-admin requirement. The legitimate replay path
+  (`_process_approval_inner`) calls `delete_rule_pipeline()` directly
+  and never went through the action wrapper, so the flag had no
+  legitimate use. Discovered via STRIDE Elevation-of-Privilege pass
+  with the explicit "search for `payload.get('_from_*')` patterns"
+  prompt. Regression test in `tests/unit/test_ascii_validation.py`
+  (`TestNoDualApprovalPayloadBypass`) greps the handler source for the
+  pattern and fails CI if it returns.
+- **MED** `is_safe_filename` accepted ASCII-printable characters that
+  `is_ascii_name(allow_spaces=False)` rejected. Falsifying example:
+  `is_safe_filename("0;.csv") → True` while `is_ascii_name("0;",
+  allow_spaces=False) → False`. The `;` is an SPL command separator —
+  a CSV filename containing it would break dashboard drilldowns and
+  audit search expressions. Tightened `is_safe_filename` to use
+  `_ASCII_FILENAME_STEM_RE` (regex `^[A-Za-z0-9_\-]+$`) AND require ≥1
+  ASCII alphanumeric in the stem. Discovered via Hypothesis
+  property-based test `test_safe_filename_implies_ascii_stem`
+  (`tests/unit/test_validator_fuzz.py`).
+- **MED** `savedsearches.conf` write permission inherited by `wl_admin`
+  via the `[]` default stanza in `metadata/default.meta`. A malicious
+  `wl_admin` could modify e.g. `wl_csv_external_modification_alert` to
+  inject SPL that runs with the search owner's permissions on schedule
+  (e.g. `| outputlookup DR_critical.csv` to bypass approval gates).
+  Locked `[savedsearches]` write to `admin`/`sc_admin` only. The
+  detection control `wl_saved_search_timebomb_monitor` (catches
+  modifications via `index=_audit`) is a runtime detection layer; this
+  metadata change is the preventive layer.
+
+#### Added
+
+- `tests/unit/test_validator_fuzz.py`: 19 Hypothesis property-based
+  fuzz tests with `max_examples=500`. Covers stability (validators
+  never raise on any input including non-string types), determinism
+  (same input → same output), accepted-input invariants (every char
+  in an accepted ASCII name must be in the documented allow-list),
+  `sanitize_text` invariants (no doubled whitespace, no control chars,
+  respects `max_length`), and cross-validator consistency.
+- `tests/e2e/test_rate_limit_burst.cjs`: REST API rate-limit burst
+  test. Fires 60 + 80 concurrent GET `get_rules` requests and verifies
+  the per-user sliding-window limiter (RATE_MAX_READS=120/min) clamps
+  precisely. Result: 120/120 successes, 20 rate-limited — limiter is
+  exact, not approximate.
+- `tests/unit/test_ascii_validation.py::TestNoDualApprovalPayloadBypass`:
+  mechanical regression check that `payload.get("_from_dual_approval"`
+  doesn't reappear in `bin/wl_handler.py`.
+- `metadata/default.meta`: explicit `[savedsearches]` stanza with
+  write restricted to `admin`/`sc_admin`.
+
+#### Changed
+
+- Round 5 closeout commit (hardening rounds 1-5 inclusive).
+- Cache-bust `_b=621` → `_b=622` in `appserver/static/whitelist_manager.js`
+  per the maintenance rule (decision-log entry 2026-04-22).
+
+#### Audit results that found nothing
+
+- Auth/session/RBAC: `EDIT_ROLES`/`ADMIN_ROLES`/`SUPERADMIN_ROLES`
+  membership checks consistent across all gates; no role escalation
+  via custom-role membership manipulation possible at the handler
+  level.
+- KV-store integrity: `wl_cooldowns` and `wl_fim_baseline` collections
+  both HMAC-signed with GUID-derived runtime key; tamper detection
+  fail-closed.
+
+#### Known deferred items
+
+- `_approval_queue.json` is not currently HMAC-signed. The threat
+  model treats this as lower priority because (a) every approval
+  decision emits an audit event independent of the queue file, and
+  (b) the FIM watcher hashes the file every 15s, so silent tampering
+  would surface as a `fim_csv_unregistered`-class event. Adding HMAC
+  to the queue is queued for a future round.
 
 ### Security — ASCII validation tightening (rounds 1-4)
 

@@ -40,3 +40,19 @@ export = system
 [transforms]
 access = read : [ wl_admin, wl_analyst_editor, wl_analyst_viewer, wl_editor, wl_viewer, admin, sc_admin ], write : [ wl_admin, admin, sc_admin ]
 export = system
+
+# ── savedsearches: WRITE locked to admin/sc_admin only ──
+#
+# Origin: round 5 audit 2026-04-29 — without this stanza, wl_admin
+# inherited write permission from the [] default. A malicious wl_admin
+# could modify e.g. wl_csv_external_modification_alert to inject SPL
+# that runs with the search owner's permissions on schedule, potentially
+# bypassing the handler's security gates. Locking write to native admin
+# tiers prevents this privilege-escalation path. The detection control
+# wl_saved_search_timebomb_monitor (which catches modifications via
+# index=_audit) ships disabled by default, so this metadata is the
+# preventive layer.
+[savedsearches]
+access = read : [ wl_admin, wl_analyst_editor, wl_analyst_viewer, wl_editor, wl_viewer, admin, sc_admin ], write : [ admin, sc_admin ]
+export = system
+owner = admin
