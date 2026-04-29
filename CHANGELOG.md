@@ -2,7 +2,59 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased — 2026-04-29 (build 623)
+## Unreleased — 2026-04-29 (build 624)
+
+### Round 6: MED items — read-audit + test-suite cleanup + concurrency
+
+#### Added
+
+- **`whitelist_view` audit event** (`bin/wl_handler.py`) — emitted on
+  every own-app CSV read, deduped per-process to one event per
+  `(user, csv, app_context)` tuple per hour. Provides forensic
+  visibility for insider-threat investigations ("did analyst X
+  view DR_payment_fraud.csv before resignation?") without flooding
+  the audit index. Cross-app reads still emit `cross_app_csv_read`
+  separately (kept; no dedup since they're already rare). New
+  dropdown choice in `audit.xml` General Actions filter.
+- 9 dedup-cache unit tests (`tests/unit/test_view_audit_dedup.py`):
+  emit-on-first-call, dedup-within-TTL, re-emit-after-TTL,
+  user-isolation, csv-isolation, app-context-isolation, pruning,
+  cache-size scaling, dashboard-tab-switch flood test.
+- E2E concurrency test (`tests/e2e/test_concurrent_approval_race.cjs`):
+  fires two simultaneous `process_approval` calls for the same
+  request_id from two admin sessions. Verifies the
+  `_approval_queue_lock()` rmw lock serializes them — exactly one
+  reaches the replay path; the other observes post-mortem state.
+
+#### Security audit — confirmed clean
+
+- **Stored-XSS scan** across all data-at-rest layers: 169 version
+  snapshot CSVs + 257 approval queue entries + notifications +
+  rule_csv_map.csv + entire wl_audit index. Zero hits for
+  `<script>`, `javascript:`, `onerror=`, `onload=`, `onclick=`.
+  Confirms input ASCII validation has historically held and there
+  are no XSS payloads waiting to render via the frontend's
+  `.html()` call sites.
+
+#### Fixed (test debt)
+
+- Repaired 33 stale tests in `tests/unit/test_limits.py` and
+  `tests/unit/test_rbac.py` that referenced symbols renamed during
+  the wl_limits / wl_rbac refactor (`_read_daily_limits` →
+  `read_daily_limits`, `_get_limits_dir` → `_get_limit_config_path`,
+  `_should_reset_now` removed). Result: `pytest tests/unit/` now
+  reports 539 passed, 1 skipped, 0 failed for the first time this
+  round. Two `_should_reset_now` tests deleted (function inlined
+  into reset_daily_limits during refactor; equivalent boundary
+  coverage exists in `tests/test_wl_limits.py`).
+- Renamed `test_admin_limit_respects_unlimited` →
+  `test_admin_limit_unlimited_semantics_NOT_supported` to pin a
+  PRODUCTION SEMANTIC ASYMMETRY: `check_analyst_limit` short-
+  circuits `max_count == -1` to True, but `check_admin_daily_limit`
+  takes -1 literally so any positive count fails. The Control
+  Panel UI minimum-1 input prevents users from hitting this. If
+  a future round wants to align them, update production AND this
+  test together.
 
 ### Security — Round 6: structural bypass closeout (HIGH items)
 

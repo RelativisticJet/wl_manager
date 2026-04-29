@@ -660,6 +660,22 @@ _RUNTIME_HMAC_KEY_CACHE = {}
 # enough that the REST/instance.cfg lookup is not a hot path.
 _RUNTIME_HMAC_KEY_TTL_SECONDS = 3600
 
+# Read-access audit dedup cache (round 6, 2026-04-29).
+#
+# Every `get_csv_content` call could emit a `whitelist_view` audit
+# event for forensic visibility (insider-threat: "did analyst X view
+# DR_payment_fraud.csv before resignation?"), but emitting on every
+# dashboard-load tab-switch would flood the audit index. We dedup
+# per-process: emit at most once per `(user, csv, app_context)`
+# tuple per `_VIEW_AUDIT_DEDUP_TTL` seconds. Cross-process dedup is
+# not attempted — under multi-worker scaling we accept up to N
+# duplicate events per period in exchange for keeping the cache
+# in-memory (no shared-state contention).
+#
+# cache shape: {(user, csv, app_context): emit_at_epoch_seconds}
+_VIEW_AUDIT_DEDUP_CACHE = {}
+_VIEW_AUDIT_DEDUP_TTL = 3600  # 1 hour
+
 
 def _fetch_server_guid(session_key):
     """Fetch this Splunk instance's server GUID.
@@ -1541,6 +1557,39 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 })
             except Exception:
                 # Best-effort — never block a read on audit emission
+                pass
+        else:
+            # Own-app read: emit `whitelist_view` audit event once per
+            # (user, csv) per hour. Provides forensic visibility for
+            # insider-threat investigations without flooding the audit
+            # index. See _VIEW_AUDIT_DEDUP_CACHE notes above for the
+            # cross-process duplication trade-off.
+            try:
+                viewer = get_user(request)
+                key = (viewer, csv_file, app_context or "")
+                now = int(time.time())
+                # Prune expired entries opportunistically (cheap; cache
+                # is bounded by active-user × CSV count).
+                expired = [k for k, t in _VIEW_AUDIT_DEDUP_CACHE.items()
+                           if now - t >= _VIEW_AUDIT_DEDUP_TTL]
+                for k in expired:
+                    _VIEW_AUDIT_DEDUP_CACHE.pop(k, None)
+
+                if key not in _VIEW_AUDIT_DEDUP_CACHE:
+                    _VIEW_AUDIT_DEDUP_CACHE[key] = now
+                    self._index_audit(request, {
+                        "timestamp": now,
+                        "analyst": viewer,
+                        "action": "whitelist_view",
+                        "csv_file": csv_file,
+                        "app_context": app_context or APP_NAME,
+                        "dedup_window_seconds": _VIEW_AUDIT_DEDUP_TTL,
+                        "severity": "INFO",
+                    })
+            except Exception:
+                # Best-effort. If audit emission fails the user still
+                # gets the CSV read; the FIM watcher will surface a
+                # silent-audit-pipeline-failure warning if relevant.
                 pass
 
         path = resolve_csv_path(csv_file, app_context)
