@@ -2,7 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased — 2026-04-29 (build 624)
+## Unreleased — 2026-04-29 (build 625)
+
+### Round 6: LOW items — infrastructure (CI, recovery-script FIM, version audit)
+
+#### Added
+
+- **CI pipeline** (`.github/workflows/ci.yml`) — two new jobs
+  alongside the existing validate+package job:
+  - `doc-drift`: runs `scripts/pre-commit-doc-drift.sh` on every
+    push/PR. Mirrors the local pre-commit hook so a developer
+    bypassing it with `--no-verify` is caught at PR time.
+  - `unit-tests`: installs pytest + hypothesis + freezegun and
+    runs `pytest tests/unit/` (539 tests, ~7s) and the lower-layer
+    module tests `test_wl_limits` / `test_wl_hmac_key` /
+    `test_wl_filelock`. Together they form the green baseline that
+    item 5 just restored. E2E tests stay gated by
+    `WL_TEST_HARNESS=1` and a real Splunk container — see the
+    workflow's gate-notice block.
+- **Recovery-script FIM coverage** — `bin/wl_fim.py` `WATCH_CODE`
+  now includes `scripts/emergency_unlock.sh`,
+  `scripts/reset_cooldowns.sh`, `scripts/fim_deploy_window.sh`,
+  and `scripts/pre-commit-doc-drift.sh`. Tampering with these
+  unsigned bash scripts (which perform privileged operations like
+  clearing tamper flags or appending to the recovery log) now
+  surfaces as a `fim_code_modified` event within ~15s.
+
+#### Splunk version audit (preliminary)
+
+- Recorded preliminary entry in `CLAUDE.md` audit log. Container
+  confirmed running `Splunk 9.3.1 (build 0b8d769cb912)`. Decision:
+  keep 9.3.1 for the current release; defer 10.x compatibility
+  work to a dedicated cycle. Formal audit remains scheduled for
+  2026-07-18 with the 7 risk areas listed in CLAUDE.md.
 
 ### Round 6: MED items — read-audit + test-suite cleanup + concurrency
 
