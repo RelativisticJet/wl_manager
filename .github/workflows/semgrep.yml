@@ -23,6 +23,8 @@ jobs:
   semgrep:
     name: Run Semgrep taint rules
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     # The official Semgrep image pins its own Python + rule parser, so
     # no language-specific setup is needed here.
     container:

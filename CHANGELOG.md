@@ -2,7 +2,69 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased — 2026-04-29 (build 626)
+## Unreleased — 2026-04-29 (build 627)
+
+### Round 7 B items: supply-chain + disclosure + audit-volume + dep audit
+
+#### Added
+
+- **`scripts/package.sh` to FIM `WATCH_CODE`** (`bin/wl_fim.py`). The
+  release-packaging script produces the .spl artifact installed by
+  downstream customers. Tampering means a poisoned release ships
+  without ever modifying runtime code in the container — supply-chain
+  surface that was upstream of every other monitored path. FIM now
+  alerts within ~15 s on any edit (`fim_code_modified` HIGH).
+- **Per-job `permissions:` blocks** on every CI workflow
+  (`.github/workflows/{ci,release,semgrep,validate-and-package}.yml`).
+  Each job declares its required scope independently of the
+  workflow-level setting, so adding a future workflow-level
+  permissions widening (e.g., for a comment-bot job) cannot silently
+  enrich existing jobs' tokens. `validate-and-package.yml` previously
+  had no `permissions:` block at all — fixed.
+- **Coordinated disclosure policy** added to `SECURITY.md`. New
+  sections: "Coordinated Disclosure Timeline" (acknowledgement /
+  triage / fix / public-disclosure SLAs), "Scope" (in-scope code
+  paths + out-of-scope deferrals to Splunk core / upstream
+  dependencies), "Safe Harbor" (no-CFAA-action commitment for
+  good-faith research), "Recognition" (release-notes credit,
+  no monetary bounty currently).
+- **Dev-dependency vulnerability audit** (`docs/PIP_AUDIT_LOG.md`).
+  Documents the 2026-04-29 `pip-audit` run against
+  `requirements-dev.txt`, the per-package OSV results, and the
+  fallback OSV-API helper for re-running when pip-audit's sandbox
+  installer fails.
+- **`whitelist_view` audit volume forecast**
+  (`docs/AUDIT_VOLUME_FORECAST.md`). Per-event size assumptions,
+  write-side baseline, dedup-cache math, single-worker /
+  multi-worker forecasts, storage envelope (raw + indexed), and
+  re-forecast triggers. Realistic estimate: ~3,200 events/day per
+  worker on a 100-analyst team; worst case ~40,000 events/day per
+  worker.
+
+#### Fixed
+
+- **pytest 8.1.1 → 9.0.3** (`requirements-dev.txt`,
+  `.github/workflows/ci.yml`). Closes GHSA-6w46-j5rx-g56g
+  (CVE-2025-71176, CVSS 5.5 LOCAL): pre-9.0.3 pytest leaves the
+  per-user tmpdir world-writable, allowing a local attacker on
+  shared dev hosts to symlink-trick a test into reading files
+  outside the test working directory. Verified: 664 tests pass
+  under 9.0.3 (579 unit + 85 module-level), no API breakage.
+- **radon 6.1.1 → 6.0.1** (`requirements-dev.txt`). 6.1.1 was a
+  typo / aspirational pin and was never published to PyPI, so
+  `pip install -r requirements-dev.txt` failed for any new
+  contributor who tried to set up the project locally. 6.0.1 is
+  the current latest and is what `metrics_collector.py` was
+  originally tested against.
+- **CI module-level test list aligned with reality**
+  (`.github/workflows/ci.yml`). Removed a dangling reference to a
+  removed-but-still-listed module-level filelock test file (the
+  filelock paths are exercised inside `tests/unit/test_filelock.py`).
+  Added the two existing module-level files that were not in the CI
+  list: `tests/test_wl_fim_common.py` and
+  `tests/test_wl_expiration_cleanup.py`.
+
+## Released — 2026-04-29 (build 626)
 
 ### Round 7: residue cleanup + 2 fuzz-discovered bugs (A items)
 

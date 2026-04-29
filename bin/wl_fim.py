@@ -164,6 +164,13 @@ WATCH_CODE = _expand_globs([
     os.path.join(APP_DIR, "scripts", "reset_cooldowns.sh"),
     os.path.join(APP_DIR, "scripts", "fim_deploy_window.sh"),
     os.path.join(APP_DIR, "scripts", "pre-commit-doc-drift.sh"),
+    # Release packaging script (round 7, 2026-04-29). Produces the
+    # .spl artifact installed by downstream customers. A modified
+    # `package.sh` could ship a poisoned release without ever
+    # touching the runtime code — supply-chain attack surface that
+    # is upstream of every other monitored path. FIM coverage means
+    # tampering surfaces as a `fim_code_modified` event within 15s.
+    os.path.join(APP_DIR, "scripts", "package.sh"),
 ])
 
 WATCH_SENTINELS = [
