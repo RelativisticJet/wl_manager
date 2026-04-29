@@ -132,10 +132,16 @@ class TestGetRoles:
     """Test role fetching from Splunk REST API."""
 
     def test_get_roles_from_request(self):
-        """Check that get_roles returns role set."""
+        """Check that get_roles returns role set.
+
+        Note: production code reads `status.status == 200`, treating
+        the first return element as an HTTPMessage-like object (not
+        a plain int). The mock must therefore return an object whose
+        `.status` attribute is 200 — a plain `200` integer breaks
+        the comparison and silently returns empty roles.
+        """
         request = {"session": {"authtoken": "test_token"}}
 
-        # Mock the REST call - splunk is imported inside the function
         mock_content = json.dumps({
             "entry": [{
                 "content": {
@@ -144,9 +150,14 @@ class TestGetRoles:
             }]
         })
 
+        # Build a status object with the .status attribute the prod
+        # code expects.
+        mock_status = MagicMock()
+        mock_status.status = 200
+
         import sys
         mock_splunk = MagicMock()
-        mock_splunk.rest.simpleRequest.return_value = (200, mock_content)
+        mock_splunk.rest.simpleRequest.return_value = (mock_status, mock_content)
 
         with patch.dict('sys.modules', {'splunk': mock_splunk, 'splunk.rest': mock_splunk.rest}):
             roles = get_roles(request)
@@ -269,9 +280,13 @@ class TestRBACIntegration:
             }]
         })
 
+        # Status object with .status attribute (see TestGetRoles).
+        mock_status = MagicMock()
+        mock_status.status = 200
+
         import sys
         mock_splunk = MagicMock()
-        mock_splunk.rest.simpleRequest.return_value = (200, mock_content)
+        mock_splunk.rest.simpleRequest.return_value = (mock_status, mock_content)
 
         with patch.dict('sys.modules', {'splunk': mock_splunk, 'splunk.rest': mock_splunk.rest}):
             roles = get_roles(request)
@@ -293,9 +308,12 @@ class TestRBACIntegration:
             }]
         })
 
+        mock_status = MagicMock()
+        mock_status.status = 200
+
         import sys
         mock_splunk = MagicMock()
-        mock_splunk.rest.simpleRequest.return_value = (200, mock_content)
+        mock_splunk.rest.simpleRequest.return_value = (mock_status, mock_content)
 
         with patch.dict('sys.modules', {'splunk': mock_splunk, 'splunk.rest': mock_splunk.rest}):
             user = get_user(request)

@@ -129,6 +129,7 @@
       <choice value="csv_removed">CSV Removed</choice>
       <choice value="csv_imported">CSV Imported</choice>
       <choice value="csv_exported">CSV Exported</choice>
+      <choice value="whitelist_view">Whitelist Viewed (read)</choice>
       <choice value="dr_created">Detection Rule Created</choice>
       <choice value="dr_removed">Detection Rule Deleted</choice>
       <choice value="audit_exported">Audit Exported</choice>
