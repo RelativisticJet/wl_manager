@@ -2,6 +2,60 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased — 2026-04-29 (build 629, no app changes)
+
+### Round 9: housekeeping — doc-drift, dead artifacts, PR-time anti-pattern gating
+
+No runtime behavior change. All edits are repo housekeeping that the
+prior 8 rounds accumulated. First round in the 552→629 series with no
+`app.conf [install] build` bump — appropriate signal that we're now
+in pure cleanup territory.
+
+#### Fixed (doc drift only)
+
+- **`fim_code_modified` → `fim_file_modified`** in `bin/wl_fim.py`
+  comments (2 sites) and prior round-7 + round-6 CHANGELOG prose
+  entries. Round 8 verification surfaced the drift: a search for
+  `fim_code_modified` returned zero rows because the actual emitted
+  action name is `fim_file_modified`. Code unchanged; only prose
+  was wrong. The round-8 drift-discovery entry that DOCUMENTS the
+  drift is left intact (it correctly reports both names).
+
+#### Cleaned up
+
+- **Stale `dist/` artifacts removed**: `wl_manager-1.0.0.spl` and
+  `wl_manager-2.0.0.spl` (+ their `.sha256` sidecars). Both
+  predated build 406 (current is 629). They were untracked
+  (`dist/` is gitignored) but confused anyone running
+  `package.sh` for the first signed release. Empty `dist/` now;
+  `package.sh` writes fresh artifacts on next run.
+- **Root-level PNG screenshots gitignored**: 17 untracked PNGs at
+  the repo root (e.g. `csv-loaded.png`, `stress-pending-table-build615.png`)
+  from past dev/Playwright sessions polluted `git status`.
+  `.gitignore` now has `/*.png` (root-only) so session debris
+  doesn't accumulate in tracked-file status. Canonical product
+  screenshots under `docs/screenshots/` remain tracked.
+
+#### Added
+
+- **PR-time anti-pattern gating via Semgrep**:
+  `tests/semgrep/payload-from-flag-bypass-splunk.yaml`. Catches at
+  PR-review time what
+  `tests/unit/test_ascii_validation.py::TestNoUnderscoreFlagPayloadBypass`
+  catches at test-run time. Earlier feedback in the dev loop = lower
+  fix cost. Pattern-mode (not taint-mode) because the anti-pattern is
+  a structurally-illegitimate code shape, not a tainted dataflow:
+  any `payload.get("_from_*")` or `payload["_from_*"]` READ is wrong
+  regardless of subsequent sanitization. Writes (LHS of assignment)
+  are explicitly excluded via `pattern-not-inside`. Verified: 4/4
+  positive cases fire, 0/3 negative cases fire, 0 findings on
+  current `bin/`. Past incidents addressed:
+  - Round 1-3: `_from_approval` reads in 4 action wrappers
+  - Round 5: `_from_dual_approval` reads in dual-admin paths
+  - Round 7 A1: 7 dead writes removed (writes were OK; reads were not)
+- `tests/semgrep/README.md` updated to document the new rule and
+  why it's pattern-mode while the other three are taint-mode.
+
 ## Unreleased — 2026-04-29 (build 629)
 
 ### Round 8: residue + recurring guards + supply-chain hardening
@@ -144,7 +198,7 @@ All notable changes to this project will be documented in this file.
   downstream customers. Tampering means a poisoned release ships
   without ever modifying runtime code in the container — supply-chain
   surface that was upstream of every other monitored path. FIM now
-  alerts within ~15 s on any edit (`fim_code_modified` HIGH).
+  alerts within ~15 s on any edit (`fim_file_modified` HIGH).
 - **Per-job `permissions:` blocks** on every CI workflow
   (`.github/workflows/{ci,release,semgrep,validate-and-package}.yml`).
   Each job declares its required scope independently of the
@@ -291,7 +345,7 @@ All notable changes to this project will be documented in this file.
   and `scripts/pre-commit-doc-drift.sh`. Tampering with these
   unsigned bash scripts (which perform privileged operations like
   clearing tamper flags or appending to the recovery log) now
-  surfaces as a `fim_code_modified` event within ~15s.
+  surfaces as a `fim_file_modified` event within ~15s.
 
 #### Splunk version audit (preliminary)
 
