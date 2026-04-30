@@ -116,3 +116,139 @@ git status --short
 Summarize user-facing changes since the last tag (not internal refactors).
 Audit-trail dashboard changes are user-facing — flag dropdown reorganizations
 or new filters here.
+
+---
+
+## 8. Sigstore Signing — End-to-End Verification (REQUIRED on first signed release)
+
+**Background.** Round 8 (build 629, 2026-04-29) wired Sigstore keyless
+signing into `.github/workflows/release.yml`. The workflow uses GitHub
+Actions' OIDC token to mint short-lived ephemeral keys via Fulcio,
+records the signature in the Rekor transparency log, and produces
+`<artifact>.sig` + `<artifact>.crt` alongside the `.spl` and `.cdx.json`.
+
+**The signing path has never been verified end-to-end** — wiring was
+deferred until first release rather than tested in a throwaway tag,
+because every `release: published` event is observable to anyone
+watching the repo and the per-run cost on Sigstore's public infra is
+non-zero.
+
+This section MUST be completed before the first signed release ships
+publicly. After that, the daily CI job + per-release runs prove the
+path stays healthy; this section becomes a one-shot.
+
+### Step 1 — Cut a draft / pre-release tag
+
+Use a `v0.0.0-sigstore-test`-style tag on a throwaway commit so a
+verification failure can't affect customer-facing releases:
+
+```bash
+git tag v0.0.0-sigstore-test
+git push origin v0.0.0-sigstore-test
+gh release create v0.0.0-sigstore-test \
+  --prerelease \
+  --title "Sigstore E2E verification" \
+  --notes "Throwaway tag — DO NOT INSTALL. Used to prove the signing pipeline."
+```
+
+Watch the run via `gh run watch` and confirm:
+
+- The "Sign .spl with Sigstore (keyless)" step succeeded
+- The "Sign per-release SBOM with Sigstore (keyless)" step succeeded
+- All four asset types are attached: `.spl`, `.sha256`, `.cdx.json`,
+  `.sig`, `.crt`
+
+### Step 2 — Download and verify the legitimate artifact
+
+```bash
+mkdir -p /tmp/sigstore-verify && cd /tmp/sigstore-verify
+gh release download v0.0.0-sigstore-test
+ls -la   # should list .spl, .sha256, .cdx.json, .spl.sig, .spl.crt,
+         #                                     .cdx.json.sig, .cdx.json.crt
+
+# Install cosign locally if not already (one-time setup)
+# https://docs.sigstore.dev/cosign/installation/
+
+cosign verify-blob \
+  --certificate wl_manager-*.spl.crt \
+  --signature   wl_manager-*.spl.sig \
+  --certificate-identity-regexp \
+    'https://github.com/RelativisticJet/wl_manager/.github/workflows/release.yml@refs/tags/.*' \
+  --certificate-oidc-issuer \
+    https://token.actions.githubusercontent.com \
+  wl_manager-*.spl
+```
+
+**Expected:** `Verified OK`. Anything else = pipeline broken; do not
+ship a real release until resolved.
+
+Also verify the SBOM signature with the same command pattern, swapping
+the artifact + cert + sig file names.
+
+### Step 3 — Tamper test (proves the verifier actually verifies)
+
+```bash
+cp wl_manager-*.spl wl_manager-tampered.spl
+echo "tamper" >> wl_manager-tampered.spl
+
+cosign verify-blob \
+  --certificate wl_manager-*.spl.crt \
+  --signature   wl_manager-*.spl.sig \
+  --certificate-identity-regexp \
+    'https://github.com/RelativisticJet/wl_manager/.github/workflows/release.yml@refs/tags/.*' \
+  --certificate-oidc-issuer \
+    https://token.actions.githubusercontent.com \
+  wl_manager-tampered.spl
+```
+
+**Expected:** verification FAILS with a hash-mismatch error. If it
+passes, the verifier is wired wrong — investigate before shipping.
+
+### Step 4 — Confirm Rekor transparency-log entry
+
+```bash
+cosign verify-blob ... --rekor-url https://rekor.sigstore.dev <args from step 2>
+```
+
+**Expected:** the verify command (with `--rekor-url`) confirms a
+matching entry in the public log. The Rekor entry is the cryptographic
+receipt that this artifact existed at release time — it's what makes
+the signing scheme tamper-evident even against a future repo takeover.
+
+### Step 5 — Document the verifier command for downstream users
+
+After Step 2-4 pass, copy the working `cosign verify-blob` invocation
+into:
+
+- `README.md` — "Verifying a downloaded release" section
+- `INSTALLATION.md` — recommended verification step before
+  `splunk install app`
+- `SECURITY.md` — under the existing "Distribution integrity"
+  section in `docs/SBOM.md`
+
+Use the EXACT command that worked in Step 2 — paraphrased versions
+that look right but use slightly different flags create support
+tickets.
+
+### Step 6 — Tear down the test release
+
+```bash
+gh release delete v0.0.0-sigstore-test --yes
+git tag -d v0.0.0-sigstore-test
+git push origin :refs/tags/v0.0.0-sigstore-test
+```
+
+Leaves the repo clean for the real first release tag.
+
+### Acceptance
+
+- Steps 2+3+4 all produced the expected outcomes (legit verify OK,
+  tamper verify FAIL, Rekor entry confirmed)
+- Verifier command published in at least one customer-facing doc
+- Test release deleted
+
+After this section is completed once, mark this section as
+**`[x] DONE — verified <date> on tag <tag-name>`** in this file and
+leave it in place. Future releases verify automatically via the
+quarterly pip-audit cadence + per-release workflow run; this one-shot
+just proves the wiring.
