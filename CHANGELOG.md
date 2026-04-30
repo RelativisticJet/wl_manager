@@ -2,6 +2,68 @@
 
 All notable changes to this project will be documented in this file.
 
+---
+
+## Status — Security hardening track CLOSED at build 629 (2026-04-29)
+
+After 9 progressive rounds (builds 552 → 629), the security-hardening
+backlog is closed. Round 9 found zero new bugs and shipped no runtime
+changes — first round in the series with no `app.conf [install] build`
+bump, the natural signal that we're at diminishing returns.
+
+The defense system is now self-sustaining without further hardening
+rounds:
+
+- **CI gates** — 4 Semgrep rules (SSRF, command injection, path
+  traversal, `_from_*` payload bypass), doc-drift pre-commit + CI
+  hook, quarterly `pip-audit` cron, unit-test suite on every PR
+- **Live monitoring** — `wl_fim.py` (15 s hash sweep) +
+  `wl_fim_watch.py` (~2 s stat-based) + `_recovery_log.jsonl`
+  append-only watch + dual-store FIM baseline (file + KV)
+- **Recurring audits** — Q3 2026 version-pinning routine
+  (`run_once_at: 2026-07-18T07:00:00Z`) auto-fires and opens a PR
+- **First-release verification** — Section 8 of
+  `docs/RELEASE_CHECKLIST.md` enumerates the Sigstore end-to-end
+  test for the first signed tag (legitimate verify + tamper test +
+  Rekor confirmation + customer-doc publication)
+- **Per-release artifacts** — Sigstore keyless signing of `.spl` +
+  CycloneDX 1.5 SBOM, both signed via the workflow's OIDC token
+  through Fulcio + recorded in Rekor
+
+### Re-opening criteria
+
+The track is closed but not frozen. Re-open with a new round when ANY
+of these signals fires:
+
+- A CVE that affects this codebase or a Splunk-bundled dependency we
+  rely on (jQuery, Underscore, the bundled Python stdlib, Splunk
+  Enterprise itself)
+- A production incident traceable to a security control failure
+- An external audit finding (formal pentest, customer-side review,
+  red-team exercise)
+- The Q3 2026 version-pinning routine surfaces a Splunk major-version
+  change requiring compatibility work
+- Methodology shift — fuzz coverage extended to a new code surface
+  (e.g., the diff engine's pairing logic, version manifest math)
+
+Future inbound work that does NOT meet these criteria is feature work
+or bug-fix work, not hardening work. Don't queue another "round N"
+unless one of the signals above fires.
+
+### Per-round summary
+
+| Round | Builds | Theme |
+|-------|--------|-------|
+| 1-5 | 552 → 622 | Primary hardening — KV cooldowns, runtime HMAC + TTL, FIM dual-store, deploy windows, schema versioning, strict content-hash, CSV integrity monitoring, ASCII-only validation, TOCTOU + insider-threat hardening |
+| 6 | 625 | LOW items — CI pipeline, recovery-script FIM coverage, preliminary Splunk version audit |
+| 7 | 626-628 | A items: residue cleanup + 2 fuzz-discovered bugs (newline-injection bypass via `$` vs `\Z`, `read_expected_hashes` UnicodeDecodeError fail-open). B items: supply-chain (`package.sh` FIM, per-job CI permissions, SECURITY.md disclosure policy, pip-audit one-off, audit-volume forecast). C items: SBOM + backup/restore + `.html()` audit |
+| 8 | 629 | Sigstore keyless signing, recurring pip-audit cron, per-release SBOM generation, `coldToFrozenScript` archival guidance, `.append()` audit, Q3 audit scheduled |
+| 9 | 629 (no bump) | Housekeeping — `fim_code_modified` doc drift, stale `dist/` artifacts, root-PNG `.gitignore`, PR-time Semgrep rule for `_from_*` anti-pattern |
+
+Detailed per-round entries below.
+
+---
+
 ## Unreleased — 2026-04-29 (build 629, no app changes)
 
 ### Round 9: housekeeping — doc-drift, dead artifacts, PR-time anti-pattern gating
