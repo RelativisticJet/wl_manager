@@ -159,7 +159,7 @@ WATCH_CODE = _expand_globs([
     # KV records, append to recovery log). An attacker with file
     # write could modify them to skip the audit log append or to
     # silently no-op. FIM coverage means tampering surfaces as a
-    # `fim_code_modified` event within 15s.
+    # `fim_file_modified` event within 15s.
     os.path.join(APP_DIR, "scripts", "emergency_unlock.sh"),
     os.path.join(APP_DIR, "scripts", "reset_cooldowns.sh"),
     os.path.join(APP_DIR, "scripts", "fim_deploy_window.sh"),
@@ -169,7 +169,7 @@ WATCH_CODE = _expand_globs([
     # `package.sh` could ship a poisoned release without ever
     # touching the runtime code — supply-chain attack surface that
     # is upstream of every other monitored path. FIM coverage means
-    # tampering surfaces as a `fim_code_modified` event within 15s.
+    # tampering surfaces as a `fim_file_modified` event within 15s.
     os.path.join(APP_DIR, "scripts", "package.sh"),
 ])
 

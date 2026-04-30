@@ -10,10 +10,18 @@ Splunk-adapted Semgrep rules that gate every PR via
 | `ssrf-splunk.yaml` | Splunk handler payload flowing into `urllib.request.urlopen` / `urllib.request.Request` / `requests.{get,post}` without a hardcoded-localhost prefix | ERROR |
 | `command-injection-splunk.yaml` | Payload reaching `subprocess.{run,Popen,call,check_call,check_output}(..., shell=True, ...)` without `shlex.quote` / `shlex.join` | ERROR |
 | `path-traversal-splunk.yaml` | Payload reaching `open`, `os.path.join`, `shutil.copy*`, `os.rename`, `os.remove`, etc. without going through one of our validation wrappers (`build_csv_path`, `resolve_csv_path`, `is_safe_filename`) or a path-canonicalization sanitizer (`abspath`, `realpath`, `Path(...).resolve()`, `basename`, `startswith` containment check) | ERROR |
+| `payload-from-flag-bypass-splunk.yaml` | Reads of `_from_*` flags from the user-controlled REST `payload` dict (e.g. `payload.get("_from_approval")` or `payload["_from_dual_approval"]`). Writes (LHS of assignment) are explicitly allowed because they're server-controlled mutations by replay code. | ERROR |
 
-All three are **taint mode**: they follow data from source (our handler's
+The first three are **taint mode**: they follow data from source (our handler's
 payload accessors) to sink (dangerous calls) and only fire if no sanitizer
 breaks the flow.
+
+The fourth (`payload-from-flag-bypass-splunk.yaml`) is **pattern mode** — it
+matches a structurally-illegitimate code shape rather than a tainted dataflow.
+It pairs with
+`tests/unit/test_ascii_validation.py::TestNoUnderscoreFlagPayloadBypass` for
+post-merge enforcement; the Semgrep rule fires earlier in the dev loop (PR
+review) so a regression is caught before reaching a human reviewer.
 
 ## Origin
 

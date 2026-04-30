@@ -53,6 +53,13 @@ login-check
 *.log
 *.patch
 
+# Session debris — screenshots taken during dev / Playwright runs end up
+# at the repo root and accumulate. Canonical product screenshots live
+# under docs/screenshots/ (still tracked because they don't match this
+# root-only pattern). Round 9 (2026-04-29) — was 17 untracked PNGs at
+# the root from past sessions, all session debris.
+/*.png
+
 # OS files
 .DS_Store
 .DS_Store?
