@@ -203,6 +203,8 @@
               analyst=$analyst_filter$ detection_rule=$rule_filter$
             | where action="row_added"
             | stats sum(added_row_count) as total_rows_added
+            | append [| makeresults count=1 | eval total_rows_added=0]
+            | stats max(total_rows_added) as total_rows_added
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
@@ -219,6 +221,8 @@
               analyst=$analyst_filter$ detection_rule=$rule_filter$
             | where action="row_removed" OR action="row_removed_multiple"
             | stats sum(removed_row_count) as total_rows_removed
+            | append [| makeresults count=1 | eval total_rows_removed=0]
+            | stats max(total_rows_removed) as total_rows_removed
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
@@ -235,6 +239,8 @@
               analyst=$analyst_filter$ detection_rule=$rule_filter$
             | where action="auto_removed"
             | stats sum(removed_row_count) as total_rows_auto_removed
+            | append [| makeresults count=1 | eval total_rows_auto_removed=0]
+            | stats max(total_rows_auto_removed) as total_rows_auto_removed
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
@@ -251,6 +257,8 @@
               analyst=$analyst_filter$ detection_rule=$rule_filter$
             | where action="row_edited"
             | stats sum(edited_row_count) as total_rows_edited
+            | append [| makeresults count=1 | eval total_rows_edited=0]
+            | stats max(total_rows_edited) as total_rows_edited
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
@@ -285,6 +293,8 @@
               analyst=$analyst_filter$ detection_rule=$rule_filter$
             | where action="column_added"
             | stats sum(column_count) as total_columns_added
+            | append [| makeresults count=1 | eval total_columns_added=0]
+            | stats max(total_columns_added) as total_columns_added
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
@@ -301,6 +311,8 @@
               analyst=$analyst_filter$ detection_rule=$rule_filter$
             | where action="column_removed"
             | stats sum(column_count) as total_columns_removed
+            | append [| makeresults count=1 | eval total_columns_removed=0]
+            | stats max(total_columns_removed) as total_columns_removed
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
@@ -317,6 +329,8 @@
               analyst=$analyst_filter$ detection_rule=$rule_filter$
             | where action="column_renamed"
             | stats sum(column_count) as total_columns_renamed
+            | append [| makeresults count=1 | eval total_columns_renamed=0]
+            | stats max(total_columns_renamed) as total_columns_renamed
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
@@ -1070,7 +1084,7 @@
           <latest>$time_token.latest$</latest>
         </search>
         <option name="drilldown">none</option>
-        <option name="count">5</option>
+        <option name="count">10</option>
         <option name="wrap">true</option>
       </table>
     </panel>

@@ -582,9 +582,14 @@ async function setAdminLimits(page, limits, retries) {
             const reset = superPage.locator("#wl-reset-admin-limits");
             if (await save.count() === 0) throw new Error("Save button not found");
             if (await reset.count() === 0) throw new Error("Reset button not found");
-            // Verify they have the btn classes
+            // Verify the Save button is rendered with the Splunk-bundled
+            // .btn taxonomy (build 631+; pre-build-631 used the unstyled
+            // .wl-btn class which silently rendered as plain text — see
+            // 2026-04-30 UI consistency audit).
             const saveClass = await save.getAttribute("class");
-            if (!saveClass.includes("wl-btn")) throw new Error("Save button missing wl-btn class");
+            if (!saveClass.includes("btn-primary")) {
+                throw new Error("Save button missing btn-primary class");
+            }
         });
 
         // ══════════════════════════════════════════════════════════════

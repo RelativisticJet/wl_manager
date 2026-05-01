@@ -13,6 +13,18 @@
  * - Test keyboard shortcuts (Escape, Enter)
  * - Test overlay click handling
  * - Test csvLocked state prevention
+ *
+ * NOTE on class names in test fixtures: this file builds synthetic
+ * markup using `wl-btn-cancel` / `wl-btn-primary` / `wl-btn-danger`
+ * as TEST-ONLY identifiers that the assertions then query against
+ * the same synthetic markup. They are NOT mirrors of production
+ * class names — production switched to the Splunk-bundled `btn` /
+ * `btn-primary` / `btn-danger` taxonomy in build 631 (see
+ * `appserver/static/whitelist_manager.css` and the 2026-04-30 UI
+ * consistency audit). The tests still verify the right thing
+ * (modal lifecycle + event flow) because they query the same
+ * markup they build, but a future contributor reading these
+ * fixtures should NOT infer production class names from them.
  */
 
 QUnit.module('wl_modals', {

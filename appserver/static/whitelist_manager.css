@@ -514,6 +514,21 @@ body.wl-resizing * {
     margin-left: auto;
 }
 
+/* Visual separator between the [Add/Edit/Destroy] group and the
+ * [Save/Discard persist] group on the WM main action bar. The two
+ * groups previously sat in one undifferentiated row with colour as
+ * the only signal of role. The separator + extra margin establishes
+ * a clear semantic boundary without restructuring the HTML.
+ * (See 2026-04-30 UI consistency audit, finding M4-M5.) */
+.wl-buttons #btn-save::before {
+    content: "";
+    display: inline-block;
+    border-left: 1px solid var(--wl-border-section);
+    margin-right: 12px;
+    height: 22px;
+    vertical-align: middle;
+}
+
 .wl-buttons-right .btn {
     margin-right: 0;
     margin-left: 8px;
@@ -1051,6 +1066,16 @@ body.wl-dark > .wl-modal-overlay {
     cursor: pointer;
     text-decoration: underline;
     font-weight: bold;
+    /* Default to the existing accent token so wl-link sites without an
+     * inline color attribute (e.g. the conflict-reload link in
+     * wl_save.js, presence indicators in wl_presence.js) stay readable
+     * on dark theme. Trash "Change" still has its own inline colour
+     * which wins via specificity. (See 2026-04-30 UI consistency audit.) */
+    color: var(--wl-accent, #2962ff);
+}
+.wl-link:hover {
+    color: #5b8dff;
+    text-decoration: none;
 }
 
 .wl-kbd {
@@ -1251,6 +1276,88 @@ th.wl-pending-approval-header {
     opacity: 0.5 !important;
     cursor: not-allowed !important;
     pointer-events: none;
+}
+
+/* ── Button colour rules ───────────────────────────────────────────────
+ * Splunk's bundled CSS only ships .btn and .btn-primary. .btn-success,
+ * .btn-danger, and .btn-warning silently fall back to .btn grey without
+ * these rules. Without them, every "Approve / Reject / Remove / Purge"
+ * button in the app rendered the same grey as Cancel — destructive
+ * actions had no colour signal. (See 2026-04-30 UI consistency audit
+ * and Decision Log entry.)
+ *
+ * Specificity is `.btn.btn-X` so these override the base .btn rule but
+ * not inline style overrides. Hover/disabled states are explicit so
+ * disabled doesn't fall back to the failing-AA Splunk default.
+ */
+.btn.btn-success {
+    background-color: #1a8929;
+    color: #fff;
+    border: 1px solid #146a20;
+}
+.btn.btn-success:hover:not([disabled]):not(.wl-btn-locked) {
+    background-color: #20a532;
+    border-color: #1a8929;
+}
+
+.btn.btn-danger {
+    background-color: #c62828;
+    color: #fff;
+    border: 1px solid #8e1d1d;
+}
+.btn.btn-danger:hover:not([disabled]):not(.wl-btn-locked) {
+    background-color: #d83232;
+    border-color: #c62828;
+}
+
+.btn.btn-warning {
+    background-color: #e65100;
+    color: #fff;
+    border: 1px solid #b34000;
+}
+.btn.btn-warning:hover:not([disabled]):not(.wl-btn-locked) {
+    background-color: #f57c00;
+    border-color: #e65100;
+}
+
+/* Disabled-state contrast fix.
+ * Splunk's default .btn:disabled keeps full bg colour but lowers text
+ * to ~1.3:1 contrast (fails WCAG AA). For the buttons that signal
+ * danger / success / primary action, drop overall opacity instead so
+ * the colour identity stays readable. (See 2026-04-30 audit.)
+ */
+.btn.btn-primary[disabled],
+.btn.btn-primary.wl-btn-locked,
+.btn.btn-success[disabled],
+.btn.btn-success.wl-btn-locked,
+.btn.btn-danger[disabled],
+.btn.btn-danger.wl-btn-locked,
+.btn.btn-warning[disabled],
+.btn.btn-warning.wl-btn-locked {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+/* Focus ring for keyboard navigation — applies to all .btn variants
+ * including <span class="btn"> elements that don't get the browser
+ * default focus outline. Uses the existing accent token so light/dark
+ * themes match. */
+.btn:focus-visible {
+    outline: 2px solid #2962ff;
+    outline-offset: 2px;
+}
+
+/* ── Audit Trail "Expiring Soon" height cap ────────────────────────────
+ * Splunk SimpleXML <option name="height"> is ignored on table panels,
+ * so we cap the panel via CSS instead. Without the cap the table
+ * auto-extends to ~14000 px on dashboards with many expiring rows
+ * (5+ pages of 10), pushing the rest of the page off-screen. The
+ * inner scroll keeps every row reachable while restoring page balance.
+ * (See 2026-04-30 UI consistency audit.)
+ */
+#expiring_soon_table {
+    max-height: 400px;
+    overflow-y: auto;
 }
 
 /* ── Inline approval action bar (admin only) ─────────────────────── */

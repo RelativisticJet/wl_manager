@@ -190,7 +190,7 @@ require([
                 '<p style="font-size:18px;font-weight:bold;">Error loading Control Panel</p>' +
                 '<p>The server may be restarting or temporarily unavailable. ' +
                 'Please try refreshing the page.</p>' +
-                '<span class="wl-btn wl-btn-primary" style="margin-top:10px;' +
+                '<span class="btn btn-primary" style="margin-top:10px;' +
                 'cursor:pointer;" onclick="location.reload()">Refresh</span></div>'
             );
         }
@@ -319,9 +319,8 @@ require([
                     '</span></div>';
                 // Deactivate button — only if superadmin AND not the one who locked
                 if (cpIsSuperAdmin && lockdown.locked_by !== cpUser) {
-                    html += '<span class="wl-btn" id="wl-cp-deactivate-lockdown" ' +
-                        'style="cursor:pointer;background:#fff;color:#c0392b;' +
-                        'font-weight:600;white-space:nowrap">' +
+                    html += '<span class="btn btn-primary" id="wl-cp-deactivate-lockdown" ' +
+                        'style="cursor:pointer;white-space:nowrap">' +
                         'Deactivate Lockdown</span>';
                 }
                 html += '</div>';
@@ -350,9 +349,8 @@ require([
                 if (cpIsSuperAdmin) {
                     $banner.html(
                         '<div style="margin-bottom:8px;text-align:right">' +
-                        '<span class="wl-btn" id="wl-cp-activate-lockdown" ' +
-                        'style="cursor:pointer;color:#c0392b;border-color:#c0392b;' +
-                        'font-size:12px">Activate Emergency Lockdown</span></div>');
+                        '<span class="btn btn-danger" id="wl-cp-activate-lockdown" ' +
+                        'style="cursor:pointer">Activate Emergency Lockdown</span></div>');
 
                     $("#wl-cp-activate-lockdown").on("click", function () {
                         showCpPrompt("Activate Emergency Lockdown",
@@ -2406,12 +2404,12 @@ require([
                 _.escape((item.comment || "").substring(0, 60)) +
                 (item.comment && item.comment.length > 60 ? "..." : "") + '</td>' +
                 '<td>' +
-                '<span class="wl-btn wl-btn-primary wl-trash-restore" ' +
+                '<span class="btn btn-primary wl-trash-restore" ' +
                 'data-trash-id="' + tid + '" style="cursor:pointer;margin-right:4px">' +
                 'Restore</span>';
 
             if (cpIsSuperAdmin) {
-                html += '<span class="wl-btn wl-btn-danger wl-trash-purge" ' +
+                html += '<span class="btn btn-danger wl-trash-purge" ' +
                     'data-trash-id="' + tid + '" data-name="' +
                     _.escape(item.name || "") + '" style="cursor:pointer">' +
                     'Request Purge</span>';
@@ -2770,9 +2768,9 @@ require([
 
         // ── Buttons ──
         html += '<div style="margin-top:16px;display:flex;align-items:center;gap:10px">' +
-            '<span class="wl-btn wl-btn-primary" id="wl-save-admin-limits" ' +
+            '<span class="btn btn-primary" id="wl-save-admin-limits" ' +
             'style="cursor:pointer">Save Changes</span> ' +
-            '<span class="wl-btn" id="wl-reset-admin-limits" ' +
+            '<span class="btn" id="wl-reset-admin-limits" ' +
             'style="cursor:pointer">Reset to Defaults</span>' +
             '<span id="wl-cp-admin-limits-msg" style="display:none;font-size:13px;' +
             'font-weight:500;margin-left:8px"></span>' +
@@ -3004,9 +3002,9 @@ require([
             'border:1px solid var(--wl-border,#444);border-radius:4px;margin-bottom:12px;' +
             'box-sizing:border-box">' +
             '<div style="text-align:right">' +
-            '<span class="wl-btn" id="wl-cp-prompt-cancel" style="cursor:pointer;margin-right:8px">' +
+            '<span class="btn" id="wl-cp-prompt-cancel" style="cursor:pointer;margin-right:8px">' +
             'Cancel</span>' +
-            '<span class="wl-btn wl-btn-primary" id="wl-cp-prompt-ok" style="cursor:pointer">' +
+            '<span class="btn btn-primary" id="wl-cp-prompt-ok" style="cursor:pointer">' +
             'OK</span></div></div></div>';
 
         $("body").append(html);

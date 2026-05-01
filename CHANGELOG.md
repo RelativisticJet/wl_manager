@@ -64,6 +64,127 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-01 (build 632, UI consistency sweep)
+
+### UI consistency: button taxonomy + audit dashboard polish (builds 631-632)
+
+Three user-reported issues triggered a wider audit of every page,
+dropdown, modal, and form. The root cause was structural: the codebase
+had two button-class taxonomies coexisting, and **neither was fully
+styled**. Splunk's bundled CSS ships rules for `.btn` and `.btn-primary`
+only — `.btn-success`, `.btn-danger`, and `.btn-warning` silently fall
+back to plain `.btn` grey. The custom `.wl-btn` / `.wl-btn-primary` /
+`.wl-btn-danger` classes had **no CSS rules at all** beyond
+`.wl-btn-locked` (an opacity helper). Result: every "Approve / Reject /
+Remove / Purge" button across the app rendered the same grey as
+"Cancel" — destructive actions had no colour signal.
+
+Fixed by (a) defining `.btn-success`, `.btn-danger`, `.btn-warning`
+with hover + focus + disabled states in `whitelist_manager.css`, and
+(b) migrating the 9 `wl-btn` sites in `control_panel.js` to the
+Splunk-bundled `btn` taxonomy. Custom `.wl-btn-locked` is preserved
+(it's the approval-lock opacity helper, used by `wl_table.js` and
+`wl_approval_ui.js`). See Decision Log entry 2026-05-01 for the
+"kill `wl-btn` taxonomy entirely" rationale.
+
+#### Fixed — user-reported
+
+- **"Activate Emergency Lockdown"** in Control Panel header now
+  renders as a proper red button instead of 12 px red plain text on
+  the page background. The single most consequential action in the
+  app is now visually appropriate.
+- **"Change" retention link** on the Trash tab now uses the
+  `.wl-link` rule's new default accent colour (was inheriting muted
+  grey from parent).
+- **Admin Settings "Save Changes" / "Reset to Defaults"** now match
+  Analyst Settings visually (green primary + neutral grey). Both
+  pages were previously using completely different button systems.
+
+#### Fixed — surfaced by the wider audit
+
+- **Whitelist Manager "Save Changes"** (`btn-success`) renders green
+  for the first time. Previously rendered grey, identical to
+  "Discard Changes".
+- **Row-level "Remove" button** in the Actions column now red
+  (`btn-danger` rule added). Previously grey, identical to "Export CSV".
+- **Modal "Approve" / "Reject"** now green / red. Previously both grey.
+- **CSV Import "Replace"** button (destructive) now red. Was grey.
+- **Disabled-state contrast** on `btn-primary` / `btn-success` /
+  `btn-danger` / `btn-warning` lifted from ~1.3:1 (failed WCAG AA)
+  to a uniform `opacity: 0.55` so the colour identity stays readable
+  while still signalling disabled.
+- **`.wl-link` default colour** added — sites without an inline
+  `color` attribute (conflict-reload link in `wl_save.js`, presence
+  hooks in `wl_presence.js`, nav links in `wl_nav.js`) are now
+  readable on dark theme.
+- **Keyboard-focus ring** added for all `.btn` variants. `<span
+  class="btn">` elements previously had no focus indication; they
+  now show the same accent outline as `<button>` / `<a>` variants.
+  (Note: `<span class="btn">` are still NOT keyboard-tab-able —
+  see CLAUDE.md "Pending / Future Work" for the L3 span→button
+  migration plan.)
+
+#### Fixed — Audit Trail dashboard layout
+
+- **"Expiring Soon" panel** capped at `max-height: 400px` with
+  internal scroll. Previously auto-extended to ~14,000 px on
+  dashboards with many expiring rows, pushing the rest of the page
+  off-screen and producing a 17,850-px-tall dashboard. Page is now
+  ~2,600 px after the cap (86% reduction). The Splunk SimpleXML
+  `<option name="height">` is ignored on table panels so the cap is
+  CSS-side via `#expiring_soon_table { max-height: 400px; ... }`.
+- **Empty-state inconsistency** fixed across 7 single-value panels
+  (Rows Added / Removed / Auto-Removed / Edited / Columns Added /
+  Removed / Renamed). They previously showed "No results found." on
+  empty input because `stats sum(...)` produces zero rows when no
+  events match the `where action=X` filter. Now post-fixed with
+  `| append [| makeresults count=1 | eval x=0] | stats max(x) as x`
+  so the panels always render `0` when empty, matching the
+  `stats count` panels next to them.
+
+#### Polish
+
+- **Visual separator** between [Add/Edit/Destroy] group and
+  [Save/Discard persist] group on the WM main action bar
+  (`#btn-save::before` thin border). The two semantic groups
+  previously sat in one undifferentiated row of buttons.
+- **`urlArgs: "_b=632"`** in `whitelist_manager.js` keeps cache-bust
+  in sync with `app.conf [install] build = 632` per the CLAUDE.md
+  maintenance rule.
+
+#### Tests touched
+
+- `tests/e2e/test_admin_limits.cjs` — assertion `saveClass.includes("wl-btn")`
+  updated to `saveClass.includes("btn-primary")` since the migrated
+  Save Changes button no longer carries the legacy class.
+- `tests/qunit/test_wl_modals.js` — header comment added
+  documenting that the test fixtures use synthetic `wl-btn-*`
+  identifiers that DO NOT mirror production class names. The
+  fixtures are self-contained and tests still pass; the comment
+  prevents future-reader confusion.
+
+#### Deferred to separate work
+
+- **`<span class="btn">` → `<button class="btn">` accessibility
+  migration** (audit finding L3). Visible buttons are tab-focusable
+  via the new focus ring, but `<span>` still doesn't receive
+  Splunk's tab traversal or ARIA "button" role. Doing this right
+  requires unifying three different "disabled" patterns
+  (`<button disabled>`, inline `opacity:0.5;pointer-events:none`,
+  `wl-btn-locked` class) into one. See CLAUDE.md "Pending / Future
+  Work" for the full scope.
+- **Sigstore E2E verification** — already on the Pending list,
+  unchanged.
+
+#### Migration / rollback
+
+CSS-only and class-rename changes; click handlers find by `#id` not
+class. Rollback: `git revert` the build-631 + build-632 commits and
+redeploy at the next build number. The `.wl-btn-locked` class is
+preserved.
+
+---
+
 ## Unreleased — 2026-04-29 (build 629, no app changes)
 
 ### Round 9: housekeeping — doc-drift, dead artifacts, PR-time anti-pattern gating
