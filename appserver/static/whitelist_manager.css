@@ -514,6 +514,19 @@ body.wl-resizing * {
     margin-left: auto;
 }
 
+/* Control Panel tab geometry normalization. Splunk's bundled `.btn`
+ * has `padding: 5px 14px; border: 1px solid` while `.btn-primary` has
+ * `padding: 6px 15px; border: 0`. The two cancel out for height but
+ * the active tab's border collapse can cause a 1px-width nudge when
+ * switching tabs (the entire tab strip shifts a pixel). Forcing the
+ * same border spec on both states locks the geometry so clicking
+ * tabs feels static. (See 2026-04-30 UI consistency audit, finding L2.) */
+.wl-cp-tab,
+.wl-cp-tab.btn-primary {
+    border: 1px solid transparent;
+    padding: 5px 14px;
+}
+
 /* Visual separator between the [Add/Edit/Destroy] group and the
  * [Save/Discard persist] group on the WM main action bar. The two
  * groups previously sat in one undifferentiated row with colour as
@@ -1339,9 +1352,11 @@ th.wl-pending-approval-header {
 }
 
 /* Focus ring for keyboard navigation — applies to all .btn variants
- * including <span class="btn"> elements that don't get the browser
- * default focus outline. Uses the existing accent token so light/dark
- * themes match. */
+ * (`<button>`, `<a>`, `<label>` for file inputs). All in-app action
+ * buttons were converted from `<span class="btn">` to
+ * `<button type="button" class="btn">` in build 633 so they're
+ * tab-focusable; this rule makes the focus indicator visible.
+ * Uses the existing accent token so light/dark themes match. */
 .btn:focus-visible {
     outline: 2px solid #2962ff;
     outline-offset: 2px;

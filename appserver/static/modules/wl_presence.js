@@ -113,7 +113,7 @@ function ($, _, mvc, REST) {
                     '<p style="margin:0;color:#e74c3c">' + _.escape(message) + '</p>' +
                 '</div>' +
                 '<div class="wl-modal-actions">' +
-                    '<span class="btn btn-primary" id="wl-presence-full-ok">OK</span>' +
+                    '<button type="button" class="btn btn-primary" id="wl-presence-full-ok">OK</button>' +
                 '</div>' +
             '</div></div>'
         );
@@ -153,7 +153,7 @@ function ($, _, mvc, REST) {
                     '</p>' +
                 '</div>' +
                 '<div class="wl-modal-actions">' +
-                    '<span class="btn btn-primary" id="wl-csv-removed-ok">OK</span>' +
+                    '<button type="button" class="btn btn-primary" id="wl-csv-removed-ok">OK</button>' +
                 '</div>' +
             '</div></div>'
         );

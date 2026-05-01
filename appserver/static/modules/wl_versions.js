@@ -157,8 +157,8 @@ define([
                         '<div class="wl-char-counter" data-for="wl-revert-reason">0 / 500</div>' +
                     '</div>' +
                     '<div class="wl-modal-actions">' +
-                        '<span class="btn btn-primary" id="wl-revert-ok">OK</span> ' +
-                        '<span class="btn" id="wl-revert-cancel">Cancel</span>' +
+                        '<button type="button" class="btn btn-primary" id="wl-revert-ok">OK</button> ' +
+                        '<button type="button" class="btn" id="wl-revert-cancel">Cancel</button>' +
                     '</div>' +
                 '</div>' +
             '</div>';

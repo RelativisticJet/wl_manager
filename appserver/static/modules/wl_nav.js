@@ -71,8 +71,8 @@ define([
                             '<br><span style="font-size:13px;margin-top:4px;display:inline-block">' +
                                 'It may have been removed or the link may be outdated.' +
                             '</span>' +
-                            '<br><span class="btn btn-primary" id="wl-go-home" ' +
-                                'style="margin-top:8px">Back to Whitelist Manager</span>' +
+                            '<br><button type="button" class="btn btn-primary" id="wl-go-home" ' +
+                                'style="margin-top:8px">Back to Whitelist Manager</button>' +
                         '</div>'
                     );
                 } else {
@@ -174,8 +174,8 @@ define([
                     '<br><span style="font-size:13px;margin-top:4px;display:inline-block">' +
                         'Would you like to create a new CSV whitelist?' +
                     '</span>' +
-                    '<br><span class="btn btn-primary" id="wl-create-csv-btn" ' +
-                        'style="margin-top:8px">Create CSV</span>';
+                    '<br><button type="button" class="btn btn-primary" id="wl-create-csv-btn" ' +
+                        'style="margin-top:8px">Create CSV</button>';
             } else {
                 noCsvHtml +=
                     '<br><span style="font-size:13px;margin-top:4px;display:inline-block">' +

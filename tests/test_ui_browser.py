@@ -397,7 +397,7 @@ def test_add_row_discard(page, account):
         discard_btn.first.click()
         time.sleep(1)
         # Look for confirm modal
-        confirm = page.locator("#wl-confirm-discard-ok, .wl-modal span.btn-primary:has-text('Discard')")
+        confirm = page.locator("#wl-confirm-discard-ok, .wl-modal .btn-primary:has-text('Discard')")
         if confirm.count() > 0:
             confirm.first.click()
             time.sleep(2)

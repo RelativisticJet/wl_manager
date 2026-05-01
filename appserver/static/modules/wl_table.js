@@ -1454,8 +1454,8 @@ define([
                         '<div id="wl-col-error" style="color:var(--wl-err-text);font-size:12px;margin-top:4px;display:none"></div>' +
                     '</div>' +
                     '<div class="wl-modal-actions">' +
-                        '<span class="btn btn-primary" id="wl-col-ok">Add</span> ' +
-                        '<span class="btn" id="wl-col-cancel">Cancel</span>' +
+                        '<button type="button" class="btn btn-primary" id="wl-col-ok">Add</button> ' +
+                        '<button type="button" class="btn" id="wl-col-cancel">Cancel</button>' +
                     '</div>' +
                 '</div>' +
             '</div>';

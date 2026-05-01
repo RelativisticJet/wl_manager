@@ -84,7 +84,7 @@ require([
                     '<p style="margin:0;color:' + msgColor + '">' + _.escape(message) + '</p>' +
                 '</div>' +
                 '<div class="wl-modal-actions">' +
-                    '<span class="btn btn-primary" id="wl-cp-alert-ok">OK</span>' +
+                    '<button type="button" class="btn btn-primary" id="wl-cp-alert-ok">OK</button>' +
                 '</div>' +
             '</div></div>'
         );
@@ -117,9 +117,9 @@ require([
                     '<p style="margin:0">' + _.escape(message) + '</p>' +
                 '</div>' +
                 '<div class="wl-modal-actions">' +
-                    '<span class="btn btn-primary" id="wl-cp-confirm-ok">' +
-                        _.escape(confirmLabel) + '</span> ' +
-                    '<span class="btn" id="wl-cp-confirm-cancel">Cancel</span>' +
+                    '<button type="button" class="btn btn-primary" id="wl-cp-confirm-ok">' +
+                        _.escape(confirmLabel) + '</button> ' +
+                    '<button type="button" class="btn" id="wl-cp-confirm-cancel">Cancel</button>' +
                 '</div>' +
             '</div></div>'
         );
@@ -190,8 +190,8 @@ require([
                 '<p style="font-size:18px;font-weight:bold;">Error loading Control Panel</p>' +
                 '<p>The server may be restarting or temporarily unavailable. ' +
                 'Please try refreshing the page.</p>' +
-                '<span class="btn btn-primary" style="margin-top:10px;' +
-                'cursor:pointer;" onclick="location.reload()">Refresh</span></div>'
+                '<button type="button" class="btn btn-primary" style="margin-top:10px;' +
+                'cursor:pointer;" onclick="location.reload()">Refresh</button></div>'
             );
         }
     });
@@ -235,13 +235,13 @@ require([
     function renderTabs() {
         var html =
             '<div class="wl-cp-tab-bar">' +
-            '<span class="btn btn-primary wl-cp-tab" data-tab="queue">Approval Queue</span> ' +
-            '<span class="btn wl-cp-tab" data-tab="usage">Activity</span> ' +
-            '<span class="btn wl-cp-tab" data-tab="limits">Analyst Settings</span>';
+            '<button type="button" class="btn btn-primary wl-cp-tab" data-tab="queue">Approval Queue</button> ' +
+            '<button type="button" class="btn wl-cp-tab" data-tab="usage">Activity</button> ' +
+            '<button type="button" class="btn wl-cp-tab" data-tab="limits">Analyst Settings</button>';
         if (cpIsSuperAdmin) {
-            html += ' <span class="btn wl-cp-tab" data-tab="admin-limits">Admin Settings</span>';
+            html += ' <button type="button" class="btn wl-cp-tab" data-tab="admin-limits">Admin Settings</button>';
         }
-        html += ' <span class="btn wl-cp-tab" data-tab="trash">Trash</span>';
+        html += ' <button type="button" class="btn wl-cp-tab" data-tab="trash">Trash</button>';
         html += '</div>';
         $("#wl-cp-tabs").html(html);
 
@@ -319,9 +319,9 @@ require([
                     '</span></div>';
                 // Deactivate button — only if superadmin AND not the one who locked
                 if (cpIsSuperAdmin && lockdown.locked_by !== cpUser) {
-                    html += '<span class="btn btn-primary" id="wl-cp-deactivate-lockdown" ' +
+                    html += '<button type="button" class="btn btn-primary" id="wl-cp-deactivate-lockdown" ' +
                         'style="cursor:pointer;white-space:nowrap">' +
-                        'Deactivate Lockdown</span>';
+                        'Deactivate Lockdown</button>';
                 }
                 html += '</div>';
                 $banner.html(html);
@@ -349,8 +349,8 @@ require([
                 if (cpIsSuperAdmin) {
                     $banner.html(
                         '<div style="margin-bottom:8px;text-align:right">' +
-                        '<span class="btn btn-danger" id="wl-cp-activate-lockdown" ' +
-                        'style="cursor:pointer">Activate Emergency Lockdown</span></div>');
+                        '<button type="button" class="btn btn-danger" id="wl-cp-activate-lockdown" ' +
+                        'style="cursor:pointer">Activate Emergency Lockdown</button></div>');
 
                     $("#wl-cp-activate-lockdown").on("click", function () {
                         showCpPrompt("Activate Emergency Lockdown",
@@ -468,34 +468,33 @@ require([
                     // Actions column: primary admin actions (Approve/Reject or Cancel)
                     '<td style="white-space:nowrap">' +
                         (cpCurrentUser && item.analyst === cpCurrentUser
-                            ? '<span class="btn btn-small wl-cp-cancel-btn" ' +
+                            ? '<button type="button" class="btn btn-small btn-warning wl-cp-cancel-btn" ' +
                                 'data-id="' + _.escape(item.request_id) + '" ' +
-                                'style="background:#f39c12;color:#fff;margin-right:4px">Cancel</span>'
-                            : '<span class="btn btn-small wl-cp-approve-btn" ' +
-                                'data-id="' + _.escape(item.request_id) + '" ' +
-                                'data-dual="' + (item.is_dual_admin ? 'true' : 'false') + '" ' +
-                                'style="background:#27ae60;color:#fff;margin-right:4px">Approve</span>' +
-                              '<span class="btn btn-small wl-cp-reject-btn" ' +
+                                'style="margin-right:4px">Cancel</button>'
+                            : '<button type="button" class="btn btn-small btn-success wl-cp-approve-btn" ' +
                                 'data-id="' + _.escape(item.request_id) + '" ' +
                                 'data-dual="' + (item.is_dual_admin ? 'true' : 'false') + '" ' +
-                                'style="background:#e74c3c;color:#fff">Reject</span>'
+                                'style="margin-right:4px">Approve</button>' +
+                              '<button type="button" class="btn btn-small btn-danger wl-cp-reject-btn" ' +
+                                'data-id="' + _.escape(item.request_id) + '" ' +
+                                'data-dual="' + (item.is_dual_admin ? 'true' : 'false') + '">Reject</button>'
                         ) +
                     '</td>' +
                     // Inspect column: Show Data is always present (anchor); Download CSV
                     // is conditional. Show Data goes first so the column has a stable
                     // left edge across rows; Download CSV (when present) hangs off the right.
                     '<td style="white-space:nowrap">' +
-                        '<span class="btn btn-small wl-cp-show-data-btn" ' +
+                        '<button type="button" class="btn btn-small wl-cp-show-data-btn" ' +
                             'data-id="' + _.escape(item.request_id) + '" ' +
                             'style="background:#3498db;color:#fff;margin-right:4px"' +
-                            '>Show Data</span>' +
+                            '>Show Data</button>' +
                         (item.csv_file && item.csv_file !== "__rule_operation__"
-                            ? '<span class="btn btn-small wl-cp-download-btn" ' +
+                            ? '<button type="button" class="btn btn-small wl-cp-download-btn" ' +
                                 'data-csv="' + _.escape(item.csv_file) + '" ' +
                                 'data-app="' + _.escape(item.app_context || "") + '" ' +
                                 'data-request-id="' + _.escape(item.request_id) + '" ' +
                                 'data-action-type="' + _.escape(item.action_type) + '"' +
-                                '>Download CSV</span>'
+                                '>Download CSV</button>'
                             : '') +
                     '</td></tr>';
             });
@@ -553,10 +552,10 @@ require([
                         _.escape(item.resolved_by || "") + '</td>' +
                     // New Inspect column — Show Data button aligned across all rows.
                     '<td style="white-space:nowrap">' +
-                        '<span class="btn btn-small wl-cp-show-data-btn" ' +
+                        '<button type="button" class="btn btn-small wl-cp-show-data-btn" ' +
                             'data-id="' + _.escape(item.request_id) + '" ' +
                             'style="background:#3498db;color:#fff"' +
-                            '>Show Data</span>' +
+                            '>Show Data</button>' +
                     '</td></tr>';
             });
             html += '</tbody></table>';
@@ -579,14 +578,14 @@ require([
         var prevDisabled = page === 0 ? "opacity:0.4;pointer-events:none;" : "";
         var nextDisabled = page >= totalPages - 1 ? "opacity:0.4;pointer-events:none;" : "";
         return '<div style="display:flex;align-items:center;gap:10px;margin:8px 0 4px">' +
-            '<span class="btn btn-small wl-cp-page-prev" data-prefix="' + prefix + '" ' +
-                'style="' + prevDisabled + '">&#9664; Prev</span>' +
+            '<button type="button" class="btn btn-small wl-cp-page-prev" data-prefix="' + prefix + '" ' +
+                'style="' + prevDisabled + '">&#9664; Prev</button>' +
             '<span style="color:var(--wl-muted,#888);font-size:13px">' +
                 from + '–' + to + ' of ' + totalItems +
                 ' &nbsp;(page ' + (page + 1) + ' of ' + totalPages + ')' +
             '</span>' +
-            '<span class="btn btn-small wl-cp-page-next" data-prefix="' + prefix + '" ' +
-                'style="' + nextDisabled + '">Next &#9654;</span>' +
+            '<button type="button" class="btn btn-small wl-cp-page-next" data-prefix="' + prefix + '" ' +
+                'style="' + nextDisabled + '">Next &#9654;</button>' +
             '</div>';
     }
 
@@ -777,7 +776,7 @@ require([
                     bodyHtml +
                 '</div>' +
                 '<div class="wl-modal-actions">' +
-                    '<span class="btn btn-primary" id="wl-cp-preview-close">Close</span>' +
+                    '<button type="button" class="btn btn-primary" id="wl-cp-preview-close">Close</button>' +
                 '</div>' +
             '</div></div>'
         );
@@ -1263,9 +1262,9 @@ require([
                         'maxlength="500" placeholder="Why are you cancelling this request?"></textarea>' +
                 '</div>' +
                 '<div class="wl-modal-actions">' +
-                    '<span class="btn" id="wl-cancel-ok" ' +
-                        'style="background:#f39c12;color:#fff;opacity:0.5;pointer-events:none">Cancel Request</span> ' +
-                    '<span class="btn" id="wl-cancel-dismiss">Close</span>' +
+                    '<button type="button" class="btn btn-warning" id="wl-cancel-ok" ' +
+                        'style="opacity:0.5;pointer-events:none">Cancel Request</button> ' +
+                    '<button type="button" class="btn" id="wl-cancel-dismiss">Close</button>' +
                 '</div>' +
             '</div></div>'
         );
@@ -1325,9 +1324,9 @@ require([
                         'maxlength="500" placeholder="Why is this request being rejected?"></textarea>' +
                 '</div>' +
                 '<div class="wl-modal-actions">' +
-                    '<span class="btn btn-danger" id="wl-reject-ok" ' +
-                        'style="opacity:0.5;pointer-events:none">Reject</span> ' +
-                    '<span class="btn" id="wl-reject-cancel">Cancel</span>' +
+                    '<button type="button" class="btn btn-danger" id="wl-reject-ok" ' +
+                        'style="opacity:0.5;pointer-events:none">Reject</button> ' +
+                    '<button type="button" class="btn" id="wl-reject-cancel">Cancel</button>' +
                 '</div>' +
             '</div></div>'
         );
@@ -1682,17 +1681,17 @@ require([
 
         // Buttons row
         html += '<div style="margin-top:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
-        html += '<span class="btn btn-primary" id="wl-cp-save-limits">Save Changes</span>';
-        html += '<span class="btn" id="wl-cp-save-as-default" ' +
-                'style="background:#3498db;color:#fff">Save as Default</span>';
+        html += '<button type="button" class="btn btn-primary" id="wl-cp-save-limits">Save Changes</button>';
+        html += '<button type="button" class="btn" id="wl-cp-save-as-default" ' +
+                'style="background:#3498db;color:#fff">Save as Default</button>';
         if (customDefaults) {
-            html += '<span class="btn" id="wl-cp-reset-limits" ' +
-                    'style="background:#e74c3c;color:#fff">Reset to Custom Defaults</span>';
-            html += '<span class="btn" id="wl-cp-reset-factory" ' +
-                    'style="background:#95a5a6;color:#fff">Reset to Factory Defaults</span>';
+            html += '<button type="button" class="btn btn-danger" id="wl-cp-reset-limits">' +
+                    'Reset to Custom Defaults</button>';
+            html += '<button type="button" class="btn" id="wl-cp-reset-factory" ' +
+                    'style="background:#95a5a6;color:#fff">Reset to Factory Defaults</button>';
         } else {
-            html += '<span class="btn" id="wl-cp-reset-limits" ' +
-                    'style="background:#e74c3c;color:#fff">Reset to Defaults</span>';
+            html += '<button type="button" class="btn btn-danger" id="wl-cp-reset-limits">' +
+                    'Reset to Defaults</button>';
         }
         html += '<span id="wl-cp-limits-msg" style="margin-left:8px;display:none"></span>';
         html += '</div>';
@@ -2233,30 +2232,30 @@ require([
                     if (limit === undefined) { limit = 0; }
                     html += '<td style="text-align:center">' + usageCellHtml(count, limit) + '</td>';
                 });
-                html += '<td style="text-align:center"><span class="btn btn-small wl-cp-reset-analyst" ' +
-                    'data-analyst="' + _.escape(analyst) + '">Reset</span></td></tr>';
+                html += '<td style="text-align:center"><button type="button" class="btn btn-small wl-cp-reset-analyst" ' +
+                    'data-analyst="' + _.escape(analyst) + '">Reset</button></td></tr>';
             });
             html += '</tbody></table>';
 
             // Pagination controls
             if (totalPages > 1) {
                 html += '<div style="margin-top:6px;display:flex;align-items:center;gap:8px">';
-                html += '<span class="btn btn-small' + (usagePage === 0 ? ' disabled" style="pointer-events:none;opacity:.4"' : '"') +
-                    ' id="wl-cp-usage-prev">&laquo; Prev</span>';
+                html += '<button type="button" class="btn btn-small' + (usagePage === 0 ? ' disabled" style="pointer-events:none;opacity:.4"' : '"') +
+                    ' id="wl-cp-usage-prev">&laquo; Prev</button>';
                 html += '<span style="font-size:13px;color:var(--wl-muted,#888)">' +
                     'Page ' + (usagePage + 1) + ' of ' + totalPages +
                     ' (' + analysts.length + ' analysts)</span>';
-                html += '<span class="btn btn-small' + (usagePage >= totalPages - 1 ? ' disabled" style="pointer-events:none;opacity:.4"' : '"') +
-                    ' id="wl-cp-usage-next">Next &raquo;</span>';
+                html += '<button type="button" class="btn btn-small' + (usagePage >= totalPages - 1 ? ' disabled" style="pointer-events:none;opacity:.4"' : '"') +
+                    ' id="wl-cp-usage-next">Next &raquo;</button>';
                 html += '</div>';
             }
         }
 
         html += '<div style="margin-top:8px;display:flex;gap:8px;align-items:center">' +
-            '<span class="btn" id="wl-cp-refresh-usage">Refresh</span>';
+            '<button type="button" class="btn" id="wl-cp-refresh-usage">Refresh</button>';
         if (analysts.length) {
-            html += '<span class="btn" id="wl-cp-reset-all-usage" ' +
-                'style="background:#e74c3c;color:#fff">Reset All</span>';
+            html += '<button type="button" class="btn btn-danger" id="wl-cp-reset-all-usage">' +
+                'Reset All</button>';
         }
         html += '<span style="font-size:11px;color:var(--wl-muted,#888);margin-left:8px">' +
             'Auto-refreshes every ' + (USAGE_POLL_MS / 1000) + 's</span>';
@@ -2404,15 +2403,15 @@ require([
                 _.escape((item.comment || "").substring(0, 60)) +
                 (item.comment && item.comment.length > 60 ? "..." : "") + '</td>' +
                 '<td>' +
-                '<span class="btn btn-primary wl-trash-restore" ' +
+                '<button type="button" class="btn btn-primary wl-trash-restore" ' +
                 'data-trash-id="' + tid + '" style="cursor:pointer;margin-right:4px">' +
-                'Restore</span>';
+                'Restore</button>';
 
             if (cpIsSuperAdmin) {
-                html += '<span class="btn btn-danger wl-trash-purge" ' +
+                html += '<button type="button" class="btn btn-danger wl-trash-purge" ' +
                     'data-trash-id="' + tid + '" data-name="' +
                     _.escape(item.name || "") + '" style="cursor:pointer">' +
-                    'Request Purge</span>';
+                    'Request Purge</button>';
             }
             html += '</td></tr>';
         });
@@ -2768,10 +2767,10 @@ require([
 
         // ── Buttons ──
         html += '<div style="margin-top:16px;display:flex;align-items:center;gap:10px">' +
-            '<span class="btn btn-primary" id="wl-save-admin-limits" ' +
-            'style="cursor:pointer">Save Changes</span> ' +
-            '<span class="btn" id="wl-reset-admin-limits" ' +
-            'style="cursor:pointer">Reset to Defaults</span>' +
+            '<button type="button" class="btn btn-primary" id="wl-save-admin-limits" ' +
+            'style="cursor:pointer">Save Changes</button> ' +
+            '<button type="button" class="btn" id="wl-reset-admin-limits" ' +
+            'style="cursor:pointer">Reset to Defaults</button>' +
             '<span id="wl-cp-admin-limits-msg" style="display:none;font-size:13px;' +
             'font-weight:500;margin-left:8px"></span>' +
             '</div>';
@@ -3002,10 +3001,10 @@ require([
             'border:1px solid var(--wl-border,#444);border-radius:4px;margin-bottom:12px;' +
             'box-sizing:border-box">' +
             '<div style="text-align:right">' +
-            '<span class="btn" id="wl-cp-prompt-cancel" style="cursor:pointer;margin-right:8px">' +
-            'Cancel</span>' +
-            '<span class="btn btn-primary" id="wl-cp-prompt-ok" style="cursor:pointer">' +
-            'OK</span></div></div></div>';
+            '<button type="button" class="btn" id="wl-cp-prompt-cancel" style="cursor:pointer;margin-right:8px">' +
+            'Cancel</button>' +
+            '<button type="button" class="btn btn-primary" id="wl-cp-prompt-ok" style="cursor:pointer">' +
+            'OK</button></div></div></div>';
 
         $("body").append(html);
         $("#wl-cp-prompt-input").focus();

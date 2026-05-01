@@ -91,7 +91,7 @@ def force_dismiss_modals(page):
         overlay = page.locator(".wl-modal-overlay")
         if overlay.count() > 0 and overlay.first.is_visible():
             # Try clicking any button in the modal
-            btns = overlay.locator("span.btn, span.btn-primary, button.btn")
+            btns = overlay.locator(".btn")
             if btns.count() > 0:
                 btns.first.click()
                 time.sleep(1)
@@ -215,7 +215,7 @@ def phase1_analyst_operations(page):
         if reason_input.count() > 0:
             reason_input.first.fill("E2E test: removing test row")
             # Click confirm
-            confirm = page.locator(".wl-modal span.btn-primary")
+            confirm = page.locator(".wl-modal .btn-primary")
             if confirm.count() > 0:
                 confirm.first.click()
                 time.sleep(1)
@@ -289,7 +289,7 @@ def phase2_admin_operations(page):
             rule_input.first.fill("DR_E2E_TEST")
             time.sleep(0.5)
             # Submit
-            create_btn = page.locator(".wl-modal span.btn-primary, .wl-modal #wl-create-rule-ok")
+            create_btn = page.locator(".wl-modal .btn-primary, .wl-modal #wl-create-rule-ok")
             if create_btn.count() > 0:
                 create_btn.first.click()
                 time.sleep(3)
@@ -322,7 +322,7 @@ def phase2_admin_operations(page):
             if reason_input.count() > 0:
                 reason_input.first.fill("E2E test CSV creation")
 
-            create_ok = page.locator(".wl-modal span.btn-primary")
+            create_ok = page.locator(".wl-modal .btn-primary")
             if create_ok.count() > 0:
                 create_ok.first.click()
                 time.sleep(4)
@@ -392,7 +392,7 @@ def phase2_admin_operations(page):
             bulk_val = page.locator("#wl-bulk-val, .wl-modal input[type='text']")
             if bulk_val.count() > 0:
                 bulk_val.first.fill("Bulk updated via E2E test")
-                apply_btn = page.locator(".wl-modal span.btn-primary")
+                apply_btn = page.locator(".wl-modal .btn-primary")
                 if apply_btn.count() > 0:
                     apply_btn.first.click()
                     time.sleep(1)
@@ -419,7 +419,7 @@ def phase2_admin_operations(page):
             reason_input = page.locator(".wl-modal input[type='text'], .wl-modal textarea")
             if reason_input.count() > 0:
                 reason_input.first.fill("E2E test revert")
-                confirm = page.locator(".wl-modal span.btn-primary")
+                confirm = page.locator(".wl-modal .btn-primary")
                 if confirm.count() > 0:
                     confirm.first.click()
                     time.sleep(4)
@@ -465,7 +465,7 @@ def phase3_approval_workflows(page):
             reason = page.locator(".wl-modal textarea, .wl-modal input[placeholder*='reason']")
             if reason.count() > 0:
                 reason.first.fill("Analyst requesting new rule for phishing detection")
-            create_btn = page.locator(".wl-modal span.btn-primary")
+            create_btn = page.locator(".wl-modal .btn-primary")
             if create_btn.count() > 0:
                 create_btn.first.click()
                 time.sleep(3)
@@ -552,7 +552,7 @@ def phase4_superadmin_operations(page):
         reject_reason = page.locator("#wl-reject-reason, .wl-modal textarea")
         if reject_reason.count() > 0:
             reject_reason.first.fill("Rejected for E2E testing purposes")
-            reject_ok = page.locator("#wl-reject-ok, .wl-modal span.btn-primary")
+            reject_ok = page.locator("#wl-reject-ok, .wl-modal .btn-primary")
             if reject_ok.count() > 0:
                 reject_ok.first.click()
                 time.sleep(3)

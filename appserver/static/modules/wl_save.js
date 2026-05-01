@@ -372,8 +372,8 @@ define([
                         warning +
                     '</div>' +
                     '<div class="wl-modal-actions">' +
-                        '<span class="btn btn-primary" id="wl-extchg-reload">Reload CSV</span> ' +
-                        '<span class="btn" id="wl-extchg-keep">Keep editing</span>' +
+                        '<button type="button" class="btn btn-primary" id="wl-extchg-reload">Reload CSV</button> ' +
+                        '<button type="button" class="btn" id="wl-extchg-keep">Keep editing</button>' +
                     '</div>' +
                 '</div>' +
             '</div>';
@@ -449,10 +449,10 @@ define([
                     'resize:vertical" placeholder="Reason for this change\u2026"></textarea>' +
                 '<div class="wl-char-counter" data-for="wl-audit-comment-input">0 / 500</div>' +
                 '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">' +
-                    '<span class="btn btn-primary" id="wl-audit-comment-ok" ' +
-                        'style="cursor:pointer">OK</span>' +
-                    '<span class="btn" id="wl-audit-comment-cancel" ' +
-                        'style="cursor:pointer">Cancel</span>' +
+                    '<button type="button" class="btn btn-primary" id="wl-audit-comment-ok" ' +
+                        'style="cursor:pointer">OK</button>' +
+                    '<button type="button" class="btn" id="wl-audit-comment-cancel" ' +
+                        'style="cursor:pointer">Cancel</button>' +
                 '</div>' +
             '</div></div>';
 

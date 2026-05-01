@@ -73,7 +73,7 @@ def dismiss_modals(page):
     for _ in range(3):
         overlay = page.locator(".wl-modal-overlay")
         if overlay.count() > 0 and overlay.first.is_visible():
-            btns = overlay.locator("span.btn, button.btn")
+            btns = overlay.locator(".btn")
             if btns.count() > 0:
                 btns.first.click()
                 time.sleep(1)
@@ -174,7 +174,7 @@ def phase1(page):
         reason_inp = page.locator(".wl-modal textarea, .wl-modal input[type='text']")
         if reason_inp.count() > 0:
             reason_inp.first.fill("E2E test removal reason")
-            page.locator(".wl-modal span.btn-primary").first.click()
+            page.locator(".wl-modal .btn-primary").first.click()
             time.sleep(2)
             r_after = row_count(page)
             # Row removal auto-saves
@@ -205,7 +205,7 @@ def phase1(page):
     type_in_cell(page, row_count(page) - 1, "DISCARD-ME")
     page.locator("text=Discard Changes").click()
     time.sleep(1)
-    confirm = page.locator(".wl-modal span.btn-primary")
+    confirm = page.locator(".wl-modal .btn-primary")
     if confirm.count() > 0:
         confirm.first.click()
         time.sleep(2)
@@ -241,7 +241,7 @@ def phase2(page):
         inp = modal.locator("input[type='text']").first
         inp.fill("DR_BROWSER_TEST")
         time.sleep(0.3)
-        modal.locator("span.btn-primary").first.click()
+        modal.locator(".btn-primary").first.click()
         time.sleep(3)
         dismiss_modals(page)
         ok(acct, "Create Rule", "Created DR_BROWSER_TEST")
@@ -265,7 +265,7 @@ def phase2(page):
             reason = modal.locator("textarea")
             if reason.count() > 0:
                 reason.first.fill("Browser test CSV")
-            modal.locator("span.btn-primary").first.click()
+            modal.locator(".btn-primary").first.click()
             time.sleep(4)
             dismiss_modals(page)
             ok(acct, "Create CSV", "Created DR_BROWSER_TEST.csv")
@@ -363,7 +363,7 @@ def phase2(page):
         reason_inp = page.locator(".wl-modal textarea, .wl-modal input[type='text']")
         if reason_inp.count() > 0:
             reason_inp.first.fill("Browser test revert")
-            page.locator(".wl-modal span.btn-primary").first.click()
+            page.locator(".wl-modal .btn-primary").first.click()
             time.sleep(4)
             dismiss_modals(page)
             ok(acct, "Revert", "Reverted to previous version")
@@ -407,7 +407,7 @@ def phase3(page):
         reason = modal.locator("textarea")
         if reason.count() > 0:
             reason.first.fill("Analyst needs this for new phishing detection")
-        modal.locator("span.btn-primary").first.click()
+        modal.locator(".btn-primary").first.click()
         time.sleep(3)
         msg = page.locator("#message-container")
         msg_text = msg.text_content().strip() if msg.count() > 0 else ""

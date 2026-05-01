@@ -64,6 +64,87 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-01 (build 633, accessibility + L1/L2 follow-up)
+
+### Accessibility: span → button migration (audit finding L3)
+
+The build-632 sweep noted that ~70 in-app action buttons were rendered
+as `<span class="btn">` rather than `<button class="btn">`. Visually
+identical (Splunk's `.btn` rule applies to both) but `<span>` does NOT
+receive the browser's default keyboard tab-traversal or the screen-
+reader "button" role announcement. Tab navigation skipped them and
+Enter/Space did not activate them.
+
+#### Changed
+
+- All 70+ `<span class="btn ...">` action sites in
+  `appserver/static/control_panel.js` and the seven module files
+  (`wl_modals.js`, `wl_save.js`, `wl_versions.js`, `wl_presence.js`,
+  `wl_nav.js`, `wl_table.js`, `wl_approval_ui.js`) converted to
+  `<button type="button" class="btn ...">`. The `type="button"`
+  attribute is required so buttons inside any wrapping form do NOT
+  auto-submit on click. Click handlers find by `#id` or `data-`
+  attribute, so the JS event flow is unchanged.
+- Inline-opacity locking pattern (`style="opacity:0.5;
+  pointer-events:none"`) preserved on buttons that use it for
+  multi-step gating (Remove confirmation, Reject reason, Cancel
+  Request) — `pointer-events:none` works on `<button>` exactly like
+  on `<span>`, and the existing JS that swaps the inline style on
+  state change is unchanged.
+- Inline colour overrides on action buttons (`style="background:
+  #e74c3c;color:#fff"`) replaced with proper Bootstrap-style class
+  attribution (`class="btn btn-danger"` etc.) where redundant. The
+  six sites where inline colours simulated `btn-warning` / `btn-danger`
+  before those rules existed are now class-driven, taking advantage
+  of the rules introduced in build 631.
+- `.wl-cp-tab` Control Panel tabs are now real buttons. They
+  receive keyboard focus, are announced as "button" by screen
+  readers, and respond to Enter/Space. Visual rendering and click
+  behavior are unchanged.
+
+#### Tests
+
+- E2E selectors in `tests/test_e2e_realworld.py`,
+  `tests/test_e2e_manual_browser.py`, `tests/e2e/test_wl_save.py`,
+  and `tests/test_ui_browser.py` made element-agnostic
+  (`span.btn-primary` → `.btn-primary`) so they pass for either
+  span or button. Done in a separate prior step so tests stayed
+  green during the migration.
+
+#### Verified in browser
+
+- Tab traversal reaches all migrated buttons (interactive count went
+  from 0 → 56 → 71 on Control Panel as more rows render).
+- Enter key activates focused tab buttons (verified on
+  `.wl-cp-tab[data-tab="usage"]`).
+- Modal lifecycle preserved: Add Column → green Add + grey Cancel,
+  Cancel removes overlay; Remove Row → red Remove (locked) + grey
+  Cancel; Trash Restore → green Restore + grey Cancel.
+- Lockdown prompt → red Activate Emergency Lockdown opens the
+  prompt; OK is green primary, Cancel is grey neutral.
+- Disabled-state inline opacity pattern intact on buttons; the
+  Remove confirmation stays at 0.5 opacity until reason is filled.
+
+### Polish (audit findings L1, L2)
+
+- **L1 panel title alignment** — resolved by the build-632 M2 empty-
+  state fix (all single-value panels now render the same way).
+  Verified visually in build-633 deploy.
+- **L2 active-tab 1px nudge** — fixed via CSS rule
+  `.wl-cp-tab, .wl-cp-tab.btn-primary { border: 1px solid transparent;
+  padding: 5px 14px; }`. The active tab no longer shifts content by
+  1 px when state toggles between `btn` and `btn-primary` (Splunk
+  bundle ships them with different border specs).
+
+### Migration / rollback
+
+Class-rename + element-rename only; click handlers find by `#id` or
+`data-` attribute, so JS event flow is unchanged. Rollback: `git
+revert` the build-633 commit and redeploy at the next build number.
+The `.wl-btn-locked` opacity helper is preserved.
+
+---
+
 ## Unreleased — 2026-05-01 (build 632, UI consistency sweep)
 
 ### UI consistency: button taxonomy + audit dashboard polish (builds 631-632)

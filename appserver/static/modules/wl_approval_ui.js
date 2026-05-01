@@ -413,16 +413,16 @@ function applyPendingHighlighting() {
                             ' &mdash; ' + _.escape(displayReason) +
                         '</span>' +
                         (isSelfRequest
-                            ? '<span class="btn btn-warning wl-cancel-request-btn" data-id="' +
-                                _.escape(pa.request_id) + '" style="background:#f39c12;color:#fff">Cancel Request</span>'
-                            : '<span class="btn btn-success wl-approve-btn" data-id="' +
-                                _.escape(pa.request_id) + '">Approve</span>' +
-                              '<span class="btn btn-danger wl-reject-btn" data-id="' +
-                                _.escape(pa.request_id) + '">Reject</span>'
+                            ? '<button type="button" class="btn btn-warning wl-cancel-request-btn" data-id="' +
+                                _.escape(pa.request_id) + '">Cancel Request</button>'
+                            : '<button type="button" class="btn btn-success wl-approve-btn" data-id="' +
+                                _.escape(pa.request_id) + '">Approve</button>' +
+                              '<button type="button" class="btn btn-danger wl-reject-btn" data-id="' +
+                                _.escape(pa.request_id) + '">Reject</button>'
                         ) +
                         (hasRowHighlight
-                            ? '<span class="btn btn-small wl-filter-requested" data-idx="' + paIdx +
-                              '" style="margin-left:8px;cursor:pointer">Show Requested Rows</span>'
+                            ? '<button type="button" class="btn btn-small wl-filter-requested" data-idx="' + paIdx +
+                              '" style="margin-left:8px;cursor:pointer">Show Requested Rows</button>'
                             : '') +
                     '</div>';
             });
@@ -555,14 +555,14 @@ function renderAdditionPreview() {
         // Pagination controls
         if (totalPages > 1) {
             html += '<div style="margin-top:8px;display:flex;align-items:center;gap:8px">';
-            html += '<span class="btn btn-small wl-preview-prev"' +
+            html += '<button type="button" class="btn btn-small wl-preview-prev"' +
                 (additionPreviewPage <= 0 ? ' style="opacity:0.4;pointer-events:none"' : '') +
-                '>&laquo; Prev</span>';
+                '>&laquo; Prev</button>';
             html += '<span style="font-size:12px">Page ' + (additionPreviewPage + 1) + ' of ' +
                 totalPages + ' (' + total + ' rows)</span>';
-            html += '<span class="btn btn-small wl-preview-next"' +
+            html += '<button type="button" class="btn btn-small wl-preview-next"' +
                 (additionPreviewPage >= totalPages - 1 ? ' style="opacity:0.4;pointer-events:none"' : '') +
-                '>Next &raquo;</span>';
+                '>Next &raquo;</button>';
             html += '</div>';
         }
         html += '</div>';

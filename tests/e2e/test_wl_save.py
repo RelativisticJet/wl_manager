@@ -277,8 +277,8 @@ class TestRowRemovalUndo:
             ta = modal.locator("textarea").first
             if ta.is_visible():
                 ta.fill("E2E removal")
-            # Confirm button is span.btn-danger with text "Remove"
-            modal.locator("span.btn-danger").first.click()
+            # Confirm button is .btn-danger with text "Remove"
+            modal.locator(".btn-danger").first.click()
             page.wait_for_timeout(2000)
 
     def test_remove_shows_undo_bar(self, page: Page):
@@ -339,8 +339,8 @@ class TestBulkRemoval:
                     ta = modal.locator("textarea").first
                     if ta.is_visible():
                         ta.fill("E2E bulk removal")
-                    # Bulk removal confirm is span.btn-danger (like single remove)
-                    modal.locator("span.btn-danger, span.btn-primary").first.click()
+                    # Bulk removal confirm is .btn-danger (like single remove)
+                    modal.locator(".btn-danger, .btn-primary").first.click()
                     page.wait_for_timeout(3000)
 
                     final = page.locator("#csv-table-container tbody tr").count()
@@ -374,7 +374,7 @@ class TestColumnAddition:
             name_input.fill("TestCol")
             page.wait_for_timeout(200)
 
-            modal.locator("span.btn-primary").first.click()
+            modal.locator(".btn-primary").first.click()
             page.wait_for_timeout(3000)
 
             # Verify header appeared
@@ -415,7 +415,7 @@ class TestColumnRemovalUndo:
             ta.fill("E2E col removal test")
             page.wait_for_timeout(200)
 
-            modal.locator("span.btn-danger").first.click()
+            modal.locator(".btn-danger").first.click()
             page.wait_for_timeout(2000)
 
             # Two valid outcomes:

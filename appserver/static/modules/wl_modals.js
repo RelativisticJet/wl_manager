@@ -157,10 +157,10 @@ define([
                     '<div class="wl-char-counter" data-for="wl-remove-reason">0 / 500</div>' +
                 '</div>' +
                 '<div style="display:flex;gap:8px;justify-content:flex-end">' +
-                    '<span class="btn" id="wl-remove-confirm" ' +
-                        'style="background:#e74c3c;color:#fff;cursor:pointer">Remove</span>' +
-                    '<span class="btn" id="wl-remove-cancel" ' +
-                        'style="cursor:pointer">Cancel</span>' +
+                    '<button type="button" class="btn btn-danger" id="wl-remove-confirm" ' +
+                        'style="cursor:pointer">Remove</button>' +
+                    '<button type="button" class="btn" id="wl-remove-cancel" ' +
+                        'style="cursor:pointer">Cancel</button>' +
                 '</div>' +
             '</div></div>';
 
@@ -267,8 +267,8 @@ define([
                         '<div id="wl-new-rule-error" style="color:#ef9a9a;font-size:12px;margin-top:6px;display:none"></div>' +
                     '</div>' +
                     '<div class="wl-modal-actions">' +
-                        '<span class="btn btn-primary" id="wl-new-rule-ok">Next</span> ' +
-                        '<span class="btn" id="wl-new-rule-cancel">Cancel</span>' +
+                        '<button type="button" class="btn btn-primary" id="wl-new-rule-ok">Next</button> ' +
+                        '<button type="button" class="btn" id="wl-new-rule-cancel">Cancel</button>' +
                     '</div>' +
                 '</div>' +
             '</div>';
@@ -372,8 +372,8 @@ define([
                     '<div class="wl-char-counter" data-for="wl-approval-reason-text">0 / 500</div>' +
                     '<div id="wl-approval-reason-error" class="wl-msg-error" style="display:none;margin-top:6px"></div>' +
                     '<div class="wl-modal-actions" style="margin-top:12px">' +
-                        '<span class="btn btn-primary" id="wl-approval-reason-ok">Submit Request</span> ' +
-                        '<span class="btn" id="wl-approval-reason-cancel">Cancel</span>' +
+                        '<button type="button" class="btn btn-primary" id="wl-approval-reason-ok">Submit Request</button> ' +
+                        '<button type="button" class="btn" id="wl-approval-reason-cancel">Cancel</button>' +
                     '</div>' +
                 '</div>' +
             '</div>';
@@ -435,7 +435,7 @@ define([
                                 '<label>Import from CSV file</label>' +
                                 '<div class="wl-import-file-row">' +
                                     '<input type="file" accept=".csv" id="wl-import-file" class="wl-import-file-hidden" />' +
-                                    '<span class="btn wl-import-file-btn" id="wl-import-file-trigger">Choose File</span>' +
+                                    '<button type="button" class="btn wl-import-file-btn" id="wl-import-file-trigger">Choose File</button>' +
                                     '<span class="wl-import-file-name" id="wl-import-file-label">No file chosen</span>' +
                                     '<span class="wl-import-clear" id="wl-import-clear" style="display:none">Clear</span>' +
                                 '</div>' +
@@ -471,8 +471,8 @@ define([
                             '<div id="wl-import-preview" style="display:none"></div>' +
                         '</div>' +
                         '<div class="wl-modal-actions">' +
-                            '<span class="btn btn-primary" id="wl-create-csv-ok">Create</span> ' +
-                            '<span class="btn" id="wl-create-csv-cancel">Cancel</span>' +
+                            '<button type="button" class="btn btn-primary" id="wl-create-csv-ok">Create</button> ' +
+                            '<button type="button" class="btn" id="wl-create-csv-cancel">Cancel</button>' +
                         '</div>' +
                     '</div>' +
                 '</div>';
@@ -769,8 +769,8 @@ define([
                         '<div class="wl-char-counter" data-for="wl-rmrow-reason">0 / 500</div>' +
                     '</div>' +
                     '<div class="wl-modal-actions">' +
-                        '<span class="btn ' + confirmClass + '" id="wl-rmrow-ok" style="opacity:0.5;pointer-events:none">' + _.escape(confirmText) + '</span> ' +
-                        '<span class="btn" id="wl-rmrow-cancel">Cancel</span>' +
+                        '<button type="button" class="btn ' + confirmClass + '" id="wl-rmrow-ok" style="opacity:0.5;pointer-events:none">' + _.escape(confirmText) + '</button> ' +
+                        '<button type="button" class="btn" id="wl-rmrow-cancel">Cancel</button>' +
                     '</div>' +
                 '</div>' +
             '</div>';
@@ -829,8 +829,8 @@ define([
                         '<div class="wl-char-counter" data-for="wl-rmcol-reason">0 / 500</div>' +
                     '</div>' +
                     '<div class="wl-modal-actions">' +
-                        '<span class="btn btn-danger" id="wl-rmcol-ok" style="opacity:0.5;pointer-events:none">Remove</span> ' +
-                        '<span class="btn" id="wl-rmcol-cancel">Cancel</span>' +
+                        '<button type="button" class="btn btn-danger" id="wl-rmcol-ok" style="opacity:0.5;pointer-events:none">Remove</button> ' +
+                        '<button type="button" class="btn" id="wl-rmcol-cancel">Cancel</button>' +
                     '</div>' +
                 '</div>' +
             '</div>';
@@ -880,8 +880,8 @@ define([
                         '<p>Request ID: <strong>' + _.escape(requestId) + '</strong></p>' +
                     '</div>' +
                     '<div class="wl-modal-actions">' +
-                        '<span class="btn btn-success" id="wl-approve-ok">Approve</span> ' +
-                        '<span class="btn" id="wl-approve-cancel">Cancel</span>' +
+                        '<button type="button" class="btn btn-success" id="wl-approve-ok">Approve</button> ' +
+                        '<button type="button" class="btn" id="wl-approve-cancel">Cancel</button>' +
                     '</div>' +
                 '</div>' +
             '</div>'
@@ -935,9 +935,9 @@ define([
                         '<div class="wl-char-counter" data-for="wl-inline-reject-reason">0 / 500</div>' +
                     '</div>' +
                     '<div class="wl-modal-actions">' +
-                        '<span class="btn btn-danger" id="wl-inline-reject-ok" ' +
-                            'style="opacity:0.5;pointer-events:none">Reject</span> ' +
-                        '<span class="btn" id="wl-inline-reject-cancel">Cancel</span>' +
+                        '<button type="button" class="btn btn-danger" id="wl-inline-reject-ok" ' +
+                            'style="opacity:0.5;pointer-events:none">Reject</button> ' +
+                        '<button type="button" class="btn" id="wl-inline-reject-cancel">Cancel</button>' +
                     '</div>' +
                 '</div>' +
             '</div>'
@@ -1009,9 +1009,9 @@ define([
                         '<div class="wl-char-counter" data-for="wl-inline-cancel-reason">0 / 500</div>' +
                     '</div>' +
                     '<div class="wl-modal-actions">' +
-                        '<span class="btn" id="wl-inline-cancel-ok" ' +
-                            'style="background:#f39c12;color:#fff;opacity:0.5;pointer-events:none">Cancel Request</span> ' +
-                        '<span class="btn" id="wl-inline-cancel-dismiss">Close</span>' +
+                        '<button type="button" class="btn btn-warning" id="wl-inline-cancel-ok" ' +
+                            'style="opacity:0.5;pointer-events:none">Cancel Request</button> ' +
+                        '<button type="button" class="btn" id="wl-inline-cancel-dismiss">Close</button>' +
                     '</div>' +
                 '</div>' +
             '</div>'
@@ -1121,8 +1121,8 @@ define([
                         datePickerHtml +
                     '</div>' +
                     '<div class="wl-modal-actions">' +
-                        '<span class="btn btn-primary" id="wl-bulk-apply">Apply</span> ' +
-                        '<span class="btn" id="wl-bulk-cancel">Cancel</span>' +
+                        '<button type="button" class="btn btn-primary" id="wl-bulk-apply">Apply</button> ' +
+                        '<button type="button" class="btn" id="wl-bulk-cancel">Cancel</button>' +
                     '</div>' +
                 '</div>' +
             '</div>';
