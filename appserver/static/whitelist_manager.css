@@ -9,10 +9,13 @@
  * re-introduce a `:root` light block and a `body.wl-dark` override
  * block, then re-enable brightness-based detection in `wl_ui.js`.
  *
- * Existing `.wl-dark X` selectors throughout this file are left in
- * place because they continue to match (JS always applies the
- * `wl-dark` class to body). They're functionally redundant and can
- * be flattened to plain `X` selectors in a follow-up cleanup pass.
+ * Build 637 follow-up: flattened the 13 `.wl-dark X` selectors to
+ * plain `X` selectors. The dark values were merged into the base
+ * rules; the redundant `.wl-dark`-prefixed override blocks were
+ * deleted. `wl_ui.js :: detectDarkTheme()` still applies `wl-dark`
+ * to <body> for any external code that might key off the class
+ * (Splunk plugins, future debugging hooks), but no in-app CSS rule
+ * depends on the class anymore.
  */
 
 
@@ -333,9 +336,6 @@ td.wl-col-rownum {
     height: 16px;
     cursor: pointer;
     accent-color: #5cc05c;
-    color-scheme: light;
-}
-.wl-dark .wl-col-check input[type="checkbox"] {
     color-scheme: dark;
 }
 
@@ -932,11 +932,6 @@ body.wl-resizing * {
 /* Matching cells during search — highlighted border + subtle background */
 .wl-cell-match {
     border-color: #f9a825 !important;
-    background-color: #fff9c4 !important;
-}
-
-.wl-dark .wl-cell-match {
-    border-color: #f9a825 !important;
     background-color: #3b3000 !important;
 }
 
@@ -1115,8 +1110,8 @@ body.wl-resizing * {
     align-items: center;
     gap: 8px;
     padding: 6px 10px;
-    background: var(--wl-info-bg);
-    border: 1px solid var(--wl-info-border);
+    background: #1a237e30;
+    border: 1px solid #3949ab;
     border-radius: 4px;
     margin-bottom: 6px;
     font-size: 13px;
@@ -1132,16 +1127,7 @@ body.wl-resizing * {
 }
 
 .wl-cell-edited {
-    background: #fff8e1 !important;
-}
-
-.wl-dark .wl-cell-edited {
     background: #3e2723 !important;
-}
-
-body.wl-dark .wl-bulk-edit-bar {
-    background: #1a237e30;
-    border-color: #3949ab;
 }
 
 /* ── Drag and Drop ────────────────────────────────────────────────── */
@@ -1214,46 +1200,25 @@ body.wl-dragging-active {
 /* ── Pending Approval Highlights (Orange) ─────────────────────────── */
 
 tr.wl-pending-approval {
-    background-color: #fff3e0 !important;
-}
-
-tr.wl-pending-approval:hover {
-    background-color: #ffe0b2 !important;
-}
-
-tr.wl-pending-approval .wl-input {
-    background-color: #fff8e1;
-}
-
-th.wl-pending-approval-header {
-    background-color: #fff3e0 !important;
-    color: #333 !important;
-}
-
-.wl-table.wl-pending-approval-table {
-    outline: 3px solid #ff9800;
-    outline-offset: 2px;
-}
-
-.wl-dark tr.wl-pending-approval {
     background-color: #3e2200 !important;
 }
 
-.wl-dark tr.wl-pending-approval:hover {
+tr.wl-pending-approval:hover {
     background-color: #4a2a00 !important;
 }
 
-.wl-dark tr.wl-pending-approval .wl-input {
+tr.wl-pending-approval .wl-input {
     background-color: #3b2000;
 }
 
-.wl-dark th.wl-pending-approval-header {
+th.wl-pending-approval-header {
     background-color: #3e2200 !important;
     color: #ffd699 !important;
 }
 
-.wl-dark .wl-table.wl-pending-approval-table {
-    outline-color: #e65100;
+.wl-table.wl-pending-approval-table {
+    outline: 3px solid #e65100;
+    outline-offset: 2px;
 }
 
 /* ── Locked button (pending approval) ────────────────────────────── */
@@ -1370,8 +1335,8 @@ th.wl-pending-approval-header {
 .wl-approval-bar {
     margin: 8px 0;
     padding: 10px 12px;
-    background: #fff8e1;
-    border: 1px solid #ffe082;
+    background: #3e2723;
+    border: 1px solid #e65100;
     border-radius: 4px;
 }
 .wl-approval-item {
@@ -1381,7 +1346,7 @@ th.wl-pending-approval-header {
     padding: 6px 0;
 }
 .wl-approval-item + .wl-approval-item {
-    border-top: 1px solid #ffe082;
+    border-top: 1px solid #e65100;
     margin-top: 6px;
     padding-top: 10px;
 }
@@ -1398,18 +1363,8 @@ th.wl-pending-approval-header {
 }
 .wl-approval-self-note {
     font-style: italic;
-    color: #e65100;
-    white-space: nowrap;
-}
-.wl-dark .wl-approval-self-note {
     color: #ffb74d;
-}
-.wl-dark .wl-approval-bar {
-    background: #3e2723;
-    border-color: #e65100;
-}
-.wl-dark .wl-approval-item + .wl-approval-item {
-    border-top-color: #e65100;
+    white-space: nowrap;
 }
 
 /* ── Control Panel tab bar ────────────────────────────────────────── */
@@ -1450,7 +1405,7 @@ th.wl-pending-approval-header {
 }
 
 .wl-addition-preview {
-    background: var(--wl-bg-alt, #f8f9fa);
+    background: #2a2a2a;
     border: 2px solid var(--wl-pending-border, #e67e22);
     border-radius: 6px;
     padding: 12px;
@@ -1461,9 +1416,6 @@ th.wl-pending-approval-header {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-.wl-dark .wl-addition-preview {
-    background: #2a2a2a;
 }
 
 /* ── CSV Import Section ───────────────────────────────────────── */

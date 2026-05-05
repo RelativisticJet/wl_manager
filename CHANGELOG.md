@@ -64,6 +64,59 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-01 (build 638, flatten redundant `.wl-dark X` selectors)
+
+### Cleanup follow-up: zero `.wl-dark X` selectors remain in CSS
+
+Build 637 previously collapsed `:root` light + `body.wl-dark` dark blocks
+to a single `:root`, but left 13 `.wl-dark X` selectors throughout
+`whitelist_manager.css` as harmless redundancy (they always match
+because `wl-dark` is unconditionally applied). Build 638 flattens
+these into their corresponding base rules.
+
+For each pair `X { ...light values... }` + `.wl-dark X { ...dark
+values... }`, the dark values were merged into the base rule and
+the `.wl-dark X` block deleted. Net: 13 fewer rules, ~50 fewer
+CSS lines, single source of truth per element.
+
+Specific elements flattened (all visually verified post-flatten
+against expected dark values):
+
+- `.wl-col-check input[type="checkbox"]` (`color-scheme: dark`)
+- `.wl-cell-match` (bg `#3b3000`, border `#f9a825`)
+- `.wl-cell-edited` (bg `#3e2723`)
+- `.wl-bulk-edit-bar` (bg `#1a237e30`, border `#3949ab`)
+- `tr.wl-pending-approval` (bg `#3e2200`)
+- `tr.wl-pending-approval:hover` (bg `#4a2a00`)
+- `tr.wl-pending-approval .wl-input` (bg `#3b2000`)
+- `th.wl-pending-approval-header` (bg `#3e2200`, color `#ffd699`)
+- `.wl-table.wl-pending-approval-table` (outline `#e65100` 3px solid)
+- `.wl-approval-self-note` (color `#ffb74d`)
+- `.wl-approval-bar` (bg `#3e2723`, border `#e65100`)
+- `.wl-approval-item + .wl-approval-item` (border-top `#e65100`)
+- `.wl-addition-preview` (bg `#2a2a2a`)
+
+`wl_ui.js :: detectDarkTheme()` still applies `wl-dark` to `<body>`
+unconditionally — kept as a no-op marker for any external code
+(Splunk plugins, future debug hooks) that might key off the class.
+No in-app CSS rule depends on the class anymore.
+
+### Verification
+
+Browser-tested all 13 clusters via DOM injection of test elements
+and `getComputedStyle()` snapshots. Every property matches the
+build-637 dark value exactly. Whitelist Manager, Control Panel,
+and Audit Trail all render identically to the previously-shipped build 637.
+
+### Migration / rollback
+
+Per-cluster reversion is straightforward: re-introduce the `.wl-dark X`
+override block and revert the base rule's properties to the
+pre-flatten light values. Files affected: `whitelist_manager.css`
+only.
+
+---
+
 ## Unreleased — 2026-05-01 (build 637, dark-only theme + final palette unification)
 
 ### Theme: dark-only (light-theme support removed)
