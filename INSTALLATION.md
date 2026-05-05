@@ -17,7 +17,7 @@ These are table-stakes and must work for the app to function:
 | Write access to `$SPLUNK_HOME/etc/apps/wl_manager/lookups/` | CSV editing is the core feature |
 | Write access to `$SPLUNK_HOME/etc/apps/wl_manager/lookups/_versions/` | Version snapshots, tamper-resistant signed state |
 | Read/write on the `wl_audit` index | Audit trail + FIM alerts live here |
-| The `wl_admin`, `wl_superadmin`, `wl_editor` roles (bundled `authorize.conf`) | RBAC |
+| RBAC roles bundled in `default/authorize.conf` (run `grep '^\[role_' default/authorize.conf` for the live list) | Tier-based access control: superadmin / admin / analyst-editor / analyst-viewer / editor / viewer |
 | KV store collections `wl_cooldowns`, `wl_fim_baseline` (bundled `collections.conf`) | Tamper-resistant state |
 
 All of these are installed automatically when you deploy the app bundle.

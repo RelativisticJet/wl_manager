@@ -42,7 +42,7 @@ Built for SOC teams who need to manage detection rule exceptions without touchin
 - Row drag-and-drop reordering
 - CSV import/export
 - Search and filter rows
-- Dark and light theme support
+- Polished dark theme (light theme intentionally removed in build 637 (2026-05-01) — see CHANGELOG)
 
 ### Approval Workflows
 

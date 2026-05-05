@@ -223,8 +223,8 @@ into:
 - `README.md` — "Verifying a downloaded release" section
 - `INSTALLATION.md` — recommended verification step before
   `splunk install app`
-- `SECURITY.md` — under the existing "Distribution integrity"
-  section in `docs/SBOM.md`
+- `docs/SBOM.md` — append under the existing
+  "## Distribution integrity" section
 
 Use the EXACT command that worked in Step 2 — paraphrased versions
 that look right but use slightly different flags create support

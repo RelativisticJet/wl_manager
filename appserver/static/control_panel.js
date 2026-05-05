@@ -185,14 +185,18 @@ require([
         if (xhr && (xhr.status === 403 || xhr.status === 401)) {
             showAccessDenied();
         } else {
-            $("#wl-cp-loading").html(
-                '<div style="padding:20px;color:#ffc107;text-align:center;">' +
-                '<p style="font-size:18px;font-weight:bold;">Error loading Control Panel</p>' +
-                '<p>The server may be restarting or temporarily unavailable. ' +
-                'Please try refreshing the page.</p>' +
-                '<button type="button" class="btn btn-primary" style="margin-top:10px;' +
-                'cursor:pointer;" onclick="location.reload()">Refresh</button></div>'
-            );
+            $("#wl-cp-loading")
+                .html(
+                    '<div class="wl-error-card">' +
+                    '<p class="wl-error-card-title">Error loading Control Panel</p>' +
+                    '<p class="wl-error-card-message">' +
+                    'The server may be restarting or temporarily unavailable. ' +
+                    'Please try refreshing the page.</p>' +
+                    '<button type="button" class="btn btn-primary" ' +
+                    'id="wl-cp-error-refresh">Refresh</button></div>'
+                )
+                .find("#wl-cp-error-refresh")
+                .on("click", function () { location.reload(); });
         }
     });
 
@@ -433,10 +437,10 @@ require([
         var pendingStart = pendingPage * PAGE_SIZE;
         var pendingSlice = allPending.slice(pendingStart, pendingStart + PAGE_SIZE);
 
-        html += '<h3 style="margin:12px 0 8px">Pending Requests (' + pendingTotal + '/20)</h3>';
+        html += '<h3 class="wl-section-header">Pending Requests (' + pendingTotal + '/20)</h3>';
 
         if (!pendingTotal) {
-            html += '<p style="color:var(--wl-muted,#888)">No pending approval requests.</p>';
+            html += '<p class="wl-empty-state">No pending approval requests.</p>';
         } else {
             // Wrap the table in an overflow-x:auto container so wide
             // tables (9 columns × 260px max-width = ~1700px+) scroll inside
@@ -512,7 +516,7 @@ require([
         var historyStart = historyPage * PAGE_SIZE;
         var historySlice = allResolved.slice(historyStart, historyStart + PAGE_SIZE);
 
-        html += '<h3 style="margin:20px 0 8px">Recent History (' + historyTotal + '/100)</h3>';
+        html += '<h3 class="wl-section-header">Recent History (' + historyTotal + '/100)</h3>';
         if (historyTotal) {
             // Same horizontal-scroll wrapper as the Pending table — Recent
             // History has 11 columns and is even more prone to viewport overflow.
@@ -563,7 +567,7 @@ require([
                 html += renderPagination(historyPage, historyPages, historyTotal, "history");
             }
         } else {
-            html += '<p style="color:var(--wl-muted,#888)">No resolved requests yet.</p>';
+            html += '<p class="wl-empty-state">No resolved requests yet.</p>';
         }
 
         $("#wl-cp-approval-queue").html(html);
@@ -863,7 +867,7 @@ require([
         } else if (at === "admin_mass_usage_reset") {
             return meta + renderAdminMassUsageResetPreview(item);
         }
-        return meta + '<p style="color:var(--wl-muted,#888)">No data preview available for this action type.</p>';
+        return meta + '<p class="wl-empty-state">No data preview available for this action type.</p>';
     }
 
     // ── Helpers ──
@@ -902,7 +906,7 @@ require([
         var headers = hl.headers || payload.headers || [];
         var rowKeys = hl.row_keys || [];
         if (!headers.length || !rowKeys.length) {
-            return '<p style="color:var(--wl-muted,#888)">No row data stored in this request.</p>';
+            return '<p class="wl-empty-state">No row data stored in this request.</p>';
         }
         var label = '<p style="color:#27ae60;margin:0 0 6px"><strong>' +
             rowKeys.length + ' row(s) to be added:</strong></p>';
@@ -924,7 +928,7 @@ require([
         var headers = hl.headers || payload.headers || [];
         var rowKeys = hl.row_keys || [];
         if (!headers.length || !rowKeys.length) {
-            return '<p style="color:var(--wl-muted,#888)">No row data stored in this request.</p>';
+            return '<p class="wl-empty-state">No row data stored in this request.</p>';
         }
         var reasons = (payload.bulk_removal || []).map(function (r) { return r.reason || ""; });
         var label = '<p style="color:#e74c3c;margin:0 0 6px"><strong>' +
@@ -961,7 +965,7 @@ require([
         var newRows = payload.rows || [];
 
         if (!headers.length) {
-            return '<p style="color:var(--wl-muted,#888)">No row data stored in this request.</p>';
+            return '<p class="wl-empty-state">No row data stored in this request.</p>';
         }
 
         // PRIMARY PATH: diff mode using initial_rows vs rows
@@ -1036,7 +1040,7 @@ require([
             return fbLabel + fbHtml + truncationNote(rowKeys.length, PREVIEW_ROW_LIMIT);
         }
 
-        return '<p style="color:var(--wl-muted,#888)">No row data stored in this request.</p>';
+        return '<p class="wl-empty-state">No row data stored in this request.</p>';
     }
 
     // ── Column removal: show which column and sample data ──
@@ -1045,7 +1049,7 @@ require([
         var headers = payload.headers || [];
         var rows = payload.initial_rows || payload.rows || [];
         if (!colName) {
-            return '<p style="color:var(--wl-muted,#888)">Column name not stored in this request.</p>';
+            return '<p class="wl-empty-state">Column name not stored in this request.</p>';
         }
         var label = '<p style="color:#e74c3c;margin:0 0 6px"><strong>Column to be removed: ' +
             _.escape(colName) + '</strong></p>';
@@ -1096,7 +1100,7 @@ require([
         var headers = payload.headers || [];
         var rows = payload.initial_rows || payload.rows || [];
         if (!headers.length) {
-            return '<p style="color:var(--wl-muted,#888)">No import data stored in this request.</p>';
+            return '<p class="wl-empty-state">No import data stored in this request.</p>';
         }
         var label = '<p style="color:#8e44ad;margin:0 0 6px"><strong>Import will replace CSV with ' +
             rows.length + ' row(s):</strong></p>';
@@ -1127,7 +1131,7 @@ require([
             html += '</tbody></table>';
             html += truncationNote(rows.length, PREVIEW_ROW_LIMIT);
         } else {
-            html += '<p style="color:var(--wl-muted,#888)">No initial data (empty CSV).</p>';
+            html += '<p class="wl-empty-state">No initial data (empty CSV).</p>';
         }
         return html;
     }
@@ -1474,7 +1478,7 @@ require([
                 'data-info="' + _.escape(text) + '">i</span>';
         }
 
-        var html = '<h3 style="margin:12px 0 8px">Analyst Settings</h3>';
+        var html = '<h3 class="wl-section-header">Analyst Settings</h3>';
         html += '<div style="max-width:820px">';
         fields.forEach(function (f) {
             var val = limits[f.key] !== undefined ? limits[f.key] : 10;
@@ -2052,7 +2056,7 @@ require([
 
     function renderLimitHistory(history) {
         var html = '<div id="wl-cp-limit-history" style="margin-top:20px">';
-        html += '<h3 style="margin:12px 0 8px">Recent Changes</h3>';
+        html += '<h3 class="wl-section-header">Recent Changes</h3>';
 
         if (!history || !history.length) {
             html += '<p style="color:var(--wl-text-muted,#888);font-size:13px">' +
@@ -2210,11 +2214,11 @@ require([
         var startIdx = usagePage * USAGE_PER_PAGE;
         var pageAnalysts = analysts.slice(startIdx, startIdx + USAGE_PER_PAGE);
 
-        var html = '<h3 style="margin:12px 0 8px">Analyst Usage for ' +
+        var html = '<h3 class="wl-section-header">Analyst Usage for ' +
                    _.escape(date) + '</h3>';
 
         if (!analysts.length) {
-            html += '<p style="color:var(--wl-muted,#888)">No activity recorded today.</p>';
+            html += '<p class="wl-empty-state">No activity recorded today.</p>';
         } else {
             html += '<table class="wl-table"><thead><tr><th style="text-align:left">Analyst</th>';
             USAGE_COLUMNS.forEach(function (col) {
@@ -2350,7 +2354,7 @@ require([
     }
 
     function renderTrashTable(items, autoPurged) {
-        var html = '<h3 style="margin:8px 0 12px">Trash (' +
+        var html = '<h3 class="wl-section-header">Trash (' +
             items.length + ' items)</h3>';
 
         if (autoPurged > 0) {
@@ -2604,7 +2608,7 @@ require([
                 'data-info="' + _.escape(text) + '">i</span>';
         }
 
-        var html = '<h3 style="margin:8px 0 4px">Admin Settings</h3>' +
+        var html = '<h3 class="wl-section-header">Admin Settings</h3>' +
             '<p style="color:var(--wl-muted,#888);font-size:12px;margin-bottom:12px">' +
             'These limits restrict admin actions per period. Super-admins are exempt. ' +
             'Set 0 to disable the action entirely.</p>';
@@ -2918,7 +2922,7 @@ require([
 
     function renderAdminLimitHistory(history) {
         var html = '<div id="wl-cp-admin-limit-history" style="margin-top:20px">';
-        html += '<h3 style="margin:12px 0 8px">Recent Changes</h3>';
+        html += '<h3 class="wl-section-header">Recent Changes</h3>';
 
         if (!history || !history.length) {
             html += '<p style="color:var(--wl-text-muted,#888);font-size:13px">' +

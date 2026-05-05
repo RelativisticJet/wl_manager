@@ -1042,6 +1042,39 @@ body.wl-resizing * {
     padding: 20px 0;
 }
 
+/* Inline empty-state copy ("No pending approval requests.", "No data
+ * preview available."). Distinct from `.wl-muted` which is the
+ * DOMINANT empty state (table area filled with "This CSV is empty").
+ * Inline empty states live inside tab sections, between a section
+ * heading and the next section, so they need to be quiet — color-only,
+ * no italic, browser-default <p> spacing. Build 639. */
+.wl-empty-state {
+    color: var(--wl-text-muted);
+}
+
+/* Error card for "Control Panel failed to load" type messages.
+ * Build 639: replaces inline-styled centered yellow box (#ffc107
+ * was off-palette and didn't match the dark theme). Uses the
+ * existing --wl-err-* tokens so the visual matches every other
+ * "something went wrong" message in the app (form validation
+ * errors, save failures, etc.). */
+.wl-error-card {
+    padding: 20px;
+    text-align: center;
+    background: var(--wl-err-bg);
+    border: 1px solid var(--wl-err-border);
+    border-radius: 6px;
+    color: var(--wl-err-text);
+}
+.wl-error-card .wl-error-card-title {
+    font-size: 18px;
+    font-weight: bold;
+    margin: 0 0 8px;
+}
+.wl-error-card .wl-error-card-message {
+    margin: 0 0 12px;
+}
+
 .wl-link {
     cursor: pointer;
     text-decoration: underline;
@@ -1365,6 +1398,23 @@ th.wl-pending-approval-header {
     font-style: italic;
     color: #ffb74d;
     white-space: nowrap;
+}
+
+/* ── Section heading (Control Panel tabs) ─────────────────────────────
+ * Build 639 (2026-05-06): standardized 8 inline-styled <h3 style="margin:...">
+ * tags inside `control_panel.js` to a single class. Three different margin
+ * patterns drifted across tab content (`12px 0 8px`, `20px 0 8px`,
+ * `8px 0 12px`, `8px 0 4px`); all are now `12px 0 8px` for vertical
+ * rhythm consistency. The minor structural reasons for the outliers
+ * (Trash/Admin at top of a tab, Recent History wanting breathing room)
+ * are intentionally given up for whole-app visual consistency.
+ *
+ * The class is intentionally minimal — `<h3>` already provides
+ * font-weight: bold and font-size ~1.17em via browser defaults, so
+ * we only need to standardize margin.
+ */
+.wl-section-header {
+    margin: 12px 0 8px;
 }
 
 /* ── Control Panel tab bar ────────────────────────────────────────── */

@@ -64,6 +64,89 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-06 (build 639, pre-release polish round)
+
+### UI hygiene: standardize section headers, empty states, and error card
+
+Round-up of small inconsistencies surfaced during the open-source
+pre-release audit. None are functional bugs — purely visual /
+maintenance polish.
+
+- **Section header drift** — 8 inline `<h3 style="margin:...">` tags in
+  `control_panel.js` used three different margin patterns
+  (`12px 0 8px`, `20px 0 8px`, `8px 0 12px`, `8px 0 4px`). Standardized
+  on a single `.wl-section-header` class (`margin: 12px 0 8px`).
+- **Empty-state token bug** — 12 `<p style="color:var(--wl-muted,#888)">`
+  callsites referenced `--wl-muted`, which is **not defined** anywhere
+  in the CSS — the `#888` fallback always won, so empty-state copy
+  rendered as slate gray regardless of the dark theme tokens. Migrated
+  to a `.wl-empty-state` class that uses the actually-defined
+  `--wl-text-muted` token.
+- **Error card** — Control Panel "failed to load" error rendered as a
+  centered yellow box (`#ffc107`) with inline styling and an inline
+  `onclick="location.reload()"`. Now uses a `.wl-error-card` class with
+  the existing `--wl-err-*` palette (matches every other "something
+  went wrong" surface in the app), and the Refresh button binds via a
+  delegated jQuery handler instead of inline `onclick`. Future-proofs
+  for any CSP nonce/strict-dynamic policy a deployment might layer on.
+
+### Repo hygiene: remove screenshot debris + extend `.gitignore`
+
+- Removed 11 PNG files left at the repo root by the Chrome browser
+  tool's `screenshot` action (saved without a file extension when a
+  bare name was passed). All confirmed unused — no doc, README, or
+  source file referenced any of them.
+- Extended `.gitignore` with forward-looking patterns
+  (`/build-*`, `/cp-[0-9]*-*`, `/wm-[0-9]*-*`, `/at-[0-9]*-*`,
+  `/[0-9][0-9][0-9]-*`, plus the specific debris filenames) so the
+  same pattern can't accumulate again.
+- Removed 15 additional PNG screenshot debris files
+  (`add-row-3.png`, `at-01-04-*.png`, `cp-01-05-*.png`,
+  `create-rule-form*.png`, `csv-loaded.png`) that were
+  already gitignored by the `/*.png` rule but still cluttering
+  the working tree. These were unused — no markdown, HTML, or
+  source file referenced them.
+
+### Documentation polish
+
+- **README**: corrected stale claim "Dark and light theme support"
+  to "Polished dark theme (light theme intentionally removed in
+  build 637 (2026-05-01) — see CHANGELOG)". The light-theme line had
+  been left over from before the previously-shipped build-637
+  dark-only decision.
+- **README screenshots refreshed (3 of 4)**:
+  - `docs/screenshots/01-main-dashboard.png` — captured at build 639
+    showing dark theme + DR20 rule loaded
+  - `docs/screenshots/03-audit-trail.png` — full audit dashboard
+    fullpage capture at build 639
+  - `docs/screenshots/04-control-panel.png` — full Control Panel
+    Approval Queue tab fullpage at build 639
+  - `docs/screenshots/02-inline-editing.png` — **NOT refreshed**.
+    Captures cell-edit state which needs interactive click + cell
+    selection that's hard to script reliably in headless mode.
+    Recommend manual recapture before public release: open WM,
+    load any rule with rows, click into a cell, edit a value so
+    the highlight is visible, then screenshot.
+- **RELEASE_CHECKLIST.md** Step 5 wording fix: "in `SECURITY.md`
+  under the existing 'Distribution integrity' section in
+  `docs/SBOM.md`" was a confused two-file reference. Corrected to
+  "append under the existing '## Distribution integrity' section"
+  in `docs/SBOM.md` only (where the section actually lives).
+
+### Migration / rollback
+
+- CSS: revert by re-introducing inline `style="margin:..."` on the 8
+  `<h3>` callsites and `style="color:var(--wl-muted,#888)"` on the 12
+  empty-state callsites, then delete the three new classes from
+  `whitelist_manager.css`. Error card revert: restore the inline
+  `onclick="location.reload()"` block. Files affected:
+  `control_panel.js`, `whitelist_manager.css`.
+- `.gitignore`: revert by removing the build-639 stanza. The deleted
+  PNGs are recoverable from git history if needed (none were
+  committed; they were untracked when removed).
+
+---
+
 ## Unreleased — 2026-05-01 (build 638, flatten redundant `.wl-dark X` selectors)
 
 ### Cleanup follow-up: zero `.wl-dark X` selectors remain in CSS
@@ -71,8 +154,8 @@ Detailed per-round entries below.
 Build 637 previously collapsed `:root` light + `body.wl-dark` dark blocks
 to a single `:root`, but left 13 `.wl-dark X` selectors throughout
 `whitelist_manager.css` as harmless redundancy (they always match
-because `wl-dark` is unconditionally applied). Build 638 flattens
-these into their corresponding base rules.
+because `wl-dark` is unconditionally applied). Build 638 (2026-05-01)
+flattened these into their corresponding base rules.
 
 For each pair `X { ...light values... }` + `.wl-dark X { ...dark
 values... }`, the dark values were merged into the base rule and
