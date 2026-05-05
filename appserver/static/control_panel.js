@@ -307,7 +307,7 @@ require([
                 $banner = $("#wl-cp-lockdown-banner");
             }
             if (lockdown.locked) {
-                var html = '<div style="background:#c0392b;color:#fff;padding:12px 16px;' +
+                var html = '<div style="background:#a93226;color:#fff;padding:12px 16px;' +
                     'border-radius:6px;margin-bottom:12px;display:flex;' +
                     'align-items:center;justify-content:space-between">' +
                     '<div>' +
@@ -471,7 +471,7 @@ require([
                             ? '<button type="button" class="btn btn-small btn-warning wl-cp-cancel-btn" ' +
                                 'data-id="' + _.escape(item.request_id) + '" ' +
                                 'style="margin-right:4px">Cancel</button>'
-                            : '<button type="button" class="btn btn-small btn-success wl-cp-approve-btn" ' +
+                            : '<button type="button" class="btn btn-small btn-primary wl-cp-approve-btn" ' +
                                 'data-id="' + _.escape(item.request_id) + '" ' +
                                 'data-dual="' + (item.is_dual_admin ? 'true' : 'false') + '" ' +
                                 'style="margin-right:4px">Approve</button>' +
@@ -486,7 +486,7 @@ require([
                     '<td style="white-space:nowrap">' +
                         '<button type="button" class="btn btn-small wl-cp-show-data-btn" ' +
                             'data-id="' + _.escape(item.request_id) + '" ' +
-                            'style="background:#3498db;color:#fff;margin-right:4px"' +
+                            'style="margin-right:4px"' +
                             '>Show Data</button>' +
                         (item.csv_file && item.csv_file !== "__rule_operation__"
                             ? '<button type="button" class="btn btn-small wl-cp-download-btn" ' +
@@ -553,8 +553,7 @@ require([
                     // New Inspect column — Show Data button aligned across all rows.
                     '<td style="white-space:nowrap">' +
                         '<button type="button" class="btn btn-small wl-cp-show-data-btn" ' +
-                            'data-id="' + _.escape(item.request_id) + '" ' +
-                            'style="background:#3498db;color:#fff"' +
+                            'data-id="' + _.escape(item.request_id) + '"' +
                             '>Show Data</button>' +
                     '</td></tr>';
             });
@@ -1682,13 +1681,13 @@ require([
         // Buttons row
         html += '<div style="margin-top:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
         html += '<button type="button" class="btn btn-primary" id="wl-cp-save-limits">Save Changes</button>';
-        html += '<button type="button" class="btn" id="wl-cp-save-as-default" ' +
-                'style="background:#3498db;color:#fff">Save as Default</button>';
+        html += '<button type="button" class="btn" id="wl-cp-save-as-default">' +
+                'Save as Default</button>';
         if (customDefaults) {
             html += '<button type="button" class="btn btn-danger" id="wl-cp-reset-limits">' +
                     'Reset to Custom Defaults</button>';
-            html += '<button type="button" class="btn" id="wl-cp-reset-factory" ' +
-                    'style="background:#95a5a6;color:#fff">Reset to Factory Defaults</button>';
+            html += '<button type="button" class="btn" id="wl-cp-reset-factory">' +
+                    'Reset to Factory Defaults</button>';
         } else {
             html += '<button type="button" class="btn btn-danger" id="wl-cp-reset-limits">' +
                     'Reset to Defaults</button>';
@@ -2111,7 +2110,7 @@ require([
                         'font-size:10px;font-weight:600;padding:1px 6px;border-radius:3px;' +
                         'margin-right:6px">FACTORY</span>';
                 } else if (isReset) {
-                    badge = '<span style="display:inline-block;background:#e74c3c;color:#fff;' +
+                    badge = '<span style="display:inline-block;background:#a93226;color:#fff;' +
                         'font-size:10px;font-weight:600;padding:1px 6px;border-radius:3px;' +
                         'margin-right:6px">RESET</span>';
                 }
@@ -2166,7 +2165,7 @@ require([
         if (c >= limit) {
             return '<span style="color:#e74c3c;font-weight:600">' + c +
                 '</span> <span style="display:inline-block;font-size:10px;padding:1px 5px;' +
-                'border-radius:3px;background:#e74c3c;color:#fff;font-weight:600;' +
+                'border-radius:3px;background:#a93226;color:#fff;font-weight:600;' +
                 'vertical-align:middle;margin-left:3px">LIMIT</span>';
         }
         return '<span>' + c + '</span>';
@@ -2985,26 +2984,24 @@ require([
     // ══════════════════════════════════════════════════════════════════
 
     function showCpPrompt(title, message, onConfirm) {
+        // Build 634: refactored to use the same wl-modal-header / -body /
+        // -actions structure as showCpConfirm. The earlier inline-style
+        // version drifted from the standard pattern (wrong padding, wrong
+        // bg fallback, wrong width) and rendered with reversed button
+        // order [Cancel] [OK]. Now matches every other modal in the app.
         var html =
-            '<div class="wl-modal-overlay" id="wl-cp-prompt-overlay" ' +
-            'style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10000;' +
-            'display:flex;align-items:center;justify-content:center">' +
-            '<div class="wl-modal" style="background:var(--wl-bg-main,#1a1c1e);' +
-            'border:1px solid var(--wl-border,#444);border-radius:8px;padding:24px;' +
-            'width:450px;max-width:90%">' +
-            '<h3 style="margin:0 0 8px;color:var(--wl-text,#e0e0e0)">' +
-            _.escape(title) + '</h3>' +
-            '<p style="margin:0 0 12px;color:var(--wl-muted,#888)">' +
-            _.escape(message) + '</p>' +
-            '<input type="text" id="wl-cp-prompt-input" style="width:100%;padding:8px;' +
-            'background:var(--wl-bg-row,#23272b);color:var(--wl-text,#e0e0e0);' +
-            'border:1px solid var(--wl-border,#444);border-radius:4px;margin-bottom:12px;' +
-            'box-sizing:border-box">' +
-            '<div style="text-align:right">' +
-            '<button type="button" class="btn" id="wl-cp-prompt-cancel" style="cursor:pointer;margin-right:8px">' +
-            'Cancel</button>' +
-            '<button type="button" class="btn btn-primary" id="wl-cp-prompt-ok" style="cursor:pointer">' +
-            'OK</button></div></div></div>';
+            '<div class="wl-modal-overlay" id="wl-cp-prompt-overlay">' +
+            '<div class="wl-modal">' +
+                '<div class="wl-modal-header">' + _.escape(title) + '</div>' +
+                '<div class="wl-modal-body">' +
+                    '<p style="margin:0 0 12px">' + _.escape(message) + '</p>' +
+                    '<input type="text" id="wl-cp-prompt-input" class="wl-modal-input">' +
+                '</div>' +
+                '<div class="wl-modal-actions">' +
+                    '<button type="button" class="btn btn-primary" id="wl-cp-prompt-ok">OK</button> ' +
+                    '<button type="button" class="btn" id="wl-cp-prompt-cancel">Cancel</button>' +
+                '</div>' +
+            '</div></div>';
 
         $("body").append(html);
         $("#wl-cp-prompt-input").focus();

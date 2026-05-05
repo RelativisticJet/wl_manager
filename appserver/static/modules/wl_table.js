@@ -331,7 +331,7 @@ define([
         html += '<button class="btn btn-primary' + lkCls + '" id="btn-add-col"' + lkAttr + '>+ Add Column</button> ';
         html += '<button class="btn btn-primary' + lkCls + '" id="btn-bulk-edit" disabled="disabled">Bulk Edit</button> ';
         html += '<button class="btn btn-danger' + lkCls + '" id="btn-remove-selected" disabled="disabled">Remove Selected</button> ';
-        html += '<button class="btn btn-success' + lkCls + '" id="btn-save"' + lkAttr + '>Save Changes</button> ';
+        html += '<button class="btn btn-primary' + lkCls + '" id="btn-save"' + lkAttr + '>Save Changes</button> ';
         html += '<button class="btn' + lkCls + '"             id="btn-discard"' + lkAttr + '>Discard Changes</button>';
         html += '<span class="wl-buttons-right">';
         html += '<button class="btn" id="btn-export" title="Download current CSV">Export CSV</button> ';

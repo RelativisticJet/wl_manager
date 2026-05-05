@@ -436,7 +436,7 @@ define([
         var html =
             '<div class="wl-modal-overlay">' +
             '<div class="wl-modal" style="max-width:480px">' +
-                '<h3 style="margin-top:0">Audit Comment Required</h3>' +
+                '<div class="wl-modal-header">Audit Comment Required</div>' +
                 '<p style="font-size:13px;color:var(--wl-text-secondary,#888);margin:0 0 12px">' +
                     'This CSV does not have a "Comment" column.<br>' +
                     'Please provide a reason for this change (max 500 chars).<br>' +
@@ -448,11 +448,11 @@ define([
                     'border-radius:3px;background:var(--wl-bg-input);color:var(--wl-text);' +
                     'resize:vertical" placeholder="Reason for this change\u2026"></textarea>' +
                 '<div class="wl-char-counter" data-for="wl-audit-comment-input">0 / 500</div>' +
-                '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">' +
-                    '<button type="button" class="btn btn-primary" id="wl-audit-comment-ok" ' +
-                        'style="cursor:pointer">OK</button>' +
-                    '<button type="button" class="btn" id="wl-audit-comment-cancel" ' +
-                        'style="cursor:pointer">Cancel</button>' +
+                '<div class="wl-modal-actions" style="margin-top:12px">' +
+                    '<button type="button" class="btn btn-primary" id="wl-audit-comment-ok">' +
+                        'OK</button>' +
+                    '<button type="button" class="btn" id="wl-audit-comment-cancel">' +
+                        'Cancel</button>' +
                 '</div>' +
             '</div></div>';
 

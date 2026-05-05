@@ -127,7 +127,7 @@ define([
         var html =
             '<div class="wl-modal-overlay">' +
             '<div class="wl-modal" style="max-width:520px">' +
-                '<h3 style="margin-top:0">' + title + '</h3>' +
+                '<div class="wl-modal-header">' + title + '</div>' +
                 summaryHtml +
                 '<div style="margin-bottom:12px">' +
                     '<label style="display:block;margin-bottom:8px;cursor:pointer">' +
@@ -156,11 +156,11 @@ define([
                         'resize:vertical" placeholder="Why is this being removed?"></textarea>' +
                     '<div class="wl-char-counter" data-for="wl-remove-reason">0 / 500</div>' +
                 '</div>' +
-                '<div style="display:flex;gap:8px;justify-content:flex-end">' +
-                    '<button type="button" class="btn btn-danger" id="wl-remove-confirm" ' +
-                        'style="cursor:pointer">Remove</button>' +
-                    '<button type="button" class="btn" id="wl-remove-cancel" ' +
-                        'style="cursor:pointer">Cancel</button>' +
+                '<div class="wl-modal-actions">' +
+                    '<button type="button" class="btn btn-danger" id="wl-remove-confirm">' +
+                        'Remove</button>' +
+                    '<button type="button" class="btn" id="wl-remove-cancel">' +
+                        'Cancel</button>' +
                 '</div>' +
             '</div></div>';
 
@@ -362,7 +362,7 @@ define([
         var html =
             '<div class="wl-modal-overlay wl-approval-reason-overlay">' +
                 '<div class="wl-modal" style="max-width:440px">' +
-                    '<h3 style="margin:0 0 8px">Approval Required</h3>' +
+                    '<div class="wl-modal-header">Approval Required</div>' +
                     '<p style="margin:0 0 12px;font-size:13px;color:var(--wl-text-muted,#999)">' +
                         'This action requires admin approval. Please provide a reason for: ' +
                         '<strong>' + _.escape(actionLabel) + '</strong></p>' +
@@ -880,7 +880,7 @@ define([
                         '<p>Request ID: <strong>' + _.escape(requestId) + '</strong></p>' +
                     '</div>' +
                     '<div class="wl-modal-actions">' +
-                        '<button type="button" class="btn btn-success" id="wl-approve-ok">Approve</button> ' +
+                        '<button type="button" class="btn btn-primary" id="wl-approve-ok">Approve</button> ' +
                         '<button type="button" class="btn" id="wl-approve-cancel">Cancel</button>' +
                     '</div>' +
                 '</div>' +

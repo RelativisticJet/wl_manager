@@ -64,6 +64,252 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-01 (build 637, dark-only theme + final palette unification)
+
+### Theme: dark-only (light-theme support removed)
+
+The app has been dark-first for its entire history; light-mode paths
+were half-implemented (the modal-overlay had its own duplicate
+`--wl-bg` block, several inline-styled elements assumed dark bg, and
+no test passes covered the light-bg case). Rather than complete the
+light-theme work, removed it:
+
+- Collapsed `:root` (light defaults) and `body.wl-dark` (dark
+  overrides) into a single `:root` block in
+  `whitelist_manager.css`. Net: ~70 lines deleted, no duplication.
+- Removed the `body.wl-dark > .wl-modal-overlay` re-tightening block
+  (modals now inherit all vars from `:root` directly).
+- Simplified `wl_ui.js :: detectDarkTheme()` to unconditionally
+  apply `wl-dark` to `<body>` and return `true`. The 19 existing
+  `.wl-dark X` selectors in `whitelist_manager.css` continue to
+  match because the class is always present — they're functionally
+  redundant but harmless and can be flattened in a follow-up.
+
+Rationale: open-source release target, no paying customers, no
+demand for light theme. Collapsing the parallel theme system
+removes a class of failure modes (the half-converted state seen
+during the build-636 light-theme test) and simplifies the CSS.
+
+Reversal cost: medium — re-introduce `:root` light vars, re-add
+the `body.wl-dark` selector wrapping, restore the brightness check
+in `detectDarkTheme()`.
+
+### UI consistency: drift sweep across Audit Trail + Control Panel
+
+Beyond the modal hygiene shipped in build 636, this build sweeps
+remaining inline-style drift in the dashboards:
+
+**Audit Trail** (`default/data/ui/views/audit.xml` + `audit_trail.js`):
+
+- "Close Details" span had hardcoded inline `background:#c0392b`
+  (vivid Bootstrap red) and was missing keyboard a11y. Migrated to
+  `class="btn btn-danger" role="button" tabindex="0"` matching the
+  rest of the app's destructive-button styling. Added `keydown`
+  handler in `audit_trail.js` for Enter/Space activation.
+- Splunk strips `<button>` from SimpleXML `<html>` panels (CLAUDE.md
+  documented Splunk quirk), so this control has to remain a `<span>`
+  — the role/tabindex/key-handler combo gives it minimal a11y parity.
+
+**Control Panel** (`control_panel.js`):
+
+- Lockdown banner: vivid `#c0392b` → muted `#a93226` (matches
+  `.btn-danger` family).
+- "Show Data" buttons (queue list, history list): removed inline
+  `background:#3498db;color:#fff` so they default to Splunk's `.btn`
+  grey. Show Data is a neutral inspection action — doesn't fit
+  primary/danger/warning roles.
+- "Save as Default" / "Reset to Factory Defaults": same treatment —
+  removed vivid blue/grey inline backgrounds, default to `.btn` grey.
+- LIMIT badge / RESET badge: vivid `#e74c3c` → muted `#a93226`.
+- LIMIT-reached count text: stays at vivid `#e74c3c` (text on dark
+  bg needs higher contrast — muted red would fail AA).
+- FACTORY badge (grey `#95a5a6`): unchanged, doesn't conflict.
+
+### Modal hygiene round 2
+
+Two more modals had inline-style "actions row" divs replicating
+`.wl-modal-actions` styling:
+
+- `wl_modals.js:159` — Remove rule/CSV modal actions row
+- `wl_save.js:451` — Audit Comment Required modal actions row
+
+Migrated both to `class="wl-modal-actions"`. Now ALL 19+ dialog
+modals render their button row through the shared class.
+
+### Focus ring colour: harmonized with Splunk's accent
+
+`.btn:focus-visible` outline changed from `#2962ff` (vivid blue)
+to `#2196f3` (Material Blue 500). Splunk's bundled accent is
+`#006eaa` but contrast on our dark bg is only 2.97:1 — just below
+WCAG 1.4.11's 3:1 minimum for focus indicators. `#2196f3` stays in
+the Splunk-blue family, gives 6.0:1 contrast, and is distinct from
+every button colour (green/red/orange) so the focus ring never
+visually merges with the button it surrounds.
+
+### Notification badge unified with `.btn-danger` palette
+
+`.wl-notif-badge` background changed from `#e74c3c` (vivid Bootstrap
+red) to `#a93226` (muted, matches `.btn-danger`). Single-red-family
+palette across buttons + badges + banners. Contrast against white
+text: 7.66:1 (excellent for the 16x16 px badge).
+
+### `.btn-warning` semantic role documented
+
+Reviewed the 4 `.btn-warning` callsites — all "Cancel pending
+approval request" actions. Decision: KEEP `.btn-warning` for these
+sites because they have external impact (admins watching the queue
+see the request disappear), which fits the "reversible but
+consequential" semantic that warns/oranges traditionally signal.
+The CSS comment now spells out: reserve `.btn-warning` for actions
+that affect more than the immediate dialog; use plain `.btn` grey
+for dismiss-this-modal interactions.
+
+### Migration / rollback
+
+- Light-theme: re-add `:root` light vars, re-add `body.wl-dark`
+  override block, restore brightness check in `detectDarkTheme()`.
+  Estimated 30 minutes if reverting becomes necessary.
+- Drift sweep: per-callsite single-line revert. All edits are
+  surface-level visual changes — no behaviour change beyond colour.
+- Focus ring: revert one hex value in CSS.
+
+---
+
+## Unreleased — 2026-05-01 (build 636, audit follow-up: contrast + modal hygiene)
+
+### Accessibility: `.btn-warning` AA contrast (gap 2)
+
+The build-634 desaturation pass set `.btn-warning` to `#bf6516` for less
+eye-fatigue, which improved the visual but DROPPED the contrast against
+white text from 5.9:1 (vivid `#e65100`) to 4.04:1 — below WCAG AA's
+4.5:1 floor for normal text. Hover (`#d67828`) was even worse at 3.0:1.
+Fixed by darkening to `#a85710` (5.20:1) and `#b25d12` (4.69:1). Border
+darkened to `#7a3f0c` to keep the visual hierarchy.
+
+The button stays muted (still distinguishable from `.btn-danger`'s
+muted red `#a93226` via hue) and now passes AA on both default and
+hover states. Disabled state is intentionally below AA per WCAG 1.4.3
+exemption for inactive UI components — that lower contrast IS the
+"disabled" signal.
+
+### Modal hygiene: 3 header drifts → standard structure (gap 4)
+
+Three modals were rendering their title via `<h3 style="margin-top:0">`
+inline-styled tag instead of the standard `.wl-modal-header` class:
+
+- `wl_modals.js:130` — Remove rule/CSV modal
+- `wl_modals.js:365` — "Approval Required" reason prompt
+- `wl_save.js:439` — "Audit Comment Required" save prompt
+
+These rendered with subtly-different font size (browser-default `<h3>`
+~18px) than the rest of the app's modals (`.wl-modal-header` is 15px,
+600 weight). All three migrated to `<div class="wl-modal-header">`.
+Width-tuning inline styles (`max-width:520px` etc.) were preserved
+since they're per-modal sizing, not drift.
+
+### Button-order audit (gap 5)
+
+After the build-634 `showCpPrompt` fix, ALL 19 dialog modals across
+`control_panel.js`, `wl_modals.js`, `wl_versions.js`, `wl_presence.js`,
+`wl_save.js`, `wl_csv_io.js`, `wl_table.js` follow the
+`[Primary] [Cancel]` DOM order. The Import-CSV modal at
+`wl_csv_io.js:694` uses `[Replace] [Merge] [Cancel]` (3 buttons,
+destructive option leftmost) — deliberate UX choice, not drift.
+
+### E2E test impact (gap 3)
+
+Zero E2E test files (`tests/e2e/*.cjs`) reference `btn-success`. The
+build-635 class rename is safe.
+
+### Light-theme verification (gap 1)
+
+Button colours (`.btn.btn-primary`, `.btn.btn-danger`, `.btn.btn-warning`)
+use explicit hex values, NOT CSS variables — they render identically
+in light and dark themes. Brand colours for "destructive red" and
+"warning orange" should not flip between themes. Modal backgrounds
+DO use `var(--wl-bg)` etc. and switch correctly via the existing
+`body.wl-dark` override.
+
+### Migration / rollback
+
+- Revert this change set: revert the CHANGELOG entry, revert
+  `whitelist_manager.css` warning hex values to `#bf6516`/`#d67828`,
+  revert the 3 `<h3 style=...>` → `<div class="wl-modal-header">`
+  edits, bump back to the previous build (originally build 635).
+
+---
+
+## Unreleased — 2026-05-01 (build 635, kill `.btn-success` parallel taxonomy)
+
+### UI consistency: collapse green buttons to Splunk's `.btn-primary`
+
+Build 634 originally desaturated `.btn-success` to `#388e3c`, but `.btn-primary`
+(used for "+ Add Row", "+ Add Column") stayed at Splunk's bundled vivid
+`#1a8929`. Result: same toolbar showed two slightly-different greens
+(Save Changes vs Add Row) — the user flagged this as visible drift.
+
+Fixed by killing `.btn-success` entirely and migrating all 5 callsites
+to `.btn-primary`:
+
+- `appserver/static/control_panel.js:474` — Approve button (queue list)
+- `appserver/static/modules/wl_approval_ui.js:418` — Approve (notification panel)
+- `appserver/static/modules/wl_modals.js:883` — Approve modal
+- `appserver/static/modules/wl_table.js:334` — Save Changes button
+- `appserver/static/whitelist_manager.css:1306-1352` — `.btn.btn-success`
+  rule + hover + disabled-state selector removed
+
+All green buttons in the app now share Splunk's bundled `.btn-primary`
+(`#1a8929`). Same playbook as the 2026-05-01 `.wl-btn` kill: don't
+maintain a parallel CSS taxonomy if a Splunk-bundled equivalent works.
+
+`.btn-danger` (muted brick red `#a93226`) and `.btn-warning` (muted
+orange `#bf6516` — historical, superseded in build 636) remain in CSS because
+Splunk's bundle ships these classes unstyled.
+
+### Migration / rollback
+
+- Revert: re-add the `.btn.btn-success` rule (with desired shade) to
+  `whitelist_manager.css`, revert the 5 callsite class strings.
+
+---
+
+## Unreleased — 2026-05-01 (build 634, separator fix + modal refactor + initial desaturation)
+
+### Bug 1: Save Changes separator rendering inside button
+
+The build-632 toolbar separator used `::before` with `display:inline-block`
+which rendered the vertical bar INSIDE the button content box (visible
+as a stray `|` to the left of "Save Changes" text). Fixed by switching
+to `position: absolute` with `left: -14px`, taking the separator
+OUTSIDE the button. Required adding `position: relative` to `#btn-save`.
+
+### Bug 2: Lockdown prompt modal incoherence + reversed button order
+
+`showCpPrompt` (used by Activate Emergency Lockdown and similar
+text-input prompts) was rendered with heavy inline styles overriding
+the standard `.wl-modal` styling AND had button order `[Cancel] [OK]`
+— reversed from every other modal in the app (`[Primary] [Cancel]`).
+
+Refactored to use the standard `wl-modal-header` / `wl-modal-body` /
+`wl-modal-actions` structure (matching `showCpConfirm` reference
+pattern at `control_panel.js:110-125`) and swapped to `[OK] [Cancel]`.
+
+### Bug 3: Desaturate destructive button palette (initial pass)
+
+User-reported eye fatigue from the vivid `.btn-danger` red (`#c62828`)
+across high-density screens (Approval Queue, Trash, Admin Settings).
+Muted to Material-Design-style brick red `#a93226`. Same desaturation
+applied to `.btn-warning` (`#e65100` → `#bf6516`) and `.btn-success`
+(`#1a8929` → `#388e3c`). Build 635 reverted `.btn-success`; build 636
+re-tightened `.btn-warning` for AA contrast.
+
+### Migration / rollback
+
+- All three changes revert by reverting CSS hex values and the
+  `showCpPrompt` refactor in `control_panel.js`.
+
+---
+
 ## Unreleased — 2026-05-01 (build 633, accessibility + L1/L2 follow-up)
 
 ### Accessibility: span → button migration (audit finding L3)

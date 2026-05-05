@@ -12,19 +12,17 @@ define(["jquery", "underscore"], function ($, _) {
     var msgTimer      = null;
 
     // ── Dark theme detection ────────────────────────────────────────
-    // Splunk loads separate CSS for dark/light — no body class by default.
-    // Returns true if dark theme is active.
+    // Build 637: dark-only theme. The previous brightness-based detection
+    // was load-bearing for a half-implemented light mode that produced
+    // visual mismatches. Light theme support was ripped out (CSS :root +
+    // body.wl-dark blocks collapsed to single :root). This function now
+    // unconditionally tags <body> with .wl-dark so the existing 19
+    // .wl-dark X selectors in whitelist_manager.css continue to match.
+    // Returns true so callers that gate panel-class application
+    // (whitelist_manager.js:69-71) keep working unchanged.
     function detectDarkTheme() {
-        var bg = window.getComputedStyle(document.body).backgroundColor;
-        var m = bg.match(/(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
-        if (m) {
-            var brightness = (parseInt(m[1]) + parseInt(m[2]) + parseInt(m[3])) / 3;
-            if (brightness < 128) {
-                $("body").addClass("wl-dark");
-                return true;
-            }
-        }
-        return false;
+        $("body").addClass("wl-dark");
+        return true;
     }
 
     // ── Message banner ──────────────────────────────────────────────

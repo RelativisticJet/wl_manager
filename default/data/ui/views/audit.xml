@@ -706,7 +706,7 @@
       </table>
       <html>
         <div style="padding: 6px 12px;">
-          <span id="wl-close-details" style="display:inline-block;padding:4px 12px;background:#c0392b;color:#fff;border-radius:4px;font-size:12px;cursor:pointer;font-weight:600;user-select:none">Close Details</span>
+          <span id="wl-close-details" class="btn btn-danger" role="button" tabindex="0" style="cursor:pointer;user-select:none">Close Details</span>
         </div>
       </html>
     </panel>

@@ -415,7 +415,7 @@ function applyPendingHighlighting() {
                         (isSelfRequest
                             ? '<button type="button" class="btn btn-warning wl-cancel-request-btn" data-id="' +
                                 _.escape(pa.request_id) + '">Cancel Request</button>'
-                            : '<button type="button" class="btn btn-success wl-approve-btn" data-id="' +
+                            : '<button type="button" class="btn btn-primary wl-approve-btn" data-id="' +
                                 _.escape(pa.request_id) + '">Approve</button>' +
                               '<button type="button" class="btn btn-danger wl-reject-btn" data-id="' +
                                 _.escape(pa.request_id) + '">Reject</button>'

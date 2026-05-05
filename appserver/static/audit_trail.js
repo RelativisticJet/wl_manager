@@ -165,6 +165,16 @@ require([
     $(document).on("click", "#wl-close-details", function () {
         hideDetailPanel();
     });
+    // Build 637: keyboard support for role="button" span. Splunk's
+    // SimpleXML strips <button> elements inside <html> panels, so this
+    // close control has to be a span. The role + tabindex + key handler
+    // gives it minimal a11y parity (Enter/Space to activate).
+    $(document).on("keydown", "#wl-close-details", function (e) {
+        if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            hideDetailPanel();
+        }
+    });
     // Also try direct binding with polling (in case jQuery delegation
     // doesn't reach Splunk HTML panel content for some reason)
     function bindCloseButton() {

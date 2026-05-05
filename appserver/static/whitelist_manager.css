@@ -2,56 +2,23 @@
  * Whitelist Manager — Styles
  * Scoped with the .wl- prefix to avoid collisions with Splunk's own CSS.
  *
- * Theme support: JS detects Splunk's dark/light mode and sets .wl-dark
- * on the container. All themed values use CSS custom properties.
+ * Theme: dark only. Build 637 (2026-05-01) removed light-theme support
+ * because the half-implemented light path produced visual mismatches
+ * (modals would render light on dark page chrome) and we have no
+ * intent to support light mode in production. Reversal cost: medium —
+ * re-introduce a `:root` light block and a `body.wl-dark` override
+ * block, then re-enable brightness-based detection in `wl_ui.js`.
+ *
+ * Existing `.wl-dark X` selectors throughout this file are left in
+ * place because they continue to match (JS always applies the
+ * `wl-dark` class to body). They're functionally redundant and can
+ * be flattened to plain `X` selectors in a follow-up cleanup pass.
  */
 
 
-/* ── Theme Variables ─────────────────────────────────────────────────── */
+/* ── Theme Variables (single source: dark) ─────────────────────────── */
 
-/* Light theme (default) */
 :root {
-    --wl-bg:              #fff;
-    --wl-bg-alt:          #fafafa;
-    --wl-bg-input:        #fff;
-    --wl-bg-disabled:     #f5f5f5;
-    --wl-bg-hover:        #f5f9ff;
-    --wl-bg-dropdown-hover: #e3f2fd;
-    --wl-bg-selected:     #c8e6c9;
-    --wl-text:            #333;
-    --wl-text-secondary:  #555;
-    --wl-text-muted:      #999;
-    --wl-text-selected:   inherit;
-    --wl-border:          #ccc;
-    --wl-border-light:    #e0e0e0;
-    --wl-border-divider:  #f0f0f0;
-    --wl-border-section:  #ddd;
-    --wl-thead-bg:        #333;
-    --wl-thead-text:      #fff;
-    --wl-thead-border:    #222;
-    --wl-shadow:          rgba(0, 0, 0, 0.15);
-    --wl-err-bg:          #ffebee;
-    --wl-err-border:      #ef9a9a;
-    --wl-err-text:        #b71c1c;
-    --wl-ok-bg:           #e8f5e9;
-    --wl-ok-border:       #a5d6a7;
-    --wl-ok-text:         #1b5e20;
-    --wl-info-bg:         #e3f2fd;
-    --wl-info-border:     #90caf9;
-    --wl-info-text:       #0d47a1;
-    --wl-warn-bg:         #fff3e0;
-    --wl-warn-border:     #ffcc80;
-    --wl-warn-text:       #e65100;
-    --wl-diff-bg:         #fafafa;
-    --wl-diff-add:        #2e7d32;
-    --wl-diff-rm:         #c62828;
-    --wl-expired-bg:      #fff9c4;
-    --wl-expired-hover:   #fff59d;
-    --wl-expired-input:   #fffde7;
-}
-
-/* Dark theme — activated by .wl-dark on any ancestor */
-.wl-dark {
     --wl-bg:              #1a1c20;
     --wl-bg-alt:          #111315;
     --wl-bg-input:        #111315;
@@ -532,14 +499,24 @@ body.wl-resizing * {
  * groups previously sat in one undifferentiated row with colour as
  * the only signal of role. The separator + extra margin establishes
  * a clear semantic boundary without restructuring the HTML.
- * (See 2026-04-30 UI consistency audit, finding M4-M5.) */
+ * (See 2026-04-30 UI consistency audit, finding M4-M5.)
+ *
+ * The separator is positioned ABSOLUTE so it sits OUTSIDE the
+ * button's content box. An earlier `display:inline-block` version
+ * rendered inside the button as a stray vertical bar (build 633
+ * regression, fixed in build 634). */
+.wl-buttons #btn-save {
+    position: relative;
+    margin-left: 24px;
+}
 .wl-buttons #btn-save::before {
     content: "";
-    display: inline-block;
+    position: absolute;
+    left: -14px;
+    top: 25%;
+    bottom: 25%;
     border-left: 1px solid var(--wl-border-section);
-    margin-right: 12px;
-    height: 22px;
-    vertical-align: middle;
+    pointer-events: none;
 }
 
 .wl-buttons-right .btn {
@@ -1056,16 +1033,11 @@ body.wl-resizing * {
     margin-top: 4px;
 }
 
-/* Modals are appended to <body>, outside the .wl-dark panel scope.
-   Dark theme detection also adds .wl-dark to <body>, so modals inherit. */
-body.wl-dark > .wl-modal-overlay {
-    --wl-bg:              #1a1c20;
-    --wl-bg-alt:          #111315;
-    --wl-bg-input:        #111315;
-    --wl-text:            #e0e0e0;
-    --wl-text-secondary:  #aaa;
-    --wl-border:          #333;
-}
+/* Modal-overlay theme block was removed in build 637. The overlay
+ * inherits all CSS variables from `:root` directly now that dark is
+ * the only theme. The block previously also re-tightened `--wl-border`
+ * to #333 (vs the general #444); we kept the general value because
+ * the visual difference is negligible and one less inconsistency. */
 
 /* ── Misc ───────────────────────────────────────────────────────────── */
 
@@ -1292,45 +1264,60 @@ th.wl-pending-approval-header {
 }
 
 /* ── Button colour rules ───────────────────────────────────────────────
- * Splunk's bundled CSS only ships .btn and .btn-primary. .btn-success,
- * .btn-danger, and .btn-warning silently fall back to .btn grey without
- * these rules. Without them, every "Approve / Reject / Remove / Purge"
- * button in the app rendered the same grey as Cancel — destructive
- * actions had no colour signal. (See 2026-04-30 UI consistency audit
- * and Decision Log entry.)
+ * Splunk's bundled CSS only ships .btn and .btn-primary. .btn-danger
+ * and .btn-warning silently fall back to .btn grey without these
+ * rules; we add them so destructive / cancel-request actions get the
+ * right colour signal. .btn-success is intentionally NOT defined here
+ * — every green button in the app uses Splunk's bundled .btn-primary
+ * (vivid #1a8929) for consistency with the rest of the dashboard.
  *
- * Specificity is `.btn.btn-X` so these override the base .btn rule but
- * not inline style overrides. Hover/disabled states are explicit so
- * disabled doesn't fall back to the failing-AA Splunk default.
+ * Build 634/635 history: muted palette introduced for eye-fatigue,
+ * but only the destructive (.btn-danger) and cancel-request
+ * (.btn-warning) shades survived the user review — green was
+ * reverted to Splunk's bundled to keep all positive actions in the
+ * same shade. Red + orange stayed muted because the user
+ * specifically called out the previous saturated red as the worst
+ * eye-fatigue offender. (See 2026-05-01 UI consistency audit
+ * follow-up.)
+ *
+ * Specificity is `.btn.btn-X` so these override the base .btn rule
+ * but not inline style overrides. Hover/disabled states are explicit
+ * so disabled doesn't fall back to the failing-AA Splunk default.
  */
-.btn.btn-success {
-    background-color: #1a8929;
-    color: #fff;
-    border: 1px solid #146a20;
-}
-.btn.btn-success:hover:not([disabled]):not(.wl-btn-locked) {
-    background-color: #20a532;
-    border-color: #1a8929;
-}
-
 .btn.btn-danger {
-    background-color: #c62828;
+    background-color: #a93226;
     color: #fff;
-    border: 1px solid #8e1d1d;
+    border: 1px solid #862519;
 }
 .btn.btn-danger:hover:not([disabled]):not(.wl-btn-locked) {
-    background-color: #d83232;
-    border-color: #c62828;
+    background-color: #b9392b;
+    border-color: #a93226;
 }
 
+/* Build 636: warning bg darkened from #bf6516 (4.04:1 vs #fff, BELOW AA)
+ * to #a85710 (5.20:1, AA pass). Hover similarly darkened from #d67828
+ * (3.0:1) to #b25d12 (4.69:1). The previous palette was muted-but-
+ * inaccessible — looked fine to colour-sighted users but failed AA
+ * for screen-reader / low-vision users on default-state buttons.
+ * Keeping the muted feel (still distinct from #a93226 danger red via
+ * hue) while restoring AA compliance.
+ *
+ * `.btn-warning` semantic role (build 637 doc): cautionary actions
+ * that affect more than the immediate dialog — currently only the
+ * "Cancel pending approval request" flow (4 callsites). Admins watch
+ * the queue, so withdrawing a request has external impact even
+ * though it's not data-destructive. Reserve `.btn-warning` for this
+ * "reversible but consequential" semantic; do NOT use it for plain
+ * "Cancel this dialog" interactions (those use `.btn` grey).
+ */
 .btn.btn-warning {
-    background-color: #e65100;
+    background-color: #a85710;
     color: #fff;
-    border: 1px solid #b34000;
+    border: 1px solid #7a3f0c;
 }
 .btn.btn-warning:hover:not([disabled]):not(.wl-btn-locked) {
-    background-color: #f57c00;
-    border-color: #e65100;
+    background-color: #b25d12;
+    border-color: #a85710;
 }
 
 /* Disabled-state contrast fix.
@@ -1341,8 +1328,6 @@ th.wl-pending-approval-header {
  */
 .btn.btn-primary[disabled],
 .btn.btn-primary.wl-btn-locked,
-.btn.btn-success[disabled],
-.btn.btn-success.wl-btn-locked,
 .btn.btn-danger[disabled],
 .btn.btn-danger.wl-btn-locked,
 .btn.btn-warning[disabled],
@@ -1356,9 +1341,15 @@ th.wl-pending-approval-header {
  * buttons were converted from `<span class="btn">` to
  * `<button type="button" class="btn">` in build 633 so they're
  * tab-focusable; this rule makes the focus indicator visible.
- * Uses the existing accent token so light/dark themes match. */
+ *
+ * Build 637: harmonized colour with Splunk's accent `#006eaa` family.
+ * Picked `#2196f3` (Material Blue 500) instead of Splunk's exact
+ * `#006eaa` because the latter has only 2.97:1 contrast on our dark
+ * bg (just below WCAG 1.4.11 3:1). `#2196f3` gives 6.0:1, stays in
+ * the Splunk-blue family, and is distinct from every button colour
+ * (green/red/orange) so the focus ring never blends with the button. */
 .btn:focus-visible {
-    outline: 2px solid #2962ff;
+    outline: 2px solid #2196f3;
     outline-offset: 2px;
 }
 
@@ -1656,10 +1647,15 @@ th.wl-pending-approval-header {
     opacity: 0.8;
 }
 .wl-notif-badge {
+    /* Build 637: unified with .btn-danger muted red #a93226 (was #e74c3c
+     * vivid Bootstrap red). Contrast against white text is 7.66:1
+     * (excellent), keeping the badge readable at 16x16px. The
+     * single-red-family palette across buttons + badges + banners
+     * was a 2026-05-01 audit follow-up. */
     position: absolute;
     top: -2px;
     right: -6px;
-    background: #e74c3c;
+    background: #a93226;
     color: #fff;
     font-size: 10px;
     font-weight: 700;
