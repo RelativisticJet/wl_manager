@@ -64,6 +64,148 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-06 (build 640, audit consistency + demo-state cleanup)
+
+### Audit Trail consistency
+
+Two issues surfaced when reviewing the Audit Trail dashboard for the
+first public-release screenshots:
+
+1. **`timestamp_human` vs `timestamp` field-name drift.** The "File
+   Integrity Monitor Alerts" and (formerly) "Out-of-Band Recovery
+   Actions" panels rendered their first column with the SPL field
+   name `timestamp_human`, while the other three panels (Data
+   Changes / Activity Log / Privileged Admin Actions) used
+   `timestamp`. The visible column header is the field name, so
+   users saw two different labels for the same kind of column.
+   `audit_tz.js` overwrites every cell client-side based on the
+   hidden `epoch_ts` column anyway, so the SPL field-name choice was
+   purely cosmetic. Unified to `timestamp` across all 5 panels.
+
+2. **"Out-of-Band Recovery Actions" panel title.** Jargon for a new
+   user. Renamed to **"Recovery Scripts & Maintenance Windows"** —
+   self-explanatory: the entries are operator-driven recovery
+   scripts (emergency unlock, cooldown reset, schema migrations)
+   plus FIM deploy windows. `audit_tz.js` header comment updated to
+   reflect the new title.
+
+### Demo-state cleanup (visible in README screenshots)
+
+The build-639 README screenshots leaked accumulated dev/test state:
+Control Panel showed 14 pending requests with names like
+`DR_TRASH_TEST` plus 245 historical entries (many from hardening-
+round fuzz inputs); detection-rule dropdowns listed 19 obvious test
+rules (`DR_STRESS_2000x100`, `DR999_stress_test`, `AL13_Test_Rule`,
+`DR_RACE_<unix-ms>`, etc.); CSVs themselves contained fuzz-test rows
+(`FS_ATTACK_USER`, `auth_method=TEST`, `test_val`); `wl_audit` index
+held 12,945 events from every E2E run since builds 552-629.
+
+Cleaned exhaustively:
+
+- Backed up `wl_audit` index (1.9MB tarball, 12,945 events) +
+  state JSONs to `backups/2026-05-06/`. Backup dir gitignored.
+- `splunk clean eventdata -index wl_audit` after stopping splunkd.
+- Truncated `_recovery_log.jsonl` (122 entries from cooldown
+  migrations + deploy-window cycling).
+- Deleted 4 state files: `_approval_queue.json` (queue),
+  `_daily_limits.json`, `_notifications.json`, `_trash_config.json`.
+  Each `# JUSTIFIED:` marker explains why direct removal was used
+  (no production purge endpoint; trash purge has 1-hour cooldown
+  per superadmin by design that blocks bulk cleanup).
+- Removed 19 test detection rules + their CSVs via the production
+  `remove_rule` action with `removal_type=permanent`.
+- Removed 7 orphan test CSVs (`DR778_*`, `DR998_column_stress.csv`,
+  `DR_APPROVAL_TEST_1.csv`, `DR_LONG_NOTIFICATION_TEST_2.csv`,
+  `DR777_new_rule.csv`) that lingered in `lookups/` after their
+  rule-registry entries were already gone.
+- Removed 176 orphan version snapshots in `lookups/_versions/`
+  (`AL_super_*`, `STRESS_*`, `DR_TEST_*`, `DR_RACE_*` etc.) for
+  CSVs that no longer exist.
+- Re-bootstrapped `bootstrap_csv_hashes` against the cleaned
+  registry (20 CSVs hashed, 0 changed, 0 missing).
+- Cleared KV `wl_cooldowns`.
+- Cleaned the production CSVs themselves (DR45 had
+  `FS_ATTACK_USER`, DR55 had `auth_method=TEST`, DR20 had three
+  `test_val,test_val,test_val` rows + a placeholder-X hostname).
+  Replaced with realistic-looking data.
+
+### Demo seeding (production-path only)
+
+To give the screenshots non-empty content without re-introducing
+the test pollution, ran `scripts/seed-demo-state.py` which hits the
+production REST endpoints exactly as a real analyst / admin would:
+
+- analyst1 added `r.thomas` (sales team RDP gateway) to DR45
+  whitelist (`row_added` event).
+- analyst1 increased `svc_patch` brute-force threshold on DR55
+  (`row_edited` event).
+- analyst1 submitted 3 approval requests: remove_csv on DR610,
+  column_removal of `ticket_id` on DR130, remove_rule on DR640.
+- wladmin1 approved the DR610 removal (executed → `csv_removed`
+  event + FIM `csv_external_deletion` because the watcher
+  observed the file vanish; expected behavior, FIM doesn't
+  distinguish handler-driven deletes from external ones).
+- wladmin1 rejected the DR640 rule removal with reason "Hold for
+  GRC sign-off - see ticket SEC-2412".
+- The DR130 column removal stays pending so the queue shows a
+  "live" entry.
+
+Final state: 18 production rules, 3 queue entries (1 pending +
+1 approved + 1 rejected), ~11 audit events with realistic variety
+(`row_added`, `row_edited`, `request_submitted` ×3,
+`request_approved`, `request_rejected`, `csv_removed`,
+`whitelist_view`, `fim_csv_external_deletion`,
+`fim_baseline_initialized`, `fim_watch_started`).
+
+### Demo-state checkpoint
+
+Added `tests/fixtures/demo-state/README.md` documenting the
+restore steps so future screenshot rounds skip the
+"figure out what to clean" step. The actual snapshot files are
+NOT committed — they get regenerated by re-running the seed
+script against a freshly-cleaned environment.
+
+### Screenshots refreshed (3 of 4)
+
+- `docs/screenshots/03-audit-trail.png` — Audit Trail with the
+  new `timestamp` column header + "Recovery Scripts &
+  Maintenance Windows" panel title + clean event variety
+- `docs/screenshots/04-control-panel.png` — Control Panel with
+  realistic 1-pending / 1-approved / 1-rejected approval queue,
+  clean activity counters, no notification accumulation
+- `docs/screenshots/02-inline-editing.png` — left as the
+  user-provided manual capture (excellent inline-editing demo
+  on DR130; the small notification-badge "20" dates from before
+  this cleanup but is content-correct for the screenshot's purpose)
+- `docs/screenshots/01-main-dashboard.png` — automated capture
+  produced byte-identical output to the prior round despite
+  await_text confirming DR130 rendered with seeded data
+  (suspected browser-tool caching layer with the headless
+  Chrome). **Recommend manual recapture before public ship**:
+  open WM, select DR130_privilege_escalation +
+  DR130_priv_escalation.csv, capture full-page at native
+  resolution.
+
+### Build
+
+- `app.conf [install] build` 639 → 640
+- `whitelist_manager.js` urlArgs `_b=639` → `_b=640`
+
+### Migration / rollback
+
+- Audit panel reverts: re-introduce `timestamp_human` evals +
+  field-name in two `<table>` blocks of `default/data/ui/views/audit.xml`
+  and revert the panel title; re-introduce `(timestamp_human)`
+  annotations in `appserver/static/audit_tz.js` header comment.
+- State restore: extract `backups/2026-05-06/wl_audit_backup_*.tar.gz`
+  to `/opt/splunk/var/lib/splunk/wl_audit/` after stopping splunkd;
+  extract `wl_state_backup_*.tar.gz` to
+  `/opt/splunk/etc/apps/wl_manager/lookups/_versions/`. Test rules
+  are NOT auto-restored — the rule registry edit is the source of
+  truth and was deliberately pruned.
+
+---
+
 ## Unreleased — 2026-05-06 (build 639, pre-release polish round)
 
 ### UI hygiene: standardize section headers, empty states, and error card
@@ -115,12 +257,12 @@ maintenance polish.
   been left over from before the previously-shipped build-637
   dark-only decision.
 - **README screenshots refreshed (3 of 4)**:
-  - `docs/screenshots/01-main-dashboard.png` — captured at build 639
-    showing dark theme + DR20 rule loaded
+  - `docs/screenshots/01-main-dashboard.png` — originally captured
+    at build 639 (2026-05-06) showing dark theme + DR20 rule loaded
   - `docs/screenshots/03-audit-trail.png` — full audit dashboard
-    fullpage capture at build 639
+    fullpage capture at build 639 (2026-05-06)
   - `docs/screenshots/04-control-panel.png` — full Control Panel
-    Approval Queue tab fullpage at build 639
+    Approval Queue tab fullpage at build 639 (2026-05-06)
   - `docs/screenshots/02-inline-editing.png` — **NOT refreshed**.
     Captures cell-edit state which needs interactive click + cell
     selection that's hard to script reliably in headless mode.

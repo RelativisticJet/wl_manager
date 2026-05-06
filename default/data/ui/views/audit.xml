@@ -918,7 +918,7 @@
             | where action!="fim_watch_heartbeat"
             | sort -timestamp
             | eval epoch_ts=_time
-            | eval timestamp_human=if(isnull(timestamp_human), strftime(timestamp, "%d-%m-%Y %H:%M:%S UTC"), timestamp_human)
+            | eval timestamp=coalesce(timestamp_human, strftime(_time, "%d-%m-%Y %H:%M:%S UTC"))
             | eval severity=coalesce(severity, case(
                 action=="fim_baseline_tampered",            "CRITICAL",
                 action=="fim_baseline_hmac_mismatch",       "CRITICAL",
@@ -998,17 +998,19 @@
                 action=="fim_watch_heartbeat", "Watcher heartbeat (still alive)",
                 1==1, coalesce(details, action)
               )
-            | table timestamp_human severity action _path old_hash new_hash summary epoch_ts
+            | table timestamp severity action _path old_hash new_hash summary epoch_ts
             | rename _path AS path
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
         </search>
-        <!-- epoch_ts is LAST (hidden via CSS, read by audit_tz.js). First
-             column uses timestamp_human (not timestamp) because FIM events
-             sometimes ship a pre-formatted string; audit_tz.js reformats
-             the first column based on the raw epoch regardless. -->
-        <fields>["timestamp_human","severity","action","path","old_hash","new_hash","summary","epoch_ts"]</fields>
+        <!-- epoch_ts is LAST (hidden via CSS, read by audit_tz.js). The
+             first column is named `timestamp` to match every other audit
+             panel; the SPL above coalesces the FIM event's pre-formatted
+             `timestamp_human` (when present) with a strftime of `_time`
+             so we get a sensible first-paint string. audit_tz.js then
+             reformats the cell based on epoch_ts within ~500 ms. -->
+        <fields>["timestamp","severity","action","path","old_hash","new_hash","summary","epoch_ts"]</fields>
         <option name="drilldown">none</option>
         <option name="count">10</option>
         <option name="wrap">true</option>
@@ -1021,14 +1023,14 @@
        ============================================================ -->
   <row>
     <panel>
-      <title>Out-of-Band Recovery Actions</title>
+      <title>Recovery Scripts &amp; Maintenance Windows</title>
       <table id="audit_table_recovery">
         <search>
           <query>
             index=wl_audit sourcetype=wl_audit_recovery
             | sort -timestamp
             | eval epoch_ts=_time
-            | eval timestamp_human=if(isnull(timestamp_human), strftime(timestamp, "%d-%m-%Y %H:%M:%S UTC"), timestamp_human)
+            | eval timestamp=coalesce(timestamp_human, strftime(_time, "%d-%m-%Y %H:%M:%S UTC"))
             | eval severity=case(
                 action=="emergency_unlock",       "CRITICAL",
                 action=="reset_cooldowns",        "HIGH",
@@ -1056,14 +1058,17 @@
                 1==1,
                   coalesce(details, "Recovery action: " . action . " — script=" . _script . " by=" . _by)
               )
-            | table timestamp_human severity action _script _by _ctx summary epoch_ts
+            | table timestamp severity action _script _by _ctx summary epoch_ts
             | rename _script AS script, _by AS host_user, _ctx AS context
           </query>
           <earliest>$time_token.earliest$</earliest>
           <latest>$time_token.latest$</latest>
         </search>
-        <!-- epoch_ts is LAST (hidden via CSS, read by audit_tz.js). -->
-        <fields>["timestamp_human","severity","action","script","host_user","context","summary","epoch_ts"]</fields>
+        <!-- epoch_ts is LAST (hidden via CSS, read by audit_tz.js).
+             First column unified to `timestamp` to match other panels;
+             SPL coalesces the recovery script's pre-formatted
+             `timestamp_human` with strftime(_time) for first-paint. -->
+        <fields>["timestamp","severity","action","script","host_user","context","summary","epoch_ts"]</fields>
         <option name="drilldown">none</option>
         <option name="count">5</option>
         <option name="wrap">true</option>

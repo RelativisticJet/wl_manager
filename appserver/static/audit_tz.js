@@ -1,14 +1,17 @@
 /**
  * Audit Trail — Timezone Display Toggle (Phase A + B: all 5 panels)
  *
- * Reformats the first column (timestamp / timestamp_human) of every
- * audit-dashboard table on the fly based on the tz_display dropdown.
+ * Reformats the first `timestamp` column of every audit-dashboard
+ * table on the fly based on the tz_display dropdown. All five panels
+ * use the same `timestamp` field name (unified in build 640); the
+ * underlying SPL coalesces wl_fim's pre-formatted `timestamp_human`
+ * with strftime(_time) for first-paint where applicable.
  * Panels covered (all in TABLE_IDS below):
- *   - audit_table_changes    — Data Changes (timestamp)
- *   - audit_table_activity   — Activity Log (timestamp)
- *   - audit_table_admin      — Privileged Admin Actions (timestamp)
- *   - audit_table_fim        — File Integrity Monitor Alerts (timestamp_human)
- *   - audit_table_recovery   — Out-of-Band Recovery Actions (timestamp_human)
+ *   - audit_table_changes    — Data Changes
+ *   - audit_table_activity   — Activity Log
+ *   - audit_table_admin      — Privileged Admin Actions
+ *   - audit_table_fim        — File Integrity Monitor Alerts
+ *   - audit_table_recovery   — Recovery Scripts & Maintenance Windows
  * No server-side work — the heavy lifting is done against a hidden
  * epoch_ts column the SPL search puts at the end of each result set.
  *
