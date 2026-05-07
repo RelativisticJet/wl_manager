@@ -533,7 +533,7 @@ Coverage by endpoint:
 - trash (2): retention below minimum, purge non-existent trash_id
 - generic dispatch (1): unknown action name returns error not 500
 
-#### Real production bug surfaced and fixed: `create_rule` UX (build 643)
+#### Real production bug surfaced and fixed: `create_rule` UX (shipped build 643)
 
 Two of the create_rule tests failed initially:
 - ``test_too_long_rule_name_returns_error`` expected the error to
@@ -664,3 +664,107 @@ Day 2-3 contract-test work complete). The audit-event schema
 tests scheduled for Day 4 will push us over 70.
 
 Ready to proceed to Day 4: audit event schema contract tests.
+
+---
+
+### Day 4 — Audit event schema contract tests
+
+**Date**: 2026-05-07. Goal: pin the `wl_audit` write contract for
+representative handler actions, and pin the schema invariant
+("every handler-emitted event carries the 7 common fields") so a
+future contributor cannot land a new action that silently breaks
+SOC dashboards.
+
+#### Tests added
+
+`tests/integration/test_audit_emission.py` — 4 new tests, all
+container-backed (real Splunk indexing, real `splunk search` CLI,
+~1-15 second indexing-lag polling):
+
+| Test class | What it pins |
+| ---------- | ------------ |
+| `TestRequestSubmittedAuditSchema` | `submit_approval` event has `action`, `analyst`, `detection_rule`, `csv_file`, `app_context`, `request_id`, `approval_action_type`, `description`, `status="pending"`, `comment` |
+| `TestRequestRejectedAuditSchema` | `process_approval reject` event has all of the above plus `rejection_reason`, `status="rejected"` |
+| `TestRuleCreatedAuditSchema` | `create_rule` event has `action="dr_created"`, `analyst`, `detection_rule`, `status="created"` |
+| `TestCommonAuditFieldsInvariant` | Sample of 20 most recent `sourcetype=wl_audit` events all carry the 7 documented common fields |
+
+The schema-pin tests use UUID4 markers embedded in `comment` /
+`description` / rule-name so the test only matches its own event
+(not someone else's parallel test run).
+
+#### Finding R1-D4-F1 — config-only audit events bypass the common envelope
+
+Surfaced by `TestCommonAuditFieldsInvariant`. The sample contained
+an `admin_limit_change` event missing four of the seven common
+fields (`detection_rule`, `csv_file`, `app_context`, `comment`).
+
+A grep across `bin/wl_handler.py` turned up ~20 inline
+`evt = {...}` constructions that bypass `wl_audit.build_audit_event()`:
+
+- **Config-only events** that have no logical detection_rule /
+  csv_file (admin_limit_change, limit_change, limit_reset,
+  limit_factory_reset, limit_defaults_saved, emergency_lockdown_*,
+  fim_deploy_window_*, bootstrap_csv_hashes,
+  bootstrap_csv_hash_changed, dual_approval_*, trash_purged,
+  factory_reset_executed, mass_usage_reset_executed,
+  request_auto_cancelled, cross_app_csv_read, whitelist_view) ship
+  various subsets of the common envelope and trip the invariant.
+
+The invariant correctly caught the schema drift. CLAUDE.md
+"Audit Event Structure" documents the 7 common fields as universal
+for `sourcetype=wl_audit`, so the invariant is right; the inline
+events are wrong.
+
+**Fix (build 644)**: rather than refactor 20 callsites, backfill
+the envelope at the chokepoint. `_index_audit` now applies
+`dict.setdefault()` for all 7 common fields before delegating to
+`post_audit_event()`. Defense-in-depth: even if a future
+contributor adds another inline `evt = {...}` block, the schema
+invariant holds.
+
+`build_audit_event()` is still the documented helper; it just no
+longer is the only line of defense.
+
+#### Decision — chokepoint over callsites
+
+Considered: refactor each of the 20 inline event constructions to
+use `build_audit_event()`. Rejected: ~200-line diff with the same
+observable behavior. The chokepoint pattern produces the same
+guarantee with six lines of `setdefault` and protects against
+future inline-event additions, which is the more important
+property for a long-lived codebase.
+
+#### Scope clarification — FIM events have a different sourcetype
+
+The invariant initially failed against `fim_file_modified`,
+`fim_watch_started`, `fim_baseline_kv_fs_divergence`, etc. These
+are emitted by `wl_fim.py` and `wl_fim_watch.py` (separate
+scripted-input processes) with `sourcetype=wl_fim` — they do NOT
+go through `_index_audit`, they print JSON to stdout for Splunk's
+scripted-input pipeline. CLAUDE.md "CSV Integrity Monitoring"
+documents their schema separately, and they have their own
+dashboard panel.
+
+Resolution: the invariant test now scopes to
+`sourcetype=wl_audit` (handler-emitted events). FIM events are a
+distinct sourcetype with a distinct contract; if we want to pin
+their schema too, that's a separate test class. Logged as a
+follow-up for Ring 2 ("Coverage matrix").
+
+#### Day 4 summary
+
+4 new tests, 1 production fix (build 644 chokepoint envelope),
+zero regressions in the integration suite.
+
+| Suite scope | Pre-Day-4 | Post-Day-4 |
+| ----------- | --------- | ---------- |
+| Audit emission tests | 0 | 4 |
+| Total integration tests | 161 | 165 |
+| Pass rate | 100% | 100% |
+
+Day 1+2+3+4 cumulative: **73 / 70 tests** (over the original
+goal). Splunk indexing lag tolerated via 15s poll loop with 1.5s
+intervals; no flakes observed in the 4 sample runs.
+
+Ready to proceed to Day 5: KV schema invariants
+(`wl_cooldowns`, `wl_fim_baseline`, `wl_presence`, `wl_lockdown`).

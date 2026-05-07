@@ -7330,6 +7330,14 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         """Write an audit event into the wl_audit Splunk index.
 
         Delegates to wl_audit.post_audit_event() to avoid duplicating HTTP logic.
+
+        Common-field envelope (build 644): every audit event must carry the
+        7 common fields documented in CLAUDE.md ("Audit Event Structure").
+        Most callsites use ``build_audit_event()`` which guarantees this.
+        Some inline callsites (config-only events, FIM deploy windows,
+        bootstrap events) construct ``evt`` dicts directly. We backfill
+        defaults here so the schema invariant holds regardless of how the
+        event was constructed. ``TestCommonAuditFieldsInvariant`` pins this.
         """
         # Use system auth token (from passSystemAuth in restmap.conf)
         # so non-admin users can still write audit events
@@ -7337,6 +7345,14 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             request.get("session", {}).get("authtoken", "")
         if not session_key:
             return
+
+        if isinstance(event, dict):
+            event.setdefault("timestamp", int(time.time()))
+            event.setdefault("analyst", "system")
+            event.setdefault("detection_rule", "")
+            event.setdefault("csv_file", "")
+            event.setdefault("app_context", "")
+            event.setdefault("comment", "")
 
         # post_audit_event handles truncation, serialization, HTTP posting, and errors
         success, error = post_audit_event(session_key, event)

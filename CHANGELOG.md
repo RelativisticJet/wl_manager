@@ -64,6 +64,100 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-07 (build 644, audit envelope chokepoint enforces 7 common fields)
+
+### Bug — config-only audit events missing common fields
+
+Surfaced during Ring 1 Day 4 audit-emission schema testing
+(`tests/integration/test_audit_emission.py::TestCommonAuditFieldsInvariant`).
+The invariant samples the 20 most recent `wl_audit` events and
+asserts every event carries the 7 common fields documented in
+CLAUDE.md "Audit Event Structure":
+
+```text
+timestamp, action, analyst, detection_rule, csv_file,
+app_context, comment
+```
+
+The test failed on `admin_limit_change` (constructed inline at
+`bin/wl_handler.py:3131`) which was missing four fields:
+`detection_rule`, `csv_file`, `app_context`, `comment`. A grep
+across the handler turned up ~20 inline `evt = {...}` constructions
+that bypass `wl_audit.build_audit_event()` and ship various
+subsets of the common envelope:
+
+- Config-only: `admin_limit_change`, `limit_change`,
+  `limit_reset`, `limit_factory_reset`, `limit_defaults_saved`
+- Lockdown: `emergency_lockdown_activated/deactivated`
+- FIM: `fim_deploy_window_start/end`, `bootstrap_csv_hashes`,
+  `bootstrap_csv_hash_changed`
+- Read-side forensics: `cross_app_csv_read`, `whitelist_view`
+- Approval lifecycle: `dual_approval_*`, `request_auto_cancelled`,
+  `trash_purged`, `factory_reset_executed`,
+  `mass_usage_reset_executed`
+
+Dashboards that filter on these fields silently skipped the
+events, and SOC analysts looking up correlated activity by
+`detection_rule` or `csv_file` would miss config-only signals.
+
+### Fix
+
+Backfilled the envelope at the chokepoint
+(`WhitelistHandler._index_audit`) rather than refactoring 20
+callsites. The helper now applies `dict.setdefault()` for all 7
+common fields with empty-string / `"system"` / current-timestamp
+defaults before delegating to `post_audit_event()`. Callsites
+that already supplied a field are untouched. Going forward, even
+a future contributor who adds another inline `evt = {...}`
+without using `build_audit_event()` cannot break the schema —
+the chokepoint enforces it.
+
+`build_audit_event()` is still the recommended path; it remains
+the documented helper, just no longer the only line of defense.
+
+### Tests
+
+`tests/integration/test_audit_emission.py` (new, build-641 fence):
+
+- `TestRequestSubmittedAuditSchema` — pins `submit_approval` event
+- `TestRequestRejectedAuditSchema` — pins `process_approval reject` event
+- `TestRuleCreatedAuditSchema` — pins `create_rule` event
+- `TestCommonAuditFieldsInvariant` — pins the 7-field invariant
+  across the 20 most recent audit events (catches new actions
+  added without the common envelope)
+
+This is the third leg of the build-641 fence:
+
+- `test_pending_info_projection.py` — read projection (shipped build 641)
+- `test_approval_workflow.py::TestSubmitApprovalQueueEntryShape` —
+  write to queue contract (shipped build 641)
+- `test_audit_emission.py` — write to audit-index contract (shipped build 644)
+
+### Migration / rollback
+
+Pure server-side fix, no schema change. Existing audit events in
+`wl_audit` are untouched (history is immutable). New events going
+forward will carry empty-string defaults for fields that were
+previously absent — dashboards that already handle the empty-string
+case (which is what `build_audit_event()` produces for callsites
+without natural values) require no change.
+
+Rollback: revert the `_index_audit` chokepoint edit and redeploy
+at the previously-shipped build 643. The 20 inline event
+constructions revert to their pre-644 shape and the
+`TestCommonAuditFieldsInvariant` test fails again — that's the
+canary.
+
+### Decision
+
+Chokepoint over callsite. Refactoring 20 inline constructions to
+`build_audit_event()` would have been a 200-line diff with the
+same observable behavior; six `dict.setdefault()` lines at the
+sole indexing entry point produce the same guarantee with a much
+smaller blast radius and protect against future inline events.
+
+---
+
 ## Unreleased — 2026-05-07 (build 643, create_rule UX fix surfaced by Ring 1 testing)
 
 ### Bug — `create_rule` returned generic error instead of specific UX feedback
