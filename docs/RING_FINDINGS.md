@@ -768,3 +768,136 @@ intervals; no flakes observed in the 4 sample runs.
 
 Ready to proceed to Day 5: KV schema invariants
 (`wl_cooldowns`, `wl_fim_baseline`, `wl_presence`, `wl_lockdown`).
+
+---
+
+### Day 5 — KV-store collection schema invariants
+
+**Date**: 2026-05-07. Goal: pin the on-disk shape of every KV
+collection this app relies on, so that drift between
+handler/FIM code and the KV layer would break a test rather
+than silently corrupt audit/security state.
+
+#### Tests added
+
+`tests/integration/test_kv_schema.py` — 15 new tests across 3
+classes:
+
+| Test class | Pinned contract |
+| ---------- | --------------- |
+| `TestCooldownKVSchema` | `wl_cooldowns/state` envelope (`_key`, `schema_version`, `payload`, `checksum`, `updated_at`, `updated_by`); `_key="state"`; `schema_version` in `_COOLDOWN_SCHEMA_SUPPORTED`; checksum is 64-hex HMAC-SHA256 output; payload decodes to a `Dict[str, int]` counter map |
+| `TestFimBaselineKVSchema` | `wl_fim_baseline/state` envelope (no `schema_version`); `_key="state"`; `updated_by="wl_fim"`; per-file entries match either `{exists, hash}` or `{exists, prefix_hash, size}` (append-only logs); 64-hex HMAC checksum |
+| `TestKVCollectionDefinitions` | `default/collections.conf` declares every field the runtime writes; no runtime references to undeclared collections |
+
+The cooldown record is bootstrapped on demand by submitting a
+`set_admin_limits` action as `superadmin1` (the canonical write
+path that increments the cooldown). FIM baseline is read in-place
+because `wl_fim.py` keeps it fresh on its 15-second cycle.
+
+#### Scope clarification — `wl_presence`, `wl_lockdown` are filesystem state
+
+Both names appear in CLAUDE.md "Disaster Recovery Runbook" and
+sounded KV-shaped, but reading the code shows they are JSON
+files under `lookups/_versions/` (`.presence.json`,
+`_emergency_lockdown.json`). They aren't declared in
+`collections.conf` and don't go through the KV-store URL path.
+Tests for those would belong with the file-state contract suite,
+not the KV suite.
+
+#### Finding R1-D5-F1 — dual-admin queue entries lack `timestamp` field
+
+Surfaced when the `set_admin_limits` bootstrap call I made to
+populate the cooldown record left a poisoned queue state for
+later tests. The `test_submit_grows_the_queue_by_one` test
+started to fail with "queue did not grow by 1: before=15,
+after=15" — submit succeeded but the count stayed flat.
+
+Root cause traced through the queue code: there are TWO write
+paths for queue entries with INCOMPATIBLE schemas.
+
+**Single-admin path** (`bin/wl_handler.py:_submit_approval`,
+~line 5219):
+
+```python
+queue.append(entry)  # entry has "timestamp": <now-int>
+```
+
+**Dual-admin path** (`bin/wl_handler.py:_submit_dual_approval`,
+~line 5507):
+
+```python
+entry = {
+    "request_id": request_id,
+    "analyst": user,
+    "action_type": action_type,
+    "status": "pending",
+    "submitted_at": now,           # NOT "timestamp"
+    "submitted_at_human": time.strftime(...),
+    "comment": comment,
+    "meta": meta,
+    "is_dual_admin": True,
+}
+queue.append(entry)
+```
+
+Result: dual-admin entries are persisted without a `timestamp`
+key. The consumer `wl_approval.expire_pending_approvals` reads
+`entry.get("timestamp", 0)` — for dual-admin entries that
+returns `0`, and `0 <= (now - 30days)` is True, so every
+dual-admin entry is **silently expired the next time any
+single-admin submit runs** (which calls `expire_pending_approvals`
+inside the queue lock before appending).
+
+The dual-admin submit path itself does NOT call expire, so the
+entry persists fine until the next non-dual submit comes
+through. Then it's gone.
+
+This is a real bug, not a test artifact. Customer-visible
+symptom: an admin submits a dual-admin request (e.g.
+`admin_factory_reset`) at 09:00; another analyst submits a
+column-removal at 09:05; the dual-admin request silently
+disappears from the queue with no audit trail. The submitter
+sees their pending request vanish and has no idea why.
+
+#### Fix plan (deferred to Day 7)
+
+Two options:
+
+1. **Make dual-admin write `timestamp` AS WELL AS `submitted_at`**
+   — minimal diff, preserves backwards compatibility for any
+   existing dashboard that reads `submitted_at_human`.
+2. **Make `expire_pending_approvals` fall back to `submitted_at`**
+   — handles legacy queue files that already contain dual-admin
+   entries written with the old schema.
+
+Option (1) is the right write-side fix; option (2) is needed for
+graceful migration. Both will be applied in Day 7 alongside the
+R0-F5 `move_to_trash` projection-drift fix (same bug class —
+two write paths, drifting schemas, a downstream consumer that
+silently mis-handles one).
+
+For Day 5 the bug is **logged, not fixed**. Day 5's mission was
+schema invariants — finding R1-D5-F1 is a perfect demonstration
+that the test discipline produces real bugs even when the test
+itself is not directly aimed at the bug surface.
+
+#### Day 5 summary
+
+15 new tests, 1 production-bug finding (R1-D5-F1, deferred to
+Day 7), zero regressions in the integration suite (180/180
+pass). All 15 KV schema tests pass on first run — the live KV
+state matches the documented contracts exactly.
+
+| Suite scope | Pre-Day-5 | Post-Day-5 |
+| ----------- | --------- | ---------- |
+| KV schema tests | 0 | 15 |
+| Total integration tests | 165 | 180 |
+| Pass rate | 100% | 100% |
+
+Day 1+2+3+4+5 cumulative: **88 / 70 tests** (well over original
+goal).
+
+Ready to proceed to Day 6: recovery script smoke tests
+(`scripts/emergency_unlock.sh`, `scripts/reset_cooldowns.sh`,
+`scripts/fim_deploy_window.sh`, `bootstrap_csv_hashes` REST
+action).
