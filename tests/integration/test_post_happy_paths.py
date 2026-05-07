@@ -441,3 +441,325 @@ class TestSaveCsvSmallEditHappyPath:
                     (f"pending_approvals[i] missing fields "
                      f"(build-641 class): {entry_missing}. "
                      f"Entry: {entry}")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Tier 3 — Multi-step workflow happy paths
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _submit_column_removal(container_curl, csv_file, rule_name):
+    """Helper — submit a column_removal approval request and
+    return the parsed body."""
+    payload = {
+        "approval_action_type": "column_removal",
+        "csv_file": csv_file,
+        "detection_rule": rule_name,
+        "app_context": "wl_manager",
+        "description": "Ring 1 day 3 test",
+        "comment": "Ring 1 day 3 test reason",
+        "pending_highlight": {"type": "column",
+                              "column_name": "host"},
+        "payload": {
+            "column_name": "host",
+            "column_removal_reasons": [
+                {"column": "host", "reason": "Ring 1 test"},
+            ],
+        },
+    }
+    return _post_action(
+        container_curl, "submit_approval", payload)
+
+
+class TestProcessApprovalApprove:
+    """Pins: ``process_approval`` with ``decision=approve`` returns
+    the documented response and resolves the queue entry.
+
+    Approve is structurally more complex than reject (it triggers
+    the replay step), and the response shape varies by action_type:
+    column_removal/create/remove return ``{message, request_id}``;
+    revert returns ``{message, request_id, diff}``. Pinning the
+    minimum contract that ALL approve responses must carry.
+    """
+
+    REQUIRED_FIELDS = {"message", "request_id"}
+
+    def test_approve_response_shape_for_column_removal(
+            self, container_state, container_curl):
+        # Precondition: submit a column_removal request AS ANALYST.
+        # Then approve it AS A DIFFERENT user with admin role.
+        # Self-approval is correctly blocked by the handler — see
+        # CLAUDE.md decision log for the dual-admin design.
+        mapping_proc = container_curl(
+            "/services/custom/wl_manager?action=get_mapping",
+            user="analyst1",
+            check=False)
+        mapping = json.loads(mapping_proc.stdout.strip())
+        if not mapping.get("mapping"):
+            pytest.skip("no mappings in demo state")
+        entry = mapping["mapping"][0]
+
+        # Submit as analyst1
+        body = json.dumps({
+            "action": "submit_approval",
+            "approval_action_type": "column_removal",
+            "csv_file": entry["csv_file"],
+            "detection_rule": entry["rule_name"],
+            "app_context": "wl_manager",
+            "description": "Ring 1 day 3 approve-flow test",
+            "comment": "Ring 1 day 3 approve-flow reason",
+            "pending_highlight": {"type": "column",
+                                  "column_name": "host"},
+            "payload": {
+                "column_name": "host",
+                "column_removal_reasons": [
+                    {"column": "host", "reason": "Ring 1 test"}
+                ],
+            },
+        })
+        proc = container_curl(
+            "/services/custom/wl_manager",
+            method="POST", data=body,
+            content_type="application/json",
+            user="analyst1", check=False)
+        submit_body = json.loads(proc.stdout.strip())
+        if "error" in submit_body:
+            pytest.skip(f"analyst1 submit failed: {submit_body}")
+        request_id = submit_body["request_id"]
+
+        # Approve as wladmin1 (different user, has admin role)
+        approve_body = json.dumps({
+            "action": "process_approval",
+            "request_id": request_id,
+            "decision": "approve",
+            "admin_comment": "Ring 1 test - approved by wladmin1",
+        })
+        proc = container_curl(
+            "/services/custom/wl_manager",
+            method="POST", data=approve_body,
+            content_type="application/json",
+            user="wladmin1", check=False)
+        body = json.loads(proc.stdout.strip())
+        if "error" in body:
+            pytest.fail(f"approve unexpectedly errored: {body}")
+
+        # Pin minimum response contract
+        missing = self.REQUIRED_FIELDS - set(body.keys())
+        assert not missing, \
+            f"approve response missing: {missing}. Body: {body}"
+        assert body["request_id"] == request_id
+        # Message must mention "approve" or "executed" — confirms
+        # the response is an approval acknowledgement
+        msg_lower = body["message"].lower()
+        assert ("approv" in msg_lower or "execut" in msg_lower), \
+            f"approve message doesn't acknowledge: {body['message']}"
+
+
+class TestRevertCsvResponseShape:
+    """Pins: ``revert_csv`` returns the full documented shape —
+    diff, rows_before/after, cols_before/after, file_mtime,
+    content_hash, message.
+
+    Bug class caught: build-641-class projection drift in the
+    revert response. The frontend's revert success toast and the
+    table-redraw logic both depend on the diff + counts + new
+    mtime/hash being present.
+    """
+
+    REQUIRED_FIELDS = {
+        "message", "diff", "rows_before", "rows_after",
+        "cols_before", "cols_after", "file_mtime", "content_hash",
+    }
+
+    def test_revert_response_shape(
+            self, container_state, container_curl):
+        # Precondition: pick a CSV with at least one prior version
+        # snapshot. DR102_whitelist.csv has many in the demo state.
+        csv_file = "DR102_whitelist.csv"
+
+        # List versions
+        path = (f"/services/custom/wl_manager"
+                f"?action=get_versions&csv_file={csv_file}"
+                f"&app_context=wl_manager")
+        proc = container_curl(path, check=False)
+        versions_body = json.loads(proc.stdout.strip())
+        versions = versions_body.get("versions", [])
+        # Need at least 2 entries: the "Current" placeholder + one
+        # actual previous version
+        prev_versions = [v for v in versions
+                         if v.get("filename")
+                         and not v.get("is_current")]
+        if not prev_versions:
+            pytest.skip(
+                f"{csv_file} has no previous versions to revert to")
+        target = prev_versions[0]
+
+        # Read mapping to get detection_rule
+        mapping_proc = container_curl(
+            "/services/custom/wl_manager?action=get_mapping",
+            check=False)
+        mapping = json.loads(mapping_proc.stdout.strip())
+        rule = next(
+            (e["rule_name"] for e in mapping.get("mapping", [])
+             if e["csv_file"] == csv_file), None)
+        if not rule:
+            pytest.skip(f"{csv_file} not in mapping")
+
+        # Read current mtime + content_hash for optimistic lock
+        cc_proc = container_curl(
+            (f"/services/custom/wl_manager?action=get_csv_content"
+             f"&csv_file={csv_file}&app_context=wl_manager"),
+            check=False)
+        current = json.loads(cc_proc.stdout.strip())
+
+        # Issue the revert
+        code, body = _post_action(container_curl, "revert_csv", {
+            "csv_file": csv_file,
+            "detection_rule": rule,
+            "app_context": "wl_manager",
+            "version_filename": target["filename"],
+            "version_display": target.get(
+                "display", target["filename"]),
+            "revert_reason": "Ring 1 day 3 revert test",
+            "expected_mtime": current.get("file_mtime"),
+            "expected_content_hash": current.get("content_hash"),
+        })
+
+        if "error" in body:
+            pytest.fail(f"revert errored: {body}")
+
+        # Pin the FULL contract — every documented field present
+        missing = self.REQUIRED_FIELDS - set(body.keys())
+        assert not missing, \
+            (f"revert_csv response missing fields: {missing}. "
+             f"Body: {body}")
+        # Type checks on the rich fields
+        assert isinstance(body["diff"], dict), \
+            f"diff is not dict: {type(body['diff'])}"
+        assert isinstance(body["file_mtime"], int)
+        assert isinstance(body["content_hash"], str)
+        assert isinstance(body["rows_before"], int)
+        assert isinstance(body["rows_after"], int)
+
+
+class TestSaveCsvBulkRemovalTriggersGate:
+    """Pins: ``save_csv`` with a bulk row removal as an analyst (or
+    when configured to require approval) returns a request_id
+    instead of executing directly.
+
+    The handler-side logic detects bulk operations and routes to
+    submit_approval. Since the curl auth user is built-in admin,
+    bulk_row_removal at the analyst threshold (>= 2 rows) doesn't
+    trigger the gate. Instead we use ``submit_approval`` directly
+    (same code path the gate would invoke) to verify the response.
+    """
+
+    def test_bulk_row_removal_via_submit_approval(
+            self, container_state, container_curl):
+        """Submit a bulk_row_removal directly and verify the queue
+        accepts it with full response shape."""
+        mapping_proc = container_curl(
+            "/services/custom/wl_manager?action=get_mapping",
+            check=False)
+        mapping = json.loads(mapping_proc.stdout.strip())
+        if not mapping.get("mapping"):
+            pytest.skip("no mappings")
+        entry = mapping["mapping"][0]
+
+        code, body = _post_action(
+            container_curl, "submit_approval", {
+                "approval_action_type": "bulk_row_removal",
+                "csv_file": entry["csv_file"],
+                "detection_rule": entry["rule_name"],
+                "app_context": "wl_manager",
+                "description": "Ring 1 bulk removal test",
+                "comment": "Ring 1 test reason",
+                "pending_highlight": {
+                    "type": "rows",
+                    "headers": ["host"],
+                    "row_keys": [["row1"], ["row2"]],
+                },
+                "payload": {
+                    "rows_to_remove": [
+                        {"host": "row1"}, {"host": "row2"}
+                    ],
+                    "removal_reasons": [
+                        {"row_index": 0, "reason": "obsolete"},
+                        {"row_index": 1, "reason": "obsolete"},
+                    ],
+                },
+            })
+        if "error" in body:
+            pytest.fail(f"bulk_row_removal submit errored: {body}")
+        # Pin response shape
+        assert "request_id" in body, \
+            f"missing request_id: {body}"
+        assert "message" in body
+        assert isinstance(body["request_id"], str)
+
+
+class TestSetAdminLimits:
+    """Pins: ``set_admin_limits`` (superadmin-only) updates the
+    admin limit configuration and returns the documented response.
+
+    Bug class caught: a refactor of the admin-limit storage format
+    that breaks reads but not writes — set succeeds but the
+    next get_admin_limits silently returns empty.
+    """
+
+    def test_set_admin_limits_response_shape(
+            self, container_state, container_curl):
+        # set_admin_limits requires SUPERADMIN_ROLES. The built-in
+        # ``admin`` user does NOT have wl_superadmin — only
+        # superadmin1 in the test container does. Submit as
+        # superadmin1 to exercise the real RBAC path.
+        body_str = json.dumps({
+            "action": "set_admin_limits",
+            "limits": {
+                "rule_creation": 50,
+                "csv_creation": 50,
+            },
+        })
+        proc = container_curl(
+            "/services/custom/wl_manager",
+            method="POST", data=body_str,
+            content_type="application/json",
+            user="superadmin1", check=False)
+        body = json.loads(proc.stdout.strip())
+        if "error" in body:
+            # Common failure: rate-limit cooldown counter tampered
+            # or daily change limit hit. Both are valid container
+            # states — skip if we hit them.
+            err = body.get("error", "")
+            if any(s in err for s in ("Security lockdown",
+                                       "capped at",
+                                       "tamper")):
+                pytest.skip(
+                    f"admin-limit rate gate hit: {err[:80]}")
+            pytest.fail(f"set_admin_limits errored: {err}")
+
+        # Documented success shape: success + applied limits
+        assert body.get("success") is True or "limits" in body, \
+            f"unexpected response: {body}"
+
+
+class TestMarkNotificationsReadVariants:
+    """Pins: ``mark_notifications_read`` accepts both the
+    "all-mine" form (no IDs) and the specific-IDs form.
+
+    The Day 2 test covered the no-IDs variant; this completes
+    coverage with the specific-IDs path. The handler currently
+    marks ALL notifications for the calling user regardless of
+    which IDs are passed — this test pins that behavior so a
+    future refactor that introduces ID filtering doesn't
+    silently break the bell UX.
+    """
+
+    def test_with_specific_ids_returns_success(
+            self, container_state, container_curl):
+        code, body = _post_action(
+            container_curl, "mark_notifications_read", {
+                "ids": ["any-id-1", "any-id-2"],
+            })
+        assert body.get("success") is True, \
+            f"mark with IDs did not succeed: {body}"

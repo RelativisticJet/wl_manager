@@ -81,6 +81,22 @@ SPLUNK_PASSWORD = "Chang3d!"
 APP_PATH = "/opt/splunk/etc/apps/wl_manager"
 LOOKUPS_REL = "lookups"  # relative to APP_PATH
 
+# Per CLAUDE.md and the prior session feedback
+# (feedback_use_role_specific_accounts.md): always verify as the
+# wl-specific role accounts, never as the built-in admin. Built-in
+# admin has all roles but the wl-specific users exercise the
+# actual RBAC paths the production app uses.
+#
+# All four users share the same password; they differ only in
+# assigned roles (configured in default/authorize.conf and the
+# container's setup script).
+WL_USERS = {
+    "admin":       {"password": SPLUNK_PASSWORD},  # built-in
+    "superadmin1": {"password": SPLUNK_PASSWORD},
+    "wladmin1":    {"password": SPLUNK_PASSWORD},
+    "analyst1":    {"password": SPLUNK_PASSWORD},
+}
+
 # KV collections owned by wl_manager. Only these get snapshotted +
 # restored; built-in Splunk collections (HomePage, SearchHistory)
 # are out of scope.
@@ -115,22 +131,71 @@ def _run_in_container(*args: str, check: bool = True,
 def _container_curl(path: str, method: str = "GET",
                     data: str = None, content_type: str = None,
                     check: bool = True,
-                    timeout: int = 30) -> subprocess.CompletedProcess:
+                    timeout: int = 30,
+                    user: str = SPLUNK_USER,
+                    password: str = None
+                    ) -> subprocess.CompletedProcess:
     """Run a curl against the container's local Splunk REST endpoint.
 
     The container makes localhost:8089 the management port. We run
     curl INSIDE the container to avoid host-side cert + auth
     complications. Returns the CompletedProcess.
+
+    To call as a non-default user, pass ``user=`` (and optionally
+    ``password=``; defaults to the password from ``WL_USERS`` for
+    the named user). Tests that need to verify role-specific
+    behavior (RBAC enforcement, dual-admin approval, superadmin-only
+    actions) use this to bypass the built-in admin account.
+
+    Auto-retry on rate-limit
+    ------------------------
+
+    The handler's REST endpoint enforces a per-user sliding-window
+    rate limit (30 writes / 120 reads per 60 seconds — see
+    ``bin/wl_ratelimit.py``). A test suite that issues many rapid
+    requests as the same user can hit the limit and see
+    ``"Rate limit exceeded"`` even when each individual call is
+    legitimate. Tests want to assert real behavior, not race the
+    rate limiter.
+
+    On detection of the rate-limit response we sleep briefly and
+    retry up to 2 times. The retry preserves test semantics — the
+    same call is re-issued, and if it succeeds the test sees the
+    success it expected. If the limit is genuinely exhausted (very
+    rare in practice) the third attempt returns the rate-limit
+    response and the test handles it normally.
     """
-    args = ["curl", "-sk", "-u",
-            f"{SPLUNK_USER}:{SPLUNK_PASSWORD}",
-            "-X", method,
-            f"https://localhost:8089{path}"]
-    if data is not None:
-        args.extend(["-d", data])
-    if content_type is not None:
-        args.extend(["-H", f"Content-Type: {content_type}"])
-    return _run_in_container(*args, check=check, timeout=timeout)
+    if password is None:
+        password = WL_USERS.get(user, {}).get(
+            "password", SPLUNK_PASSWORD)
+
+    def _do_call():
+        args = ["curl", "-sk", "-u",
+                f"{user}:{password}",
+                "-X", method,
+                f"https://localhost:8089{path}"]
+        if data is not None:
+            args.extend(["-d", data])
+        if content_type is not None:
+            args.extend(["-H", f"Content-Type: {content_type}"])
+        return _run_in_container(*args, check=check,
+                                 timeout=timeout)
+
+    proc = _do_call()
+    # Retry up to 2 times on rate-limit response. The handler
+    # returns the literal string "Rate limit exceeded" in JSON
+    # error responses; we match against it conservatively.
+    for retry in range(2):
+        if "Rate limit exceeded" not in (proc.stdout or ""):
+            break
+        # Wait for the sliding window to drain. The window is 60s
+        # but recent timestamps prune progressively, so 3-5s is
+        # usually enough to free a slot.
+        import time as _time
+        _time.sleep(3 + retry * 2)
+        proc = _do_call()
+
+    return proc
 
 
 def _list_kv_records(collection: str) -> list:
