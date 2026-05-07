@@ -151,6 +151,56 @@ class TestIsSafeFilename:
         assert not is_safe_filename(123)
         assert not is_safe_filename("")
 
+    def test_basename_check_independently_rejects_path_separators(self):
+        """R0-F4 fix: pin the ``os.path.basename(name) != name``
+        check independently of the stem regex.
+
+        ``is_safe_filename`` has TWO defenses against path
+        traversal:
+
+        1. ``os.path.basename(name) != name`` rejects any name
+           containing a separator
+        2. ``_ASCII_FILENAME_STEM_RE.match(stem)`` restricts the
+           stem to ``[A-Za-z0-9_-]+``, which incidentally also
+           rejects ``/`` and ``\``.
+
+        Because (2) is so strict, removing (1) is a no-op for
+        current inputs — meaning no test that exercises real
+        traversal inputs can distinguish "(1) is working" from
+        "(2) is working". If a future refactor relaxes (2) (for
+        example to allow ``/`` in some new context), (1) becomes
+        load-bearing AND its absence becomes a real path-traversal
+        vulnerability with no test failure.
+
+        This test pins (1) by mock-relaxing the regex and
+        confirming (1) still rejects path-traversal inputs.
+        """
+        from unittest.mock import patch
+        import re
+        import wl_validation
+        from wl_validation import is_safe_filename
+
+        # Patch the stem regex to a permissive variant that
+        # WOULD accept slashes/backslashes if the basename check
+        # were absent.
+        permissive = re.compile(r'^[A-Za-z0-9_\-/\\]+\Z')
+        with patch.object(wl_validation, "_ASCII_FILENAME_STEM_RE",
+                          permissive):
+            # Each input has a stem that the permissive regex
+            # would accept, AND no other rejection condition
+            # other than the basename check applies.
+            assert not is_safe_filename("subdir/file.csv"), \
+                "basename check failed to reject forward slash"
+            assert not is_safe_filename("dir\\file.csv"), \
+                "basename check failed to reject backslash"
+            # Sanity: the permissive regex DID accept what we
+            # wanted (a name without separators) — proves the
+            # mock is in effect and the rejection is from the
+            # basename check, not the regex.
+            assert is_safe_filename("file_with-dashes.csv"), \
+                ("permissive regex did not accept a benign name "
+                 "— mock setup is wrong")
+
 
 @pytest.mark.unit
 class TestSafeRealpath:

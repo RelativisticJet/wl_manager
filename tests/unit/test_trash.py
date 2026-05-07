@@ -192,6 +192,181 @@ class TestMoveToTrash:
 
 
 @pytest.mark.unit
+class TestMoveToTrashMetadataShape:
+    """R0-F5 fix: pin the full metadata schema written by
+    ``move_to_trash`` to ``metadata.json``.
+
+    Build-641 was the same bug class in a different module
+    (``project_pending_info`` dropped ``comment`` from the
+    projection). The trash subsystem has the same risk surface:
+    if a future refactor drops a field from
+    ``build_trash_metadata`` (e.g. ``comment``,
+    ``deleted_by``), the trash dashboard and audit-trail
+    drilldown silently lose context. We'd find out only when an
+    analyst asked "why was this rule deleted?" and the audit
+    panel was empty.
+
+    Mechanically the same pattern as
+    ``test_pending_info_projection.py`` —
+    ``REQUIRED_METADATA_FIELDS`` is the single source of truth
+    for the schema, and any drop fails this test.
+    """
+
+    REQUIRED_METADATA_FIELDS_COMMON = {
+        "item_type",
+        "name",
+        "deleted_by",
+        "deleted_at",
+        "deleted_at_human",
+        "comment",
+        "expiry_ts",
+        "expiry_human",
+        "retention_days",
+        "rule_name",
+        "app_context",
+    }
+
+    def _read_written_metadata(self, lookups_dir, trash_id):
+        """Locate and parse the metadata.json the function just
+        wrote, so we can assert on its actual contents (not on
+        the in-memory dict)."""
+        trash_dir = lookups_dir / "_trash"
+        meta_path = trash_dir / trash_id / "metadata.json"
+        assert meta_path.exists(), \
+            "metadata.json was not written for trash_id {}".format(
+                trash_id)
+        with meta_path.open(encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def test_csv_metadata_has_full_documented_schema(
+            self, tmp_path):
+        """Pins the FULL field set for a CSV trash entry."""
+        lookups_dir = tmp_path / "lookups"
+        lookups_dir.mkdir()
+        csv_file = lookups_dir / "DR123_test.csv"
+        csv_file.write_text("h1,h2\nv1,v2")
+
+        with patch("wl_trash.OWN_LOOKUPS", str(lookups_dir)):
+            with patch("wl_trash.build_csv_path",
+                       return_value=str(csv_file)):
+                trash_id = move_to_trash(
+                    item_type="csv",
+                    name="DR123_test.csv",
+                    user="analyst1",
+                    comment="Ring 1 R0-F5 metadata-shape pin",
+                    app_context="wl_manager",
+                    detection_rule="DR123",
+                )
+
+        meta = self._read_written_metadata(lookups_dir, trash_id)
+
+        missing = self.REQUIRED_METADATA_FIELDS_COMMON - set(meta.keys())
+        assert not missing, \
+            ("CSV trash metadata missing fields: {}. "
+             "Field set: {}".format(missing, sorted(meta.keys())))
+        # CSV-specific field
+        assert "original_path" in meta, \
+            "CSV trash metadata must include 'original_path'"
+
+        # Spot-checks on values that build-641-class drops would
+        # leave defaulted. If `comment` were silently dropped, it
+        # would either be missing (caught above) or be an empty
+        # string when the user supplied a real value.
+        assert meta["item_type"] == "csv"
+        assert meta["name"] == "DR123_test.csv"
+        assert meta["deleted_by"] == "analyst1"
+        assert meta["comment"] == "Ring 1 R0-F5 metadata-shape pin"
+        assert meta["app_context"] == "wl_manager"
+        assert meta["rule_name"] == "DR123"
+
+    def test_rule_metadata_has_full_documented_schema(
+            self, tmp_path):
+        """Pins the FULL field set for a rule trash entry. Rule
+        entries differ from CSV entries only in two fields:
+
+        - ``original_path`` is absent (no single CSV path)
+        - ``associated_csvs`` is present (list of CSVs that move
+          along with the rule)
+        """
+        lookups_dir = tmp_path / "lookups"
+        lookups_dir.mkdir()
+
+        with patch("wl_trash.OWN_LOOKUPS", str(lookups_dir)):
+            trash_id = move_to_trash(
+                item_type="rule",
+                name="DR_RING1_TEST",
+                user="wladmin1",
+                comment="Ring 1 R0-F5 rule metadata pin",
+                associated_csvs=[
+                    {"csv_file": "DR_x.csv", "app_context": ""},
+                    {"csv_file": "DR_y.csv", "app_context": "wl_manager"},
+                ],
+            )
+
+        meta = self._read_written_metadata(lookups_dir, trash_id)
+
+        missing = self.REQUIRED_METADATA_FIELDS_COMMON - set(meta.keys())
+        assert not missing, \
+            ("Rule trash metadata missing fields: {}".format(missing))
+        # Rule-specific field
+        assert "associated_csvs" in meta, \
+            "Rule trash metadata must include 'associated_csvs'"
+        assert isinstance(meta["associated_csvs"], list)
+        assert len(meta["associated_csvs"]) == 2
+        # Rule entries should NOT carry original_path (single
+        # CSV concept doesn't apply)
+        assert "original_path" not in meta, \
+            ("Rule trash metadata accidentally carries "
+             "'original_path' — that's a CSV-only field")
+
+        assert meta["item_type"] == "rule"
+        assert meta["name"] == "DR_RING1_TEST"
+        assert meta["deleted_by"] == "wladmin1"
+        assert meta["comment"] == "Ring 1 R0-F5 rule metadata pin"
+
+    def test_metadata_comment_is_sanitized_not_dropped(
+            self, tmp_path):
+        """Specifically pins: ``comment`` is sanitize_text()ed,
+        NOT silently dropped. This is the precise build-641 bug
+        that R0-F5 was about — ``project_pending_info`` had a
+        case where the comment was dropped from the projection
+        dict. Make sure the equivalent doesn't happen for trash.
+        """
+        lookups_dir = tmp_path / "lookups"
+        lookups_dir.mkdir()
+        csv_file = lookups_dir / "x.csv"
+        csv_file.write_text("a,b\n1,2")
+
+        # Comment with control chars that sanitize_text strips
+        raw_comment = "Reason\nwith\tcontrol  chars"
+        with patch("wl_trash.OWN_LOOKUPS", str(lookups_dir)):
+            with patch("wl_trash.build_csv_path",
+                       return_value=str(csv_file)):
+                trash_id = move_to_trash(
+                    item_type="csv",
+                    name="x.csv",
+                    user="analyst1",
+                    comment=raw_comment,
+                )
+
+        meta = self._read_written_metadata(lookups_dir, trash_id)
+        # Comment must be present
+        assert "comment" in meta, \
+            "comment field dropped from trash metadata"
+        # Comment is non-empty (sanitize_text doesn't strip
+        # legitimate text — only control chars / collapses
+        # whitespace)
+        assert meta["comment"], \
+            ("comment field present but empty — sanitize_text "
+             "returned '' for a legitimate input. Bug.")
+        # The sanitized output should still contain the substantive
+        # words from the input
+        assert "Reason" in meta["comment"]
+        assert "control" in meta["comment"]
+        assert "chars" in meta["comment"]
+
+
+@pytest.mark.unit
 class TestListTrash:
     """Tests for list_trash function."""
 

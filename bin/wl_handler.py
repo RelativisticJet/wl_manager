@@ -5509,6 +5509,13 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "analyst": user,
             "action_type": action_type,
             "status": "pending",
+            # Build 645 (R1-D5-F1): write `timestamp` alongside
+            # `submitted_at`. Single-admin entries use `timestamp`
+            # and `expire_pending_approvals` reads that key. A
+            # missing `timestamp` was treated as epoch 0 which
+            # made the entry "30 days old" and silently expired
+            # the next time any other submit ran.
+            "timestamp": now,
             "submitted_at": now,
             "submitted_at_human": time.strftime(
                 "%Y-%m-%d %H:%M:%S UTC", time.gmtime(now)),

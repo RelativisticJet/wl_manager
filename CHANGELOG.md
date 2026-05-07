@@ -64,6 +64,124 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-08 (build 645, Ring 1 close: dual-admin timestamp fix + R0-F4/R0-F5 pin tests)
+
+### Bug — dual-admin queue entries silently expire after sibling submits (R1-D5-F1)
+
+Surfaced during Ring 1 Day 5 KV schema testing. Two write
+paths build approval queue entries with **incompatible
+schemas**:
+
+- Single-admin path (`bin/wl_handler.py:_submit_approval`,
+  ~line 5219) writes `entry["timestamp"] = now`
+- Dual-admin path (`bin/wl_handler.py:_submit_dual_approval`,
+  ~line 5507) writes `entry["submitted_at"] = now`, no
+  `timestamp` key
+
+The consumer `wl_approval.expire_pending_approvals` only
+reads `timestamp`. For dual-admin entries the missing key
+returns `0` from `entry.get("timestamp", 0)`, which is `<=`
+the 30-day expiry threshold, so the entry is silently
+expired the next time `expire_pending_approvals` runs
+(triggered by any single-admin submit).
+
+Customer-visible symptom: an admin submits a dual-admin
+request (e.g. `admin_factory_reset`) at 09:00; another
+analyst submits a column-removal at 09:05; the dual-admin
+request silently disappears from the queue with no audit
+trail. The submitter sees their pending request vanish and
+has no idea why.
+
+### Fix
+
+Two-part fix:
+
+1. **Write side** (`_submit_dual_approval`): write both
+   `timestamp` and `submitted_at` (same epoch). Existing
+   downstream consumers that read `submitted_at_human` for
+   display continue to work.
+2. **Read-side fallback** (`expire_pending_approvals`): if
+   `timestamp` is missing or None, fall back to
+   `submitted_at`. Defensively coerce to int. Handles legacy
+   queue entries written before this fix; once they all
+   resolve/expire the fallback is dead code but stays as
+   protection against any future write path that forgets
+   `timestamp`.
+
+### Tests
+
+`tests/integration/test_approval_workflow.py::TestSubmitDualApprovalQueueEntryShape`
+(2 tests):
+
+- `test_dual_admin_entry_has_timestamp_and_required_fields`
+  pins the dual-admin queue entry shape including a positive
+  integer `timestamp` matching `submitted_at`.
+- `test_dual_admin_entry_survives_subsequent_single_admin_submit`
+  reproduces the exact bug — submit dual-admin, then a
+  sibling single-admin submit, then verify the dual-admin
+  entry is still in the queue.
+
+Mutation-tested: temporarily reverting the `"timestamp": now`
+write triggers `test_dual_admin_entry_has_timestamp_and_required_fields`
+to fail with the exact diagnostic the bug would produce in
+production.
+
+### Tests added — R0-F4 pin
+
+`tests/unit/test_validation.py::TestIsSafeFilename::test_basename_check_independently_rejects_path_separators`
+mock-relaxes the stem regex to a permissive variant, then
+asserts the `os.path.basename(name) != name` check still
+rejects path-traversal inputs. The basename check is
+incidentally redundant for current inputs (stem regex is so
+strict it rejects separators too), but if a future refactor
+relaxes the regex the basename check becomes load-bearing.
+The new test guarantees the basename check still works in
+isolation.
+
+### Tests added — R0-F5 pin
+
+`tests/unit/test_trash.py::TestMoveToTrashMetadataShape`
+(3 tests) pins the FULL field set written to
+`metadata.json` for both CSV and rule trash entries.
+Specifically catches the build-641 bug class (silent field
+drop) — if a future refactor drops `comment` or any other
+field from `build_trash_metadata`, these tests fail
+immediately. Mutation-tested: dropping the comment line
+causes 3 simultaneous test failures.
+
+### Audit invariant — tightened time window (R1-D7-F1)
+
+`TestCommonAuditFieldsInvariant.test_recent_audit_events_carry_common_fields`
+narrowed from `earliest=-1d` to `earliest=-5m`. The 1-day
+window made the test sensitive to events polluted by mutation
+testing for up to 24 hours after. Five-minute window is short
+enough to age out polluted events between sessions and long
+enough that an in-progress run finds its own freshly-emitted
+events.
+
+### Migration / rollback
+
+Pure server-side fixes, no schema change for existing data.
+Existing dual-admin queue entries (written before build 645)
+do NOT carry `timestamp` — the read-side fallback handles
+them gracefully via `submitted_at`. New writes carry both.
+
+Rollback: revert this commit and redeploy at the
+previously-shipped build (one prior). New dual-admin entries
+written at the rolled-back build lack `timestamp` and silently
+expire on the next single-admin submit (the original bug). The
+R0-F4/R0-F5 pin tests would still pass at the rolled-back
+build (they don't depend on the fix); only R1-D5-F1's two
+integration tests would re-fail.
+
+### Decision log entry
+
+| Date | Decision | Alternatives | Why this won | Reversal cost |
+| ---- | -------- | ------------ | ------------ | ------------- |
+| 2026-05-08 | Fix R1-D5-F1 with both write-side `timestamp` AND read-side `submitted_at` fallback | (a) write-side only; (b) migration script that rewrites legacy entries; (c) typed dataclass for queue entries | (a) leaves legacy entries silently expiring forever — the fallback handles them in-place. (b) requires a one-shot migration that could fail mid-run and leave the queue in a partial state. (c) is the right long-term answer (typed schemas would have prevented this bug entirely) but is an order of magnitude more work, out of Ring 1 scope. | Low — revert this commit; pre-build-645 behavior returns. The fallback line is harmless if left in place even after every legacy entry ages out. |
+
+---
+
 ## Unreleased — 2026-05-07 (build 644, audit envelope chokepoint enforces 7 common fields)
 
 ### Bug — config-only audit events missing common fields

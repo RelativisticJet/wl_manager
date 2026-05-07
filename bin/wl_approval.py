@@ -378,7 +378,20 @@ def expire_pending_approvals(queue: Optional[List[Dict]] = None) -> List[Dict]:
 
     filtered = []
     for entry in queue:
-        timestamp = entry.get("timestamp", 0)
+        # Build 645 (R1-D5-F1): fall back to `submitted_at` for
+        # legacy dual-admin queue entries that were written
+        # without `timestamp` before the fix. New writes carry
+        # both, so once existing pending dual-admin entries
+        # resolve or expire, this fallback becomes dead code —
+        # but we keep it indefinitely for safety against any
+        # future write path that forgets `timestamp`.
+        timestamp = entry.get("timestamp")
+        if timestamp is None:
+            timestamp = entry.get("submitted_at", 0)
+        # `entry.get("timestamp", 0)` returns None (not 0) when
+        # the key exists with value None. Coerce defensively.
+        if not isinstance(timestamp, (int, float)):
+            timestamp = 0
 
         # Expire pending if old enough
         if entry.get("status") == "pending" and timestamp <= expired_threshold:

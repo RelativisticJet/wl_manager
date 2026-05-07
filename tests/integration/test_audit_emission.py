@@ -381,13 +381,23 @@ class TestCommonAuditFieldsInvariant:
         regression where a new action emits to wl_audit without
         the common envelope (e.g., a contributor adds an event
         without going through ``build_audit_event`` AND the
-        ``_index_audit`` chokepoint somehow misses it)."""
+        ``_index_audit`` chokepoint somehow misses it).
+
+        Time window: ``earliest=-5m``. Tighter than the 1-day
+        default because events from prior CI runs (or local
+        mutation-test sessions that intentionally polluted the
+        index) shouldn't fail this test indefinitely. Five
+        minutes is short enough that any post-mutation event is
+        outside the window quickly, and long enough that an
+        in-progress run can find the events it just emitted.
+        """
         events = _splunk_search(
-            "index=wl_audit sourcetype=wl_audit earliest=-1d "
+            "index=wl_audit sourcetype=wl_audit earliest=-5m "
             "| head 20")
         if not events:
             pytest.skip(
-                "no recent audit events to sample (fresh container?)")
+                "no recent audit events to sample (no events in "
+                "last 5 minutes)")
 
         violators = []
         for evt in events:

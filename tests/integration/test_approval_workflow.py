@@ -42,9 +42,24 @@ pytestmark = pytest.mark.docker
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _post_action(container_curl, action: str, payload: dict):
-    """Issue ``POST /services/custom/wl_manager``. Returns
-    ``(http_code, body_dict)``."""
+def _post_action(container_curl, action: str, payload: dict,
+                 user: str = "admin"):
+    """Issue ``POST /services/custom/wl_manager``.
+
+    Returns either:
+    - (http_code, body_dict) for legacy callers
+    - body_dict directly when called as a kwarg-aware helper
+
+    For backward compatibility we keep returning a tuple by
+    default, but tests that pass ``user=`` typically just want
+    the body, so we return the body dict in that case (the new
+    callers don't unpack a tuple).
+
+    To preserve existing tests, this helper still returns a
+    tuple. Tests that pass ``user=`` should index ``[1]`` or
+    use the returned dict directly — the dict shape didn't
+    change.
+    """
     body = json.dumps({"action": action, **payload})
     proc = container_curl(
         "/services/custom/wl_manager",
@@ -52,13 +67,19 @@ def _post_action(container_curl, action: str, payload: dict):
         data=body,
         content_type="application/json",
         check=False,
+        user=user,
     )
     raw = proc.stdout.strip()
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        return (200 if proc.returncode == 0 else 0,
-                {"_raw": raw})
+        parsed = {"_raw": raw}
+    # Return the body dict directly. Existing callers that
+    # destructure ``code, body = _post_action(...)`` can keep
+    # working because we yield (200, body) for them too via
+    # __iter__ semantics on a tuple. Simplest: just always
+    # return a tuple. If a caller expects a single dict (newer
+    # tests in this file), they can use _post_action(...)[1].
     return (200, parsed)
 
 
@@ -249,6 +270,121 @@ class TestSubmitApprovalQueueEntryShape:
         # And verify the comment we typed actually landed
         assert new_entry["comment"] == "Ring 1 build 641 contract pin", \
             f"comment did not survive submission: {new_entry['comment']!r}"
+
+
+class TestSubmitDualApprovalQueueEntryShape:
+    """R1-D5-F1 fix: pins the dual-admin queue entry contract,
+    specifically that ``timestamp`` is present.
+
+    Bug class: dual-admin submits at ``_submit_dual_approval``
+    write entries with ``submitted_at`` but no ``timestamp``.
+    The consumer ``wl_approval.expire_pending_approvals`` reads
+    ``entry.get("timestamp", 0)`` — for entries without a
+    ``timestamp`` key that returned ``0``, evaluating to
+    "30 days old", and the entry was silently expired by the
+    next single-admin submit.
+
+    Shipped fix (build 645): write both ``timestamp`` and
+    ``submitted_at`` on the dual-admin path; expire fallback to
+    ``submitted_at`` when ``timestamp`` is missing (handles any
+    legacy queue entries written before the fix).
+    """
+
+    REQUIRED_DUAL_FIELDS = {
+        "request_id", "analyst", "action_type", "status",
+        "timestamp", "submitted_at", "submitted_at_human",
+        "comment", "meta", "is_dual_admin",
+    }
+
+    def test_dual_admin_entry_has_timestamp_and_required_fields(
+            self, container_state, container_curl):
+        _, body = _post_action(container_curl, "submit_dual_approval", {
+            "action_type": "admin_factory_reset",
+            "comment": "Ring 1 R1-D5-F1 dual-admin shape pin",
+        }, user="superadmin1")
+        if "error" in body:
+            pytest.skip(
+                "submit_dual_approval failed: {}".format(body))
+        request_id = body["request_id"]
+
+        # Read back via admin GET
+        queue = _read_queue_via_get(container_curl)
+        entry = next(
+            (e for e in queue if e["request_id"] == request_id),
+            None)
+        assert entry is not None, \
+            "dual-admin request not in queue: {}".format(request_id)
+        assert entry.get("is_dual_admin") is True, \
+            "is_dual_admin flag missing or false"
+
+        # Pin the field set
+        missing = self.REQUIRED_DUAL_FIELDS - set(entry.keys())
+        assert not missing, \
+            ("dual-admin queue entry missing fields: {}. "
+             "Entry keys: {}".format(missing, sorted(entry.keys())))
+
+        # The R1-D5-F1 fix specifically: timestamp must be a
+        # positive int, not None, not zero. If this fails, the
+        # write-side fix didn't land.
+        ts = entry.get("timestamp")
+        assert isinstance(ts, int) and ts > 0, \
+            ("dual-admin entry has invalid timestamp: {!r}. "
+             "R1-D5-F1 fix not applied.".format(ts))
+        # timestamp and submitted_at should be the same epoch
+        # (both are set to ``now`` at submit time)
+        assert entry.get("submitted_at") == ts, \
+            ("timestamp ({}) != submitted_at ({}) — they should "
+             "be the same value written at submit time".format(
+                 ts, entry.get("submitted_at")))
+
+    def test_dual_admin_entry_survives_subsequent_single_admin_submit(
+            self, container_state, container_curl):
+        """The exact bug R1-D5-F1 fixed: a dual-admin pending
+        entry would silently disappear when ANY non-dual submit
+        happened, because expire_pending_approvals saw the
+        absent timestamp as 0 (= 30+ days old).
+
+        With the fix, the dual-admin entry should still be in
+        the queue after a sibling single-admin submit triggers
+        an expire pass.
+        """
+        # Step 1: submit dual-admin request
+        _, dual_body = _post_action(
+            container_curl, "submit_dual_approval", {
+                "action_type": "admin_factory_reset",
+                "comment": "Ring 1 R1-D5-F1 survival test",
+            }, user="superadmin1")
+        if "error" in dual_body:
+            pytest.skip("dual-admin submit failed: {}".format(dual_body))
+        dual_id = dual_body["request_id"]
+
+        # Step 2: submit a single-admin request to trigger
+        # expire_pending_approvals as a side effect
+        mapping_proc = container_curl(
+            "/services/custom/wl_manager?action=get_mapping",
+            check=False)
+        mapping = json.loads(mapping_proc.stdout.strip())
+        if not mapping.get("mapping"):
+            pytest.skip("no mappings")
+        entry = mapping["mapping"][0]
+        single_body = _submit_column_removal_request(
+            container_curl, entry["csv_file"], entry["rule_name"],
+            comment="Ring 1 R1-D5-F1 trigger expire")
+        if "error" in single_body:
+            pytest.skip("single submit failed: {}".format(single_body))
+
+        # Step 3: read queue — dual-admin entry MUST still be
+        # present. Pre-fix this would fail with the dual_id gone.
+        queue = _read_queue_via_get(container_curl)
+        survivor = next(
+            (e for e in queue if e["request_id"] == dual_id),
+            None)
+        assert survivor is not None, \
+            ("R1-D5-F1 regression: dual-admin entry {} was silently "
+             "expired by sibling single-admin submit. Check that "
+             "_submit_dual_approval writes 'timestamp' and that "
+             "expire_pending_approvals falls back to submitted_at."
+             .format(dual_id))
 
 
 class TestSubmitApprovalErrorPaths:
