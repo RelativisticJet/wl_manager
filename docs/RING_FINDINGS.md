@@ -901,3 +901,87 @@ Ready to proceed to Day 6: recovery script smoke tests
 (`scripts/emergency_unlock.sh`, `scripts/reset_cooldowns.sh`,
 `scripts/fim_deploy_window.sh`, `bootstrap_csv_hashes` REST
 action).
+
+---
+
+### Day 6 — Recovery surface smoke tests
+
+**Date**: 2026-05-08. Goal: pin the contracts of every
+out-of-band recovery surface so a regression couldn't break
+disaster recovery without a test failing.
+
+#### Tests added
+
+`tests/integration/test_recovery_scripts.py` — 18 tests across
+4 classes:
+
+| Test class | Pinned contract |
+| ---------- | --------------- |
+| `TestFimDeployWindowREST` (7 tests) | open / close / status REST actions; reason required; duration ≤ 60; non-ASCII reason rejected; idempotent close errors clearly; RBAC (analyst1 cannot open) |
+| `TestBootstrapCsvHashes` (4 tests) | response envelope `{success, hashed_count, missing_count, changed_count}`; registry file created on first run; superadmin-only RBAC; idempotent (changed_count=0 on second run) |
+| `TestRecoveryLogContract` (4 tests) | every recovery action appends to `_recovery_log.jsonl` BEFORE destructive effect; required fields `{timestamp, action}`; action names are in the documented inventory |
+| `TestEmergencyUnlockScript` (3 tests) | `activate_lockdown` creates the file; `emergency_unlock.sh` with stdin-piped reason+confirm removes the file AND appends recovery log entry; empty reason → script aborts with no destructive effect |
+
+#### Out of scope: `scripts/reset_cooldowns.sh`
+
+Not tested directly because it restarts Splunk (~30 s downtime),
+which would race subsequent tests in the same suite. The
+recovery-log invariants we pin here apply to it equally — same
+shell-script template, same `python3 -c` audit-append idiom.
+Tested manually as part of disaster-recovery drills, not on
+every CI run.
+
+#### Cross-platform challenges encountered
+
+Two non-trivial wrinkles surfaced during Day 6 development:
+
+1. **Python `subprocess.run(["bash", ...])` finds WSL bash on
+   Windows**, not Git Bash. WSL bash on machines without
+   Docker-WSL integration cannot reach the Docker daemon
+   (Docker Desktop must be configured for WSL integration to
+   make `docker` available inside WSL). Fix:
+   `_find_host_bash()` helper at the top of the file probes
+   `C:\Program Files\Git\bin\bash.exe` first on Windows, falls
+   back to `shutil.which("bash")` elsewhere. Tests skip
+   gracefully if no docker-capable bash is found (CI on Linux
+   uses plain bash with no issue).
+
+2. **Text-mode line endings break `read -r -p` interactive
+   prompts**: piping `"reason\ny\n"` as `text=True` would have
+   the first `read` swallow the reason but the second `read`
+   (y/N confirm) get an empty buffer. Probably MSYS line-ending
+   translation rewriting `\n` → `\r\n` on the way INTO bash but
+   the second `read` not eating the `\r`. Fix: pass binary
+   bytes (`input=b"reason\ny\n"`) — no text-mode translation,
+   plain LF lands at both reads.
+
+Logging both issues here because they will bite future
+shell-script tests in the same way. The pattern is now
+established in `_HOST_BASH` + binary-stdin.
+
+#### Day 6 summary
+
+18 new tests, all passing. The four recovery surfaces are
+pinned, including their security-critical invariant: every
+recovery action appends to `_recovery_log.jsonl` BEFORE the
+destructive effect, so a SIGKILL between append and effect
+leaves an extra audit entry, never a silent destructive run.
+
+| Suite scope | Pre-Day-6 | Post-Day-6 |
+| ----------- | --------- | ---------- |
+| Recovery script tests | 0 | 18 |
+| Total integration tests | 180 | 198 |
+| Pass rate | 100% | 100% |
+
+Day 1+2+3+4+5+6 cumulative: **106 / 70 tests** (well over the
+original goal — Ring 1 is producing significant test coverage
+beyond what was scoped).
+
+Ready to proceed to Day 7: ring close. Day 7 plan:
+- Apply R0-F4 fix (`is_safe_filename` redundancy)
+- Apply R0-F5 fix (`move_to_trash` projection drift)
+- Apply R1-D5-F1 fix (dual-admin queue `timestamp` field)
+- Mutation testing gate (kill at least 3 mutations across the
+  Ring 1 test corpus to verify they actually catch bugs)
+- CI integration: wire integration tests into GitHub Actions
+- Ring close commit + summary in RING_FINDINGS.md
