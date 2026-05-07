@@ -382,3 +382,74 @@ after Ring 0 — net +8 from the new fixture smoke tests.
 Container snapshot+restore cost confirmed at ~3 seconds per
 fixture-using test (well within the 2-4 second budget). Total
 suite runtime: 31.5 seconds.
+
+### Day 2 (chunk 1) — dispatch integrity + simple POST happy paths
+
+**Status**: in progress (chunk 1 done; chunks 2+ continue Day 2-3).
+
+#### `tests/integration/test_dispatch_integrity.py` (new) — 16 tests
+
+Pins the structural invariants of ``GET_ACTIONS`` and
+``POST_ACTIONS``. Read-only, no fixture overhead. Covers:
+
+- Tables exist + are non-empty dicts (2 tests)
+- Every entry has the right shape (roles + method_name) (2 tests)
+- Every method_name resolves to a callable on the handler (2 tests)
+- Every method_name follows ``_action_<name>`` naming (2 tests)
+- No action name in both tables, no duplicate method_names (3 tests)
+- **RBAC tier hard-list** — known-superadmin/admin/edit actions
+  pinned to the right tier; weakening a tier fails the test
+  (3 tests)
+- **Public actions allow-list** — every action with ``roles=None``
+  must be on a hardcoded allow-list with a documented rationale
+  (2 tests). Catches the regression where a destructive action
+  silently loses its role tier.
+
+Discovery during test development: my initial assumption was that
+roles were tuples — they're actually ``Set[str]``. Test was
+adjusted; this is exactly the kind of contract clarification
+that test-writing surfaces.
+
+#### `tests/integration/test_post_happy_paths.py` (new) — 10 tests
+
+Each test issues a real POST against the test container and
+asserts the FULL response shape, not just top-level keys. Uses
+``container_state`` fixture for state-mutating tests.
+
+Tier 1 (no preconditions) — 7 tests:
+- ``mark_notifications_read`` — success flag
+- ``save_col_widths`` — success flag + round-trip via GET (2 tests)
+- ``log_event`` — csv_exported / csv_imported / audit_exported
+  variants (3 tests)
+- ``set_trash_retention`` — config file written with new value
+
+Tier 2 (preconditions needed) — 3 tests:
+- ``create_csv`` — full response shape (success, csv_file echo,
+  message)
+- ``create_rule`` — full response shape (success, detection_rule
+  echo, message)
+- ``save_csv`` (small edit, no approval) — including the
+  ``pending_approvals`` deep contract that pins all 8 fields
+  (build-641 fence). If the same projection drift recurs in
+  ``save_csv``'s embedded pending_approvals, this test fails.
+
+Field-name discoveries during test writing (good signal — pins
+the actual API contract):
+- ``create_csv`` and ``create_rule`` both take ``detection_rule``
+  (not ``rule_name``). The mapping CSV stores ``rule_name`` as
+  the column header but the API uses ``detection_rule``
+  consistently. Documenting this in the test fence makes it
+  self-pinning.
+- ``save_csv`` requires ``detection_rule`` AND ``headers`` AND
+  ``rows`` AND ``expected_mtime`` AND ``expected_content_hash``.
+  Missing any returns 400. Test now follows the proper sequence:
+  GET mapping → resolve rule → GET csv_content → POST save_csv.
+
+#### Day 2 chunk 1 summary
+
+26 new tests, all passing. Total suite: **720 tests** (was 694).
+Total runtime: ~46 seconds (15 of those are the new docker tests).
+
+Continuing Day 2-3 with: more POST happy paths (purge_trash,
+restore_from_trash, save_as_default, submit_approval, etc.), then
+POST error paths and approval workflow.
