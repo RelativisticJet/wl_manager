@@ -303,3 +303,82 @@ with existing coverage.
 
 **Ring 0 status: ready for sign-off.** Awaiting user "go" to
 proceed to Ring 1.
+
+**Ring 0 closed**: user signed off 2026-05-07 with "Proceed" on
+mutation kill rate, "full Ring 1" on scope.
+
+---
+
+## Ring 1 — Backend Contract Tests (in progress)
+
+**Goal**: rewrite the high-value scenarios from the deleted zombie
+tests (R0-F2) as proper container contract tests with deep response
+shape inspection. Add audit-event schema tests, KV invariants,
+recovery script smoke tests, and the R0-F4/R0-F5 fixes. Close with a
+mutation gate at ≥80% kill rate.
+
+### Day 1 — `docs/TESTING.md` + `container_state` fixture
+
+**Status**: complete.
+
+#### `docs/TESTING.md` (new)
+
+Authoritative architecture document. Defines the three test layers
+(unit / integration / e2e), when to use each, the
+``container_state`` fixture contract, the markers, and the pattern
+of "deep contract over shallow shape, container over mock,
+mutation-gated over feeling-confident."
+
+Written so the next contributor — or the next Claude session —
+has a clear answer to "where does this test go?" and "what does
+it need to assert?". Specifically calls out the build-641 / R0-F5
+shallow-test anti-pattern with a concrete bad/good example pair.
+
+#### `tests/integration/conftest.py` (new) — `container_state` fixture
+
+Snapshots and restores wl_manager's state around each test that
+requests the fixture. Two layers:
+
+1. **Filesystem**: ``tar -czf`` over ``lookups/`` (atomic, captures
+   approval queue, daily limits, FIM baseline, trash, version
+   snapshots, all CSVs). Snapshot kept both inside the container
+   and on the host (for survival across container restart).
+2. **KV**: ``curl`` each wl_manager-owned collection
+   (``wl_cooldowns``, ``wl_fim_baseline``) to a JSON dump,
+   restore via DELETE-all + POST-each.
+
+All subprocess calls use ``subprocess.run([list, of, args])`` —
+never shell strings, no injection vectors. Container name and
+credentials are baked-in module constants.
+
+Cost: ~3-4 seconds per state-mutating test. Tests that don't
+request the fixture pay zero cost (opt-in by parameter name).
+
+#### `tests/integration/test_container_state_fixture.py` (new)
+
+Eight smoke tests that pin the fixture's behaviour:
+
+- **Handle shape**: snapshot_path exists, kv_dumps populated for
+  each collection, dumps are lists
+- **File restore**: sentinel file written inside the fixture is
+  gone after teardown
+- **KV restore**: sentinel record added to ``wl_cooldowns`` inside
+  the fixture is gone after teardown
+- **Opt-in**: test that doesn't request the fixture pays no cost
+
+The file/KV restore tests use a clever pattern — write a sentinel
+in `test_X_inside_fixture`, verify it's gone in
+`test_X_is_gone_after_teardown`. This catches a class of fixture
+bug that single-test verification cannot: any state that "leaks"
+between tests.
+
+All 8 tests pass. The fixture is the foundation Ring 1 builds on.
+
+#### Day 1 baseline
+
+**694 tests passing**, 1 Windows-skipped (symlink). Up from 686
+after Ring 0 — net +8 from the new fixture smoke tests.
+
+Container snapshot+restore cost confirmed at ~3 seconds per
+fixture-using test (well within the 2-4 second budget). Total
+suite runtime: 31.5 seconds.
