@@ -3037,7 +3037,12 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "reset_day_of_week": (0, 6),
             "reset_day_of_month": (1, 31),
             "reset_month": (1, 12),
-            "reset_day_of_year": (1, 31),
+            # Build 646 (R2-D1-F1): widened from (1, 31) to
+            # (1, 366) — wl_constants.py documents this as
+            # "1-366, clamped to last day". The (1, 31) range
+            # was a copy-paste bug that silently rejected
+            # yearly resets configured for days > 31.
+            "reset_day_of_year": (1, 366),
         }
 
         # Snapshot old values for diff
@@ -6917,7 +6922,9 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "reset_day_of_week": (0, 6),
             "reset_day_of_month": (1, 31),
             "reset_month": (1, 12),
-            "reset_day_of_year": (1, 31),
+            # Build 646 (R2-D1-F1): widened from (1, 31) to
+            # (1, 366). See _set_admin_limits for the same fix.
+            "reset_day_of_year": (1, 366),
         }
         for key, (lo, hi) in SCHEDULE_INT_KEYS.items():
             old_values[key] = config.get(key, DEFAULT_LIMITS.get(key, lo))

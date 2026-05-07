@@ -994,7 +994,7 @@ Ready to proceed to Day 7: ring close. Day 7 plan:
 verify the test corpus actually catches real bugs via mutation
 testing, and close Ring 1 with a retrospective.
 
-#### Fixes applied (build 645)
+#### Fixes applied (shipped build 645)
 
 **R0-F4 — `is_safe_filename` basename check pin**:
 Added `tests/unit/test_validation.py::TestIsSafeFilename::
@@ -1211,7 +1211,7 @@ ring, plus production fixes for 5 findings. Original goal: 70.
 | R0-F5 | `move_to_trash` projection drift bug class | Pin tests added Day 7 |
 | R1-D2-F1 | `create_rule` UX: generic error instead of specific | Fixed Day 2, shipped build 643 |
 | R1-D4-F1 | 20 inline audit events bypass common-fields envelope | Fixed Day 4 (chokepoint), shipped build 644 |
-| R1-D5-F1 | Dual-admin queue entries lack `timestamp`, silently expire | Fixed build 645 (Day 7) |
+| R1-D5-F1 | Dual-admin queue entries lack `timestamp`, silently expire | Fixed Day 7, shipped build 645 |
 | R1-D7-F1 | Audit invariant test flaky on stale events | Fixed Day 7 (5-min window) |
 
 ### Day-by-day production output

@@ -64,6 +64,68 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-08 (build 646, Ring 2 Day 1: limit edge case coverage + reset_day_of_year fix)
+
+### Bug — `reset_day_of_year` validator clamped to (1, 31) (R2-D1-F1)
+
+Surfaced during Ring 2 Day 1 limit-edge-case test development.
+``wl_constants.py`` documents the field as
+`"1-366, clamped to last day (used by yearly)"` but the
+validator in both `_set_daily_limits_action` (line 6921) and
+`_set_admin_limits` (line 3036) clamped it to the same range
+as `reset_day_of_month` — `(1, 31)` — almost certainly a
+copy-paste error from the surrounding `reset_day_of_month`
+entry.
+
+Customer-visible impact: a yearly reset configured for any
+day > 31 is silently rejected. The API returns success, the
+audit event logs no change, the value stays at the previous
+default (1). The UI would show day 100, the backend stores
+day 1.
+
+### Fix
+
+Both validator definitions widened from `(1, 31)` to `(1, 366)`.
+The fire-time logic in `bin/wl_limits.py` already clamps the
+value to the actual last day of the year, so 366 covers both
+common years (clamps 366 → 365) and leap years (366 fires on
+day 366). No data migration needed — pre-existing values were
+all in the (1, 31) range that survived the buggy validator.
+
+### Tests
+
+`tests/integration/test_limit_edge_cases.py` — 35 new tests:
+
+- `TestAnalystLimitBoundaries` (5 tests) — int range
+  validator: 0 accepted (disabled semantic), 100 accepted
+  (max), 101 silently rejected, negative silently rejected,
+  string silently rejected
+- `TestAnalystLimitBooleanCoercion` (2 tests) — `bool(val)`
+  coercion of toggles
+- `TestAnalystLimitFrequency` (6 tests) — every value in
+  `VALID_FREQUENCIES` accepted, invalid silently rejected
+- `TestAnalystLimitResetTime` (10 tests) — HH:MM parsing
+  with HH=0-23, MM=0-59
+- `TestAnalystLimitScheduleRanges` (12 tests) — boundary
+  validation across all 4 SCHEDULE_INT_KEYS at low / high /
+  above-high. The `reset_day_of_year` parametrization at
+  high=366 was the failing test that surfaced R2-D1-F1.
+
+### Migration / rollback
+
+Pure server-side fix. Pre-existing values in (1, 31) range
+unaffected. Rollback: revert this commit and redeploy at the
+previously-shipped build. New `reset_day_of_year` values >31
+will silently revert to default (1) again.
+
+### Decision log entry
+
+| Date | Decision | Alternatives | Why this won | Reversal cost |
+| ---- | -------- | ------------ | ------------ | ------------- |
+| 2026-05-08 | Widen `reset_day_of_year` validator from `(1, 31)` to `(1, 366)` in both `_set_daily_limits_action` and `_set_admin_limits` | (a) extract `SCHEDULE_INT_KEYS` to a single module-level constant to prevent future drift; (b) return error on out-of-range instead of silent reject (consistent with the rest of validation); (c) match the broader app's "validate at gate" pattern by raising 400 | (a) is the right long-term refactor (same chokepoint pattern Ring 1 used for audit envelope) but is out of Day 1 scope. (b)/(c) would break frontend forms that send all 17 keys at once and expect partial-success — we'd have to choose: error on first invalid, error on all, or partial-apply. That's a UX decision worth its own design pass, not a one-line bug fix. The minimal-diff fix matches the existing silent-reject behavior; tests pin both the new range AND the silent-reject contract. | Low — revert the two `(1, 366)` lines back to `(1, 31)`. The 12 schedule-range tests would re-fail at `reset_day_of_year-1-366` cases. |
+
+---
+
 ## Unreleased — 2026-05-08 (build 645, Ring 1 close: dual-admin timestamp fix + R0-F4/R0-F5 pin tests)
 
 ### Bug — dual-admin queue entries silently expire after sibling submits (R1-D5-F1)
@@ -162,7 +224,7 @@ events.
 ### Migration / rollback
 
 Pure server-side fixes, no schema change for existing data.
-Existing dual-admin queue entries (written before build 645)
+Existing dual-admin queue entries (written before the previously-shipped build 645)
 do NOT carry `timestamp` — the read-side fallback handles
 them gracefully via `submitted_at`. New writes carry both.
 
