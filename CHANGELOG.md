@@ -64,6 +64,92 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-07 (build 642, regression-sweep follow-up: lock banner + 3-way fallback)
+
+### Bug — sibling drift surfaced during build-641 regression sweep
+
+The build-641 fix repaired the WM action-bar banner ("by analyst —
+reason") for `column_removal` / `remove_csv` / `remove_rule` requests.
+A targeted regression sweep against every sibling consumer of the
+pending-approval projection found two more places carrying the same
+class of drift:
+
+1. **Lock banner** at the top of the WM table
+   ([wl_approval_ui.js:374-377](appserver/static/modules/wl_approval_ui.js#L374-L377))
+   read `pa.description` only with no fallback. For action types where
+   the backend leaves `description=""` it rendered "**column removal**
+   by analyst1 ()" — empty parens. Cosmetic-only (the action bar below
+   carries the actionable approve/reject buttons), but visible side by
+   side and confusing.
+
+2. **Action-bar fallback** at
+   [wl_approval_ui.js:401-405](appserver/static/modules/wl_approval_ui.js#L401-L405)
+   computed `var reason = extractApprovalReason(pa)` but never used it,
+   while the Control Panel uses the same helper as a third fallback
+   ([control_panel.js:463](appserver/static/control_panel.js#L463)).
+   When an analyst structured their reason inside the payload (e.g.
+   `column_removal_reasons[0].reason`) instead of the free-form
+   comment field, CP rendered the reason and WM rendered nothing —
+   asymmetric between the two surfaces.
+
+### Fix
+
+Both call sites now use the same 3-way fallback chain:
+
+```javascript
+pa.comment || pa.description || extractApprovalReason(pa) || ""
+```
+
+The lock banner additionally drops the parens entirely when no reason
+is available (renders "by analyst1" cleanly instead of "by analyst1
+()"), matching the action-bar pattern of "no separator when no
+reason".
+
+### Why this didn't surface in build-641 verification
+
+Build-641's browser smoke-test confirmed the action-bar banner
+rendered "Field deprecated by GRC team" and stopped there. The lock
+banner above it WAS visible in the same screenshot but didn't render
+empty parens because the demo-state seed only carried the one
+column_removal entry — and the lock-banner fallback to `description`
+returned a non-empty value for the FIRST entry I inspected (a
+`bulk_row_addition` from a different fixture). Three lessons:
+
+1. End-to-end verification of one banner is not verification of the
+   page — sibling renders need their own checks.
+2. Single-entry demo state masks fallback-chain bugs that only
+   surface with action-type variety.
+3. The Control Panel's 3-way fallback existed; the WM only had
+   2-way; that asymmetry was its own signal that one surface was
+   ahead of the other.
+
+### Tests
+
+The build-641 unit suite at
+[tests/unit/test_pending_info_projection.py](tests/unit/test_pending_info_projection.py)
+already pins the **backend** projection contract (the `comment` field
+is reachable to the frontend). The frontend fallback chain is
+exercised by E2E click-through; no new unit test added because the
+asserting layer would be Playwright (different toolchain than the
+pytest suite).
+
+### Migration / rollback
+
+JS-only — no schema or API changes. Cache-bust `_b=` bumped from 640
+to 642 so returning users automatically pick up the fresh JS without
+hard-refresh. Rollback: revert this commit + redeploy at the
+previously-shipped build 641;
+the lock banner returns to empty-parens cosmetic behavior, the
+action-bar banner stays correct (build-641 fix is independent).
+
+### Build cache-bust caught up
+
+Build 641 shipped with `_b=640` (backend-only fix, no JS changes —
+acceptable but the maintenance rule says to keep them in sync).
+Build 642 closes the gap.
+
+---
+
 ## Unreleased — 2026-05-07 (build 641, fix WM approval-banner blank reason)
 
 ### Bug — `comment` dropped from `pending_info` projection

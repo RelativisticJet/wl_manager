@@ -371,9 +371,16 @@ function applyPendingHighlighting() {
         _$revertSelect.prop("disabled", true);
 
         // Show lock banner
+        // Same fallback chain as the action-bar item below + Control Panel.
+        // For column_removal/remove_csv/remove_rule the backend leaves
+        // description="" and the analyst's reason lives in `comment`.
+        // Without the fallback the banner renders "by analyst ()".
         var descriptions = _state.pendingApprovals.map(function (pa) {
+            var lockReason = pa.comment || pa.description ||
+                             extractApprovalReason(pa) || "";
             return '<strong>' + _.escape(pa.action_type.replace(/_/g, " ")) + '</strong> by ' +
-                   _.escape(pa.analyst) + ' (' + _.escape(pa.description) + ')';
+                   _.escape(pa.analyst) +
+                   (lockReason ? ' (' + _.escape(lockReason) + ')' : '');
         });
         _actions.showMsg(
             "This CSV is locked &mdash; " +
@@ -401,8 +408,12 @@ function applyPendingHighlighting() {
                 var reason = extractApprovalReason(pa);
                 var hl = pa.pending_highlight || {};
                 var hasRowHighlight = (hl.type === "rows" && hl.row_keys && hl.row_keys.length > 0);
-                // Use comment (user's typed reason) or description, avoid duplication
-                var displayReason = pa.comment || pa.description || "";
+                // 3-way fallback matches Control Panel's render path.
+                // `reason` digs into payload-internal fields like
+                // column_removal_reasons[0].reason — covers the case
+                // where the analyst structured the reason inside the
+                // payload instead of typing a free-form comment.
+                var displayReason = pa.comment || pa.description || reason || "";
                 var descTitle = pa.action_type.replace(/_/g, " ") +
                     ' by ' + pa.analyst + ' — ' + displayReason;
                 barHtml +=
