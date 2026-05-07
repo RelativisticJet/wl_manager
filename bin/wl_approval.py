@@ -50,6 +50,7 @@ __all__ = [
     "check_conflicts",
     "cancel_conflicts",
     "generate_request_id",
+    "project_pending_info",
 ]
 
 # Module-level constants
@@ -408,6 +409,36 @@ def get_pending_for_csv(csv_file: str) -> List[Dict]:
     queue, _ = _read_approval_queue()
     queue = expire_pending_approvals(queue)
     return [e for e in queue if e.get("csv_file") == csv_file and e.get("status") == "pending"]
+
+
+def project_pending_info(entry: Dict[str, Any],
+                         has_edit: bool = True) -> Dict[str, Any]:
+    """Project a queue entry to the public-facing `pending_info` shape.
+
+    Used by the `_get_csv_content` and `_action_get_pending_approvals`
+    endpoints in wl_handler.py. The frontend banner in
+    `wl_approval_ui.js` reads ``pa.comment || pa.description`` to
+    display the analyst's reason; for action types where the auto-
+    description is empty (`column_removal`, `remove_csv`,
+    `remove_rule`, etc.) the `comment` field is the only source.
+    Build 641 added `comment` to this projection after a blank-banner
+    bug surfaced on a cleanly-seeded DR130 column-removal request.
+
+    `has_edit` gates which fields a non-editor caller can see.
+    Non-editors can see who/when/what but not the row-level highlight
+    or payload (which can carry sensitive row data).
+    """
+    return {
+        "request_id": entry["request_id"],
+        "action_type": entry["action_type"],
+        "description": entry["description"],
+        "comment": entry.get("comment", ""),
+        "analyst": entry["analyst"],
+        "timestamp": entry["timestamp"],
+        "pending_highlight": entry.get("pending_highlight", {})
+                              if has_edit else {},
+        "payload": entry.get("payload", {}) if has_edit else {},
+    }
 
 
 def get_pending_for_rule(rule_name: str) -> List[Dict]:

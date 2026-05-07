@@ -194,7 +194,7 @@ from wl_filelock import file_lock
 from wl_approval import (
     get_pending_for_csv, get_pending_for_rule, submit_approval,
     submit_dual_approval, check_approval_gate, expire_pending_approvals,
-    check_conflicts, cancel_conflicts,
+    check_conflicts, cancel_conflicts, project_pending_info,
     # Canonical request-ID generator (Phase 4 consolidation — CLAUDE.md
     # 2026-04-19). Prior to this, handler shipped its own version that
     # produced a different format, so the approval queue held IDs in
@@ -1663,15 +1663,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # Fetch pending approvals for this CSV
         pending_approvals = _get_pending_for_csv(csv_file)
-        pending_info = [{
-            "request_id": p["request_id"],
-            "action_type": p["action_type"],
-            "description": p["description"],
-            "analyst": p["analyst"],
-            "timestamp": p["timestamp"],
-            "pending_highlight": p.get("pending_highlight", {}),
-            "payload": p.get("payload", {}),
-        } for p in pending_approvals]
+        pending_info = [project_pending_info(p, has_edit=True)
+                        for p in pending_approvals]
 
         try:
             st = os.stat(path)
@@ -2327,15 +2320,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         csv_file = query.get("csv_file", "")
         pending = get_pending_for_csv(csv_file)
         has_edit = is_editor(roles)
-        pending_info = [{
-            "request_id": p["request_id"],
-            "action_type": p["action_type"],
-            "description": p["description"],
-            "analyst": p["analyst"],
-            "timestamp": p["timestamp"],
-            "pending_highlight": p.get("pending_highlight", {}) if has_edit else {},
-            "payload": p.get("payload", {}) if has_edit else {},
-        } for p in pending]
+        pending_info = [project_pending_info(p, has_edit=has_edit)
+                        for p in pending]
         return self._resp(200, {"pending_approvals": pending_info})
 
     def _action_get_request_csv(self, request, query, user, roles):

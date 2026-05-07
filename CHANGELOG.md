@@ -64,6 +64,90 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-07 (build 641, fix WM approval-banner blank reason)
+
+### Bug — `comment` dropped from `pending_info` projection
+
+The Whitelist Manager dashboard renders an approval banner when a CSV
+has a pending request (`<action> by <analyst> — <reason>`). On a
+freshly-seeded DR130 column-removal request, the banner displayed
+`column removal by analyst1 —` with **nothing after the dash** even
+though the Control Panel's Approval Queue showed the same request
+with `Analyst Reason: Field deprecated by GRC team` correctly.
+
+**Root cause**: two endpoints (`_get_csv_content` for the WM page and
+`_action_get_pending_approvals` for the polling refresh) constructed
+their `pending_info` response inline with this exact field set:
+`request_id, action_type, description, analyst, timestamp,
+pending_highlight, payload`. **`comment` was not in the list.** The
+frontend banner at `wl_approval_ui.js:405` reads
+`pa.comment || pa.description || ""` — for `column_removal` /
+`remove_csv` / `remove_rule` the auto-`description` is empty by
+handler convention, so both fallbacks were falsy and the banner
+rendered as empty. The Control Panel was unaffected because it uses
+`get_approval_queue` which returns the queue entry verbatim.
+
+**Why the bug stayed dormant**: the prior demo state had ~14 pending
+entries and 245 historical entries dominated by `bulk_row_addition`
+and `bulk_row_removal` requests, where `description` IS auto-
+populated by the handler. The blank-banner case was triggered only
+for action types where description is empty AND the analyst typed a
+free-form comment — exactly the path my build-640 demo-seed exercised
+on a clean state. Stale fuzz data had been masking it the whole time.
+
+**Fix**:
+
+1. Extract the shared projection into `wl_approval.project_pending_info`
+   so both endpoints route through one place. Helper is library code
+   (no `splunk.rest` import) and can be unit-tested directly.
+2. Add `"comment": entry.get("comment", "")` to the projection. The
+   `.get` fallback covers older queue entries that may not have the
+   field (forward-compatible upgrade path).
+3. Both call sites in `wl_handler.py` now read
+   `[project_pending_info(p, has_edit=...) for p in queue]` —
+   single line replaces the prior inline dict literal.
+
+**Tests**: `tests/unit/test_pending_info_projection.py` — 15 cases
+pinning the contract:
+- `comment` propagates for `column_removal` (the regression case)
+- Missing `comment` defaults to `""`, not `KeyError` or `None`
+- All 8 contract fields present (regression guard for future
+  field drops)
+- `has_edit=False` strips `payload` + `pending_highlight`
+  (RBAC contract)
+- `has_edit=True` exposes both
+- `comment` propagates for all 10 valid `action_type` values
+
+**Verification**: REST endpoint smoke-test confirmed
+`comment: "Field deprecated by GRC team"` now appears in the
+`get_csv_content` response for DR130; browser-tested the WM page
+which now renders the banner with the analyst's reason text.
+
+### Build
+
+- `app.conf [install] build` 640 → 641
+- `whitelist_manager.js` urlArgs unchanged (no JS edits)
+
+### Migration / rollback
+
+- Revert: re-inline both projections in `wl_handler.py`
+  (`_get_csv_content` ~line 1665, `_action_get_pending_approvals`
+  ~line 2336) and delete `project_pending_info` + the export
+  from `__all__` in `wl_approval.py`. Tests under
+  `tests/unit/test_pending_info_projection.py` would then need to
+  be deleted or rewritten against the inline shape. Frontend
+  banner reverts to its prior blank-on-column-removal behavior.
+
+### Cleanup
+
+- Removed `backups/2026-05-06/` (audit-index tarball + state
+  JSONs + orphan CSVs + version snapshots from build-640 cleanup).
+  Was already gitignored; just freed local disk. Re-generate any
+  time via the seed-then-clean playbook documented in
+  `tests/fixtures/demo-state/README.md`.
+
+---
+
 ## Unreleased — 2026-05-06 (build 640, audit consistency + demo-state cleanup)
 
 ### Audit Trail consistency
