@@ -2668,6 +2668,29 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     def _action_create_rule(self, request, payload, user, roles):
         """POST: Register a new detection rule name."""
         detection_rule = (payload.get("detection_rule") or "").strip()
+        # Upfront validation — return specific error messages so the
+        # frontend toast is actionable. Without these checks, a long
+        # or non-ASCII rule name reaches create_rule_pipeline which
+        # raises ValueError, the dispatch wrapper catches it and
+        # returns the generic "Invalid request data." Compare to
+        # _create_csv which validates upfront and returns specific
+        # messages. Mirroring that pattern here for symmetry.
+        # Origin: surfaced during Ring 1 contract testing
+        # (test_post_error_paths.py).
+        if not detection_rule:
+            return self._resp(400, {
+                "error": "Detection rule name is required"})
+        if len(detection_rule) > 100:
+            return self._resp(400, {
+                "error": "Detection rule name too long: {} chars "
+                         "(max 100)".format(len(detection_rule))
+            })
+        if not is_ascii_name(detection_rule, allow_spaces=True):
+            return self._resp(400, {
+                "error": "Detection rule name can only contain "
+                         "ASCII letters (A-Z, a-z), numbers, "
+                         "underscores, hyphens, dots, and spaces"
+            })
         # Admins execute directly (never gated) but check daily limit
         if is_admin(roles):
             if not is_superadmin(roles):

@@ -64,6 +64,74 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-07 (build 643, create_rule UX fix surfaced by Ring 1 testing)
+
+### Bug — `create_rule` returned generic error instead of specific UX feedback
+
+Surfaced during Ring 1 contract test development
+(`tests/integration/test_post_error_paths.py`). The test suite
+asserted that POSTing `create_rule` with a too-long name (>100
+chars) or a non-ASCII name should return a specific error
+message. The endpoint instead returned the generic
+`"Invalid request data."` from the dispatch wrapper's
+`ValueError` catch — leaking no information about why the input
+was rejected.
+
+Root cause: `_action_create_rule` had no upfront input validation.
+A bad input would reach `create_rule_pipeline` which raises
+`ValueError`; the `_handle_post` wrapper catches the exception
+and returns the generic 400 to avoid leaking internals. But the
+specific validation messages ("name too long: 150 chars (max
+100)", "name can only contain ASCII letters") are NOT
+sensitive — they're describing the user's own input — and
+returning them helps the analyst understand what to change.
+
+Inconsistency with `_action_create_csv` (which DOES validate
+upfront and returns specific messages) made this a clear UX
+regression: same class of action, same user input, two
+different error UXs.
+
+### Fix
+
+Added upfront validation block to `_action_create_rule` mirroring
+the `_action_create_csv` pattern:
+
+- Empty `detection_rule` → 400 "Detection rule name is required"
+- Length > 100 → 400 "Detection rule name too long: N chars (max 100)"
+- Non-ASCII → 400 "Detection rule name can only contain ASCII letters..."
+
+The existing safety net in the dispatch wrapper still catches
+truly unexpected `ValueError`s; only the known-validation cases
+are now returned with specific messages.
+
+### Tests
+
+`tests/integration/test_post_error_paths.py::TestCreateRuleErrorPaths`
+pins the new contract:
+
+- `test_too_long_rule_name_returns_error` — asserts error mentions "100"
+- `test_non_ascii_rule_name_returns_error` — asserts error mentions "ASCII"
+
+Both tests would have caught the bug if they had existed; they
+now prevent the regression.
+
+### Migration / rollback
+
+Pure server-side fix, no schema change. Rollback: revert this
+commit + redeploy at the previously-shipped build 642. The frontend already handles
+both shapes of error (it just reads `data.error`), so no
+client-side coordination required.
+
+### Origin context
+
+This is the first Ring 1 test-driven bug fix. The pattern —
+contract test surfaces inconsistency, fix immediately, test now
+pins the fix — is exactly what Ring 1 was designed to do. See
+`docs/RING_FINDINGS.md` "Ring 1 Day 2 chunk 3" for the full
+write-up.
+
+---
+
 ## Unreleased — 2026-05-07 (build 642, regression-sweep follow-up: lock banner + 3-way fallback)
 
 ### Bug — sibling drift surfaced during build-641 regression sweep
@@ -146,7 +214,7 @@ action-bar banner stays correct (build-641 fix is independent).
 
 Build 641 shipped with `_b=640` (backend-only fix, no JS changes —
 acceptable but the maintenance rule says to keep them in sync).
-Build 642 closes the gap.
+Build 642 (shipped 2026-05-07) closes the gap.
 
 ---
 

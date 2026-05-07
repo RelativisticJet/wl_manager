@@ -508,3 +508,72 @@ they each go through container_state snapshot + restore).
 
 Day 2 progress: 40 / 70 tests complete. Continuing with POST
 error paths and remaining happy paths.
+
+### Day 2 (chunk 3) — POST error paths + first Ring 1 production bug fix
+
+#### `tests/integration/test_post_error_paths.py` (new) — 16 tests
+
+Pins the error contract for every POST endpoint. The test pattern:
+
+1. Issue a POST with a deliberately-invalid payload
+2. Assert ``error`` field present, type is string
+3. Assert error message contains the documented substring (e.g.,
+   ``"ASCII"`` for non-ASCII rejections, ``"100"`` for length-limit
+   errors). This pins the substring the frontend toast displays.
+
+Coverage by endpoint:
+
+- create_csv (5): invalid filename, missing detection_rule,
+  missing headers, non-ASCII rule name, internal-prefix column
+- create_rule (3): missing detection_rule, too-long name (>100),
+  non-ASCII name
+- save_csv (3): missing detection_rule, non-ASCII comment, invalid
+  app_context (path-traversal style)
+- save_col_widths (2): missing csv_file, invalid app_context
+- trash (2): retention below minimum, purge non-existent trash_id
+- generic dispatch (1): unknown action name returns error not 500
+
+#### Real production bug surfaced and fixed: `create_rule` UX (build 643)
+
+Two of the create_rule tests failed initially:
+- ``test_too_long_rule_name_returns_error`` expected the error to
+  mention "100" (the length limit)
+- ``test_non_ascii_rule_name_returns_error`` expected "ASCII"
+
+Both got the generic ``"Invalid request data."`` from the dispatch
+wrapper's ``ValueError`` catch. **Inconsistent with create_csv**
+which validates upfront and returns specific messages for the
+same input classes.
+
+Root cause: ``_action_create_rule`` had no upfront validation; it
+delegated immediately to ``create_rule_pipeline`` which raised
+``ValueError`` for bad inputs. The dispatch wrapper caught and
+returned generic 400 — appropriate as a fallback for unexpected
+errors, but the SPECIFIC validation messages aren't sensitive
+(they describe the user's own input) and helping the analyst
+understand what to fix is core UX.
+
+Fix shipped in build 643: added upfront validation block to
+``_action_create_rule`` mirroring the ``_action_create_csv``
+pattern. Now both endpoints return:
+- ``"Detection rule name is required"`` for empty input
+- ``"Detection rule name too long: N chars (max 100)"`` for length
+- ``"Detection rule name can only contain ASCII letters..."`` for
+  non-ASCII
+
+Same dispatch wrapper still catches truly unexpected ``ValueError``s.
+
+This is the first Ring 1 test-driven production bug fix — exactly
+the pattern Ring 1 was designed to surface. Test fails →
+investigation reveals real bug → fix shipped → test now pins the
+fix as a regression-prevention contract.
+
+#### Day 2 chunk 3 summary
+
+16 new tests (all passing after the create_rule fix).
+**Suite: 750 tests passing** (was 734). Total runtime ~103 seconds.
+
+Day 2 progress: 56 / 70 tests done. Continuing with remaining
+happy paths (Day 3) — purge_trash, restore_from_trash,
+save_as_default, reset_factory_defaults, and the bulk_edit
+approval-gate trigger paths.
