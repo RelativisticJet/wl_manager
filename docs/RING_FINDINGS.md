@@ -453,3 +453,58 @@ Total runtime: ~46 seconds (15 of those are the new docker tests).
 Continuing Day 2-3 with: more POST happy paths (purge_trash,
 restore_from_trash, save_as_default, submit_approval, etc.), then
 POST error paths and approval workflow.
+
+### Day 2 (chunk 2) — approval workflow contract tests
+
+#### `tests/integration/test_approval_workflow.py` (new) — 14 tests
+
+The highest-value Ring 1 file. Pins the response shapes and side
+effects of the three approval-workflow endpoints. Build-641-class
+projection drift in any of these would surface here.
+
+Submit-side tests (6):
+- ``test_submit_returns_request_id_and_message`` — pins minimum
+  response shape (``message``, ``request_id``)
+- ``test_submit_grows_the_queue_by_one`` — side-effect verification
+  via ``get_approval_queue`` GET; catches "submit returns success
+  but queue isn't actually updated"
+- ``test_submitted_entry_has_full_contract`` — **pins the
+  build-641 WRITE-SIDE contract.** Asserts the queue entry has
+  all 12 documented fields including ``comment``. This complements
+  ``test_pending_info_projection.py`` which pins the READ side.
+- ``test_invalid_action_type_returns_400`` — error path
+- ``test_missing_action_type_returns_400`` — error path
+- ``test_non_ascii_description_returns_400`` — ASCII-only enforcement
+  (the 2026-04-26 strict-ASCII policy decision)
+
+Process-side tests (5):
+- ``test_reject_response_shape`` — pins reject response (``message``,
+  ``request_id``) and validates the message acknowledges rejection
+- ``test_reject_transitions_status_in_queue`` — side-effect on the
+  queue (``status=rejected``, ``resolved_by`` populated)
+- ``test_unknown_request_id_returns_404``
+- ``test_invalid_decision_returns_400`` (only approve/reject/cancel
+  allowed)
+- ``test_reject_without_reason_returns_400`` (rejection_reason
+  required)
+
+Cancel-side tests (3):
+- ``test_cancel_response_shape``
+- ``test_cancel_unknown_request_returns_404``
+- ``test_cancel_without_reason_returns_400``
+
+Test design choice: each test that needs a precondition submits
+an approval request DIRECTLY via ``submit_approval`` (vs. via a
+real ``save_csv`` + bulk-edit gate trigger). This keeps each
+test focused on the contract under test, not the gate-detection
+path. Setup is centralized in ``_submit_column_removal_request``
+so future test additions reuse the same fixture pattern.
+
+#### Day 2 chunk 2 summary
+
+14 new tests, all passing. Suite: **734 tests** (was 720). Total
+runtime: 74s (the approval tests are slower at ~2s each because
+they each go through container_state snapshot + restore).
+
+Day 2 progress: 40 / 70 tests complete. Continuing with POST
+error paths and remaining happy paths.

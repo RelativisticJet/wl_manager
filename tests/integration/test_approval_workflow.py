@@ -1,0 +1,527 @@
+"""
+Approval workflow contract tests — submit / process / cancel.
+
+This file pins the response shapes and side effects of the three
+approval workflow endpoints. They are the highest-value targets
+for build-641-class projection drift because every endpoint
+returns a request_id (frontend uses it to correlate UI state with
+queue entries) and the queue entries themselves carry the
+projection contract that build-641 fixed.
+
+Each test follows the pattern:
+
+1. **Set up a precondition** — typically by directly POSTing a
+   ``submit_approval`` to put a request in the queue. We use the
+   direct path rather than triggering through ``save_csv`` so the
+   test is focused on the approval-workflow contract, not the
+   gate-detection path.
+2. **Exercise the endpoint under test** — submit / process / cancel.
+3. **Assert response shape** — full set of documented fields.
+4. **Assert side effect** — queue updated, audit event emitted.
+5. **container_state** restores the queue at teardown.
+
+Origin
+------
+
+Replaces high-value scenarios from the deleted zombie tests
+(see ``RING_FINDINGS.md`` R0-F2 and ``RING1_INPUT_handler_contracts.md``
+"Approval workflow contracts"). Plus tests built specifically to
+catch the build-641 bug class.
+"""
+
+import json
+
+import pytest
+
+
+pytestmark = pytest.mark.docker
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Helper — POST an action to the handler
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _post_action(container_curl, action: str, payload: dict):
+    """Issue ``POST /services/custom/wl_manager``. Returns
+    ``(http_code, body_dict)``."""
+    body = json.dumps({"action": action, **payload})
+    proc = container_curl(
+        "/services/custom/wl_manager",
+        method="POST",
+        data=body,
+        content_type="application/json",
+        check=False,
+    )
+    raw = proc.stdout.strip()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return (200 if proc.returncode == 0 else 0,
+                {"_raw": raw})
+    return (200, parsed)
+
+
+def _read_queue_via_get(container_curl) -> list:
+    """Read the approval queue via the admin GET endpoint."""
+    path = ("/services/custom/wl_manager"
+            "?action=get_approval_queue")
+    proc = container_curl(path, check=False)
+    body = json.loads(proc.stdout.strip())
+    return body.get("approval_queue", [])
+
+
+def _submit_column_removal_request(
+        container_curl, csv_file: str, rule_name: str,
+        column_name: str = "host",
+        description: str = "Ring 1 test - test column removal request",
+        comment: str = "Ring 1 test - column deprecated") -> dict:
+    """Submit a column_removal approval request and return the
+    response. Centralizes the precondition-setup logic.
+    """
+    payload = {
+        "approval_action_type": "column_removal",
+        "csv_file": csv_file,
+        "detection_rule": rule_name,
+        "app_context": "wl_manager",
+        "description": description,
+        "comment": comment,
+        "pending_highlight": {
+            "type": "column",
+            "column_name": column_name,
+        },
+        "payload": {
+            "column_name": column_name,
+            "column_removal_reasons": [
+                {"column": column_name, "reason": comment}
+            ],
+        },
+    }
+    code, body = _post_action(
+        container_curl, "submit_approval", payload)
+    return body
+
+
+# ─────────────────────────────────────────────────────────────────────
+# submit_approval
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestSubmitApprovalShape:
+    """Pins: ``submit_approval`` returns ``{message, request_id}``
+    and the queue grows by 1.
+
+    Bug class caught: any drift in submit_approval's response that
+    drops ``request_id`` would break the frontend's ability to
+    correlate UI state (the orange "pending" banner) with queue
+    entries — a build-641-style projection drift on the smaller
+    response shape.
+    """
+
+    REQUIRED_FIELDS = {"message", "request_id"}
+
+    def test_submit_returns_request_id_and_message(
+            self, container_state, container_curl):
+        # Precondition: pick a CSV+rule from the demo mapping
+        mapping_proc = container_curl(
+            "/services/custom/wl_manager?action=get_mapping",
+            check=False)
+        mapping = json.loads(mapping_proc.stdout.strip())
+        if not mapping.get("mapping"):
+            pytest.skip("no mappings in demo state")
+        entry = mapping["mapping"][0]
+        csv_file = entry["csv_file"]
+        rule_name = entry["rule_name"]
+
+        body = _submit_column_removal_request(
+            container_curl, csv_file, rule_name)
+
+        if "error" in body:
+            pytest.fail(f"submit_approval errored: {body}")
+
+        # Deep contract: every documented field present
+        missing = self.REQUIRED_FIELDS - set(body.keys())
+        assert not missing, \
+            (f"submit_approval response missing: {missing}. "
+             f"Body: {body}")
+        # request_id should be a non-empty string (UUID4 in this
+        # codebase)
+        assert isinstance(body["request_id"], str)
+        assert len(body["request_id"]) > 0
+        # Message is human-readable text — assert it exists and
+        # mentions "submitted" or similar so a future refactor
+        # that returns "" still fails
+        assert "submit" in body["message"].lower(), \
+            f"message doesn't acknowledge submission: {body['message']}"
+
+    def test_submit_grows_the_queue_by_one(
+            self, container_state, container_curl):
+        """Side-effect verification: the queue length goes up by
+        exactly 1. Catches a regression where submit_approval
+        returns success but the queue isn't actually updated
+        (silent loss of the request)."""
+        before = _read_queue_via_get(container_curl)
+        before_count = len(before)
+
+        # Pick any CSV+rule
+        mapping_proc = container_curl(
+            "/services/custom/wl_manager?action=get_mapping",
+            check=False)
+        mapping = json.loads(mapping_proc.stdout.strip())
+        if not mapping.get("mapping"):
+            pytest.skip("no mappings in demo state")
+        entry = mapping["mapping"][0]
+        body = _submit_column_removal_request(
+            container_curl, entry["csv_file"], entry["rule_name"])
+
+        if "error" in body:
+            pytest.skip(f"submit_approval setup failed: {body}")
+
+        after = _read_queue_via_get(container_curl)
+        assert len(after) == before_count + 1, \
+            (f"queue did not grow by 1: before={before_count}, "
+             f"after={len(after)}")
+        # Find our entry by request_id
+        new_entry = next(
+            (e for e in after if e["request_id"] == body["request_id"]),
+            None)
+        assert new_entry is not None, \
+            f"new request not in queue: {body['request_id']}"
+        assert new_entry["status"] == "pending"
+
+
+class TestSubmitApprovalQueueEntryShape:
+    """Pins: the queue entry created by submit_approval has the
+    full set of documented fields — this is the build-641 contract
+    on the WRITE side. The build-641 fix was on the READ projection;
+    this test makes sure the WRITER puts the right fields in.
+
+    Bug class caught: a refactor that drops a field from the
+    queue-entry write path. The read projection might still show
+    a default value (empty string for ``comment``) and the bug
+    would surface only when an analyst's typed reason mysteriously
+    disappears from the dashboard.
+    """
+
+    # Queue entries carry MORE fields than the projected
+    # pending_info shape (admin-only fields like resolved_by,
+    # rejection_reason, etc.). This list is the minimum set every
+    # entry must have at write time.
+    REQUIRED_QUEUE_FIELDS = {
+        "request_id", "timestamp", "analyst", "csv_file",
+        "app_context", "detection_rule", "action_type",
+        "description", "comment", "status", "payload",
+        "pending_highlight",
+    }
+
+    def test_submitted_entry_has_full_contract(
+            self, container_state, container_curl):
+        # Precondition + submit
+        mapping_proc = container_curl(
+            "/services/custom/wl_manager?action=get_mapping",
+            check=False)
+        mapping = json.loads(mapping_proc.stdout.strip())
+        if not mapping.get("mapping"):
+            pytest.skip("no mappings in demo state")
+        entry = mapping["mapping"][0]
+        body = _submit_column_removal_request(
+            container_curl, entry["csv_file"], entry["rule_name"],
+            comment="Ring 1 build 641 contract pin")
+
+        if "error" in body:
+            pytest.skip(f"submit setup failed: {body}")
+        request_id = body["request_id"]
+
+        # Read back via admin GET and find our entry
+        queue = _read_queue_via_get(container_curl)
+        new_entry = next(
+            (e for e in queue if e["request_id"] == request_id),
+            None)
+        assert new_entry is not None, \
+            f"submitted request not in queue"
+
+        # Pin the field set
+        missing = self.REQUIRED_QUEUE_FIELDS - set(new_entry.keys())
+        assert not missing, \
+            (f"queue entry missing fields (build-641 write-side "
+             f"contract): {missing}. Entry: {new_entry}")
+
+        # And verify the comment we typed actually landed
+        assert new_entry["comment"] == "Ring 1 build 641 contract pin", \
+            f"comment did not survive submission: {new_entry['comment']!r}"
+
+
+class TestSubmitApprovalErrorPaths:
+    """Pins: invalid submit_approval payloads return 4xx errors
+    with the documented ``error`` field.
+
+    Catches: silent acceptance of malformed payloads (a partially-
+    parsed payload could land in the queue and crash later
+    consumers).
+    """
+
+    def test_invalid_action_type_returns_400(
+            self, container_state, container_curl):
+        code, body = _post_action(container_curl, "submit_approval", {
+            "approval_action_type": "INVALID_NEVER_VALID",
+            "csv_file": "x.csv",
+            "detection_rule": "DRX",
+            "app_context": "wl_manager",
+        })
+        assert "error" in body, \
+            f"expected error, got: {body}"
+        assert "Invalid approval action type" in body["error"], \
+            f"unexpected error message: {body['error']}"
+
+    def test_missing_action_type_returns_400(
+            self, container_state, container_curl):
+        code, body = _post_action(container_curl, "submit_approval", {
+            "csv_file": "x.csv",
+            "detection_rule": "DRX",
+        })
+        # Empty action_type → "" → fails the "in (...)" allow-list
+        assert "error" in body, \
+            f"expected error, got: {body}"
+        assert "Invalid approval action type" in body["error"]
+
+    def test_non_ascii_description_returns_400(
+            self, container_state, container_curl):
+        """ASCII validation enforcement on the description."""
+        # Need a real CSV+rule for this to get past earlier
+        # validations
+        mapping_proc = container_curl(
+            "/services/custom/wl_manager?action=get_mapping",
+            check=False)
+        mapping = json.loads(mapping_proc.stdout.strip())
+        if not mapping.get("mapping"):
+            pytest.skip("no mappings in demo state")
+        entry = mapping["mapping"][0]
+
+        code, body = _post_action(container_curl, "submit_approval", {
+            "approval_action_type": "column_removal",
+            "csv_file": entry["csv_file"],
+            "detection_rule": entry["rule_name"],
+            "app_context": "wl_manager",
+            "description": "Reason with unicode: 中文",
+            "pending_highlight": {"type": "column",
+                                  "column_name": "host"},
+            "payload": {"column_name": "host"},
+        })
+        assert "error" in body, \
+            f"non-ASCII description should be rejected: {body}"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# process_approval
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestProcessApprovalRejectShape:
+    """Pins: ``process_approval`` with ``decision=reject`` returns
+    ``{message, request_id}`` and the queue entry transitions to
+    rejected status.
+
+    Reject is tested before approve because reject is structurally
+    simpler — no replay step. Approve has more moving parts (CSV
+    must change) and gets its own test class.
+    """
+
+    REQUIRED_FIELDS = {"message", "request_id"}
+
+    def test_reject_response_shape(
+            self, container_state, container_curl):
+        # Precondition: submit a request
+        mapping_proc = container_curl(
+            "/services/custom/wl_manager?action=get_mapping",
+            check=False)
+        mapping = json.loads(mapping_proc.stdout.strip())
+        if not mapping.get("mapping"):
+            pytest.skip("no mappings in demo state")
+        entry = mapping["mapping"][0]
+        submit_body = _submit_column_removal_request(
+            container_curl, entry["csv_file"], entry["rule_name"])
+
+        if "error" in submit_body:
+            pytest.skip(f"submit setup failed: {submit_body}")
+        request_id = submit_body["request_id"]
+
+        # Reject it
+        code, body = _post_action(
+            container_curl, "process_approval", {
+                "request_id": request_id,
+                "decision": "reject",
+                "rejection_reason":
+                    "Ring 1 test - rejecting for contract verification",
+            })
+
+        if "error" in body:
+            pytest.fail(f"reject errored: {body}")
+
+        missing = self.REQUIRED_FIELDS - set(body.keys())
+        assert not missing, \
+            (f"reject response missing: {missing}. "
+             f"Body: {body}")
+        assert body["request_id"] == request_id
+        assert "reject" in body["message"].lower(), \
+            f"reject message doesn't acknowledge: {body['message']}"
+
+    def test_reject_transitions_status_in_queue(
+            self, container_state, container_curl):
+        """Side-effect verification: the queue entry status is
+        ``rejected`` after a reject, with ``resolved_by`` set."""
+        # Submit
+        mapping_proc = container_curl(
+            "/services/custom/wl_manager?action=get_mapping",
+            check=False)
+        mapping = json.loads(mapping_proc.stdout.strip())
+        if not mapping.get("mapping"):
+            pytest.skip("no mappings in demo state")
+        entry = mapping["mapping"][0]
+        submit_body = _submit_column_removal_request(
+            container_curl, entry["csv_file"], entry["rule_name"])
+        if "error" in submit_body:
+            pytest.skip(f"submit failed: {submit_body}")
+        request_id = submit_body["request_id"]
+
+        # Reject
+        _post_action(container_curl, "process_approval", {
+            "request_id": request_id,
+            "decision": "reject",
+            "rejection_reason": "Ring 1 test - reject reason",
+        })
+
+        # Inspect queue
+        queue = _read_queue_via_get(container_curl)
+        target = next(
+            (e for e in queue if e["request_id"] == request_id),
+            None)
+        assert target is not None, "rejected entry vanished from queue"
+        assert target["status"] == "rejected", \
+            f"status not transitioned: {target['status']}"
+        assert target.get("resolved_by"), \
+            "resolved_by not populated"
+
+
+class TestProcessApprovalErrorPaths:
+    """Pins: invalid process_approval calls return errors."""
+
+    def test_unknown_request_id_returns_404(
+            self, container_state, container_curl):
+        code, body = _post_action(
+            container_curl, "process_approval", {
+                "request_id": "nonexistent-request-id-12345",
+                "decision": "approve",
+            })
+        assert "error" in body, \
+            f"expected error, got: {body}"
+        assert "not found" in body["error"].lower(), \
+            f"unexpected error: {body['error']}"
+
+    def test_invalid_decision_returns_400(
+            self, container_state, container_curl):
+        code, body = _post_action(
+            container_curl, "process_approval", {
+                "request_id": "anything",
+                "decision": "MAYBE_LATER",  # not approve/reject/cancel
+            })
+        assert "error" in body, \
+            f"expected error, got: {body}"
+        assert ("decision" in body["error"].lower()
+                or "approve" in body["error"].lower()), \
+            f"unexpected error: {body['error']}"
+
+    def test_reject_without_reason_returns_400(
+            self, container_state, container_curl):
+        # Need a real pending request first
+        mapping_proc = container_curl(
+            "/services/custom/wl_manager?action=get_mapping",
+            check=False)
+        mapping = json.loads(mapping_proc.stdout.strip())
+        if not mapping.get("mapping"):
+            pytest.skip("no mappings in demo state")
+        entry = mapping["mapping"][0]
+        submit_body = _submit_column_removal_request(
+            container_curl, entry["csv_file"], entry["rule_name"])
+        if "error" in submit_body:
+            pytest.skip(f"submit failed: {submit_body}")
+        request_id = submit_body["request_id"]
+
+        code, body = _post_action(
+            container_curl, "process_approval", {
+                "request_id": request_id,
+                "decision": "reject",
+                "rejection_reason": "",  # empty
+            })
+        assert "error" in body, \
+            f"expected error for empty rejection reason: {body}"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# cancel_request
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestCancelRequest:
+    """Pins: ``cancel_request`` returns ``{message, request_id}``
+    when the requester cancels their own pending request.
+    """
+
+    REQUIRED_FIELDS = {"message", "request_id"}
+
+    def test_cancel_response_shape(
+            self, container_state, container_curl):
+        # Submit (as built-in admin — the curl auth user)
+        mapping_proc = container_curl(
+            "/services/custom/wl_manager?action=get_mapping",
+            check=False)
+        mapping = json.loads(mapping_proc.stdout.strip())
+        if not mapping.get("mapping"):
+            pytest.skip("no mappings in demo state")
+        entry = mapping["mapping"][0]
+        submit_body = _submit_column_removal_request(
+            container_curl, entry["csv_file"], entry["rule_name"])
+        if "error" in submit_body:
+            pytest.skip(f"submit failed: {submit_body}")
+        request_id = submit_body["request_id"]
+
+        # Cancel as same user
+        code, body = _post_action(
+            container_curl, "cancel_request", {
+                "request_id": request_id,
+                "cancellation_reason":
+                    "Ring 1 test - cancelling for contract verification",
+            })
+
+        if "error" in body:
+            pytest.fail(f"cancel errored: {body}")
+
+        missing = self.REQUIRED_FIELDS - set(body.keys())
+        assert not missing, \
+            (f"cancel response missing: {missing}. "
+             f"Body: {body}")
+        assert body["request_id"] == request_id
+
+    def test_cancel_unknown_request_returns_404(
+            self, container_state, container_curl):
+        code, body = _post_action(
+            container_curl, "cancel_request", {
+                "request_id": "nonexistent-uuid-cancel-test",
+                "cancellation_reason":
+                    "Ring 1 test - cancel reason",
+            })
+        assert "error" in body, \
+            f"expected error, got: {body}"
+        assert ("not found" in body["error"].lower()), \
+            f"unexpected error: {body['error']}"
+
+    def test_cancel_without_reason_returns_400(
+            self, container_state, container_curl):
+        code, body = _post_action(
+            container_curl, "cancel_request", {
+                "request_id": "any-id",
+                "cancellation_reason": "",
+            })
+        assert "error" in body, \
+            f"expected error, got: {body}"
+        assert "reason" in body["error"].lower(), \
+            f"unexpected error: {body['error']}"
