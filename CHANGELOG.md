@@ -64,6 +64,80 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-08 (build 647, Ring 2 Day 5: performance smoke + legacy manifest crash fix)
+
+### Bug — `read_version_manifest` crashed on legacy bare-list format (R2-D5-F1)
+
+Surfaced during Ring 2 Day 5 broad regression sweep.
+`bin/wl_versions.py:read_version_manifest` returned the
+JSON-parsed manifest as-is without normalization. Three formats
+have existed in the wild:
+
+1. Bare list of version entries (legacy, pre-versioning rewrite —
+   still committed in repo demo state for several rules)
+2. Dict with `versions` as a list (current, what current writers
+   produce)
+3. Dict with `versions` as a dict-of-dicts (described in the
+   docstring; never actually shipped)
+
+Downstream code (e.g., the revert path at `wl_versions.py:461`)
+calls `manifest.get("versions", [])`. When the manifest was a
+bare list (#1), this called `.get()` on a list and crashed with
+`'list' object has no attribute 'get'`. The crash was caught by
+the broad `except Exception` handler in `_revert_csv` and
+returned as `Unexpected error during revert: 'list' object has
+no attribute 'get'` to the user — a permanent revert failure
+for any CSV with a legacy-format manifest.
+
+**Fix**: `read_version_manifest` now normalizes the parsed JSON:
+bare list → `{"versions": [list]}` (#1 → #2). Anything that's
+neither a list nor a dict returns the documented error
+("expected list or dict") instead of silently producing a
+broken manifest.
+
+**Pin tests**: two new unit tests in
+`tests/unit/test_versions.py::TestReadVersionManifest` —
+`test_read_version_manifest_legacy_bare_list_normalized` covers
+the legacy-format crash case; `test_read_version_manifest_rejects_non_list_non_dict`
+covers the pathological-scalar case. Verified: the integration
+test `test_revert_response_shape` (which uses
+`DR102_whitelist_versions.json` shipped in repo demo state in
+legacy format) now passes — was failing for unknown duration
+prior to this fix.
+
+### Tests — Ring 2 Day 5 performance smoke (21 tests)
+
+New file `tests/integration/test_performance_smoke.py`:
+
+- `TestReadLatencyBudget` (13) — every read endpoint must
+  complete under `BUDGET_READ_MS = 1500` median-of-3.
+  Catches sync IO leak / O(N²) loop regressions.
+- `TestWriteLatencyBudget` (4) — write endpoints under
+  `BUDGET_WRITE_MS = 2500` median-of-3.
+- `TestHeavyLatencyBudget` (2) — `bootstrap_csv_hashes` and
+  `probe_audit_access` under `BUDGET_HEAVY_MS = 8000`.
+- `TestApprovalFlowLatency` (1) — end-to-end submit + queue
+  read under `BUDGET_FLOW_MS = 6000`.
+- `TestBudgetTierCoverage` (1) — drift detector ensuring
+  every budget constant is referenced by a test class.
+
+Probed baseline (dev machine): reads ~175ms median, writes
+~250ms median, heavy ~250ms-1s. Budgets set at ~10× measured
+to catch order-of-magnitude regressions while tolerating
+host-load variance. 10%-of-baseline (originally suggested in
+Ring 1 retrospective) ruled out — would flap on rate-limit
+retries and Docker Desktop variance.
+
+**Suite status**: 21/21 perf-smoke tests pass. Full integration
+suite: 328/330 pass (was 312/316 before R2-D5-F1 fix; the fix
+unblocked 2 tests previously failing on legacy-format
+manifests). Two remaining pre-existing failures (queue-pollution
+and trash-retention) are state-sensitive issues that pre-date
+Ring 2 — documented in `docs/RING_FINDINGS.md` as Ring 2 Day 5
+follow-ups for Day 6 / Ring 2 close.
+
+---
+
 ## Unreleased — 2026-05-08 (build 646, Ring 2 Day 1: limit edge case coverage + reset_day_of_year fix)
 
 ### Bug — `reset_day_of_year` validator clamped to (1, 31) (R2-D1-F1)

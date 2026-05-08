@@ -109,6 +109,79 @@ class TestReadVersionManifest:
         assert result == {}
         assert "Invalid JSON" in error
 
+    def test_read_version_manifest_legacy_bare_list_normalized(
+            self, tmp_path):
+        """R2-D5-F1: a manifest that's a bare JSON list (legacy
+        pre-rewrite format, still present in some demo lookups)
+        must normalize to ``{"versions": [...]}`` so downstream
+        code that calls ``manifest.get("versions", [])`` doesn't
+        crash with ``'list' object has no attribute 'get'``.
+
+        This is the format committed in repo demo state for some
+        rules — the revert path was crashing on those rules
+        before this fix.
+        """
+        csv_path = os.path.join(str(tmp_path), "DR102_whitelist.csv")
+        os.makedirs(get_versions_dir(csv_path), exist_ok=True)
+
+        # Legacy bare-list format
+        legacy_manifest = [
+            {
+                "timestamp": "2026-03-28T22:58:08Z",
+                "display": "28-03-2026 22:58:08",
+                "filename": "DR102_whitelist_20260328_225808.csv",
+                "analyst": "system",
+                "action": "original",
+                "row_count": 5,
+                "col_count": 1,
+            },
+            {
+                "timestamp": "2026-03-29T02:22:36Z",
+                "display": "29-03-2026 02:22:36",
+                "filename": "DR102_whitelist_20260329_022236.csv",
+                "analyst": "analyst2",
+                "action": "save",
+                "row_count": 4,
+                "col_count": 1,
+            },
+        ]
+        manifest_path = os.path.join(
+            get_versions_dir(csv_path),
+            "DR102_whitelist_versions.json")
+        with open(manifest_path, "w") as f:
+            json.dump(legacy_manifest, f)
+
+        result, error = read_version_manifest(csv_path)
+        assert error == "", (
+            f"legacy format should not error, got: {error}")
+        assert isinstance(result, dict), (
+            f"normalized result must be dict, got {type(result)}")
+        assert "versions" in result, (
+            "normalized result must have 'versions' key")
+        assert result["versions"] == legacy_manifest, (
+            "list contents preserved after normalization")
+        # Pin the actual usage pattern that was crashing
+        assert result.get("versions", []) == legacy_manifest
+
+    def test_read_version_manifest_rejects_non_list_non_dict(
+            self, tmp_path):
+        """R2-D5-F1: a manifest that's neither a list nor a dict
+        (e.g., a string, number) must error out, not silently
+        normalize to garbage."""
+        csv_path = os.path.join(str(tmp_path), "DR102_whitelist.csv")
+        os.makedirs(get_versions_dir(csv_path), exist_ok=True)
+
+        manifest_path = os.path.join(
+            get_versions_dir(csv_path),
+            "DR102_whitelist_versions.json")
+        # Pathological: top-level is a string, not list or dict
+        with open(manifest_path, "w") as f:
+            f.write('"unexpected scalar"')
+
+        result, error = read_version_manifest(csv_path)
+        assert result == {}
+        assert "expected list or dict" in error.lower()
+
 
 @pytest.mark.unit
 class TestWriteVersionManifest:

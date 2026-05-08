@@ -105,7 +105,22 @@ def read_version_manifest(csv_path: str) -> Tuple[Dict, str]:
     try:
         with open(manifest_path, "r", encoding="utf-8") as fh:
             manifest = json.load(fh)
-            return manifest, ""
+        # Schema-tolerant normalization. Three formats have existed
+        # in the wild:
+        #   1. bare list of entries (legacy, pre-versioning rewrite)
+        #   2. dict with "versions" as a list (current, what writers
+        #      produce)
+        #   3. dict with "versions" as a dict-of-dicts (docstring
+        #      describes this; never actually shipped)
+        # Downstream code expects #2. Coerce #1 → #2 here so the
+        # revert path doesn't crash on
+        # `'list' object has no attribute 'get'` when reading a
+        # legacy-format manifest. R2-D5-F1.
+        if isinstance(manifest, list):
+            manifest = {"versions": manifest}
+        elif not isinstance(manifest, dict):
+            return {}, "Invalid manifest: expected list or dict"
+        return manifest, ""
     except json.JSONDecodeError as e:
         return {}, f"Invalid JSON in manifest: {str(e)}"
     except OSError as e:
