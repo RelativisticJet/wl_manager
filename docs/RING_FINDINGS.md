@@ -1246,3 +1246,127 @@ Suggested Ring 2 scope (not committed):
 - **Automated mutation testing**: integrate `mutmut` into a
   weekly CI run; require ≥80% kill rate against the test
   corpus. Treat any survivor as a missing test.
+
+---
+
+## Ring 2 — Coverage Matrix (in progress)
+
+**Goal**: take Ring 1's contract-test pattern and apply it
+horizontally across the surface area Ring 1 sampled but did
+not exhaust. Specifically: every limit boundary, every
+notification kind, every admin-side write surface, and the
+role × action matrix that Ring 1 only spot-checked.
+
+**Method**: parametrized integration tests against the live
+container. Reuse Ring 1's `container_state` fixture +
+multi-user RBAC harness. Schema-pin pattern applied to every
+new write surface.
+
+### R2-D1-F1 — `reset_day_of_year` upper bound clamped to 31, not 366
+
+**Severity**: HIGH — silent data corruption. A superadmin
+configuring annual reset cycles has no way to know the
+chosen day-of-year was rejected; the value silently snaps
+back to the default (or to 31 if it was already in the
+1-31 range).
+
+**Discovery**: Day 1 — `TestAnalystLimitScheduleRanges`
+parametrized over `reset_day_of_year ∈ {1, 100, 200, 366}`.
+Values 100, 200, 366 all silently rejected by the
+`SCHEDULE_INT_KEYS` validator at `_set_daily_limits_action`
+(and the duplicate at `_set_admin_limits`). Looking at the
+range tuple: `"reset_day_of_year": (1, 31)` — same upper
+bound as `reset_day_of_month`, copy-paste error from years
+ago. Range should be `(1, 366)` (366 covers leap years).
+
+**Multi-write-path bug class**: this is the build-641 /
+R1-D4-F1 / R1-D5-F1 pattern again. The validator was
+duplicated across two write paths (`_set_admin_limits` and
+`_set_daily_limits_action`) and the bug landed in both. Fix
+shipped to both at build 646.
+
+**Fix**: `bin/wl_handler.py:3040` and `:6925` — change
+`(1, 31)` → `(1, 366)`. Build 646.
+
+**Pin tests**:
+
+- `test_limit_edge_cases.py::TestAnalystLimitScheduleRanges`
+  (Day 1, analyst path)
+- `test_admin_limit_edge_cases.py::TestAdminLimitScheduleRanges::test_reset_day_of_year_upper_bound_is_366`
+  (Day 3, admin path) — independent regression test for the
+  twin write path
+
+### Day 1 — limit edge cases (analyst path)
+
+**Tests added**: 35 across 5 classes in
+`tests/integration/test_limit_edge_cases.py`.
+
+- `TestAnalystLimitBoundaries` — int range validator
+  (0/100 accepted, 101/negative/string rejected)
+- `TestAnalystPermissionToggles` — bool coercion for the
+  4 permission toggles
+- `TestAnalystLimitScheduleRanges` — parametrized over
+  `reset_day_of_*` boundaries; **surfaced R2-D1-F1**
+- `TestAnalystLimitFrequency` — full enum matrix
+  (never/daily/weekly/monthly/yearly + invalid)
+- `TestAnalystLimitTimeAndZone` — `reset_time_utc` parsing,
+  timezone offset bounds
+
+**Fix shipped**: build 646 (R2-D1-F1) — same line change in
+both write paths.
+
+### Day 2 — notification payload contracts
+
+**Tests added**: 7 across 4 classes in
+`tests/integration/test_notification_payload.py`.
+
+- `TestNotificationBaseShape` — every notification carries
+  `id, type, message, timestamp, read, related_request_id`
+- `TestNewRequestNotification` — admin gets the
+  approval-flow extras (`action_type, csv_file,
+  detection_rule`)
+- `TestApprovedAndRejectedNotifications` — analyst gets the
+  approve/reject decision back with the same extras
+- `TestCancelledNotification` — auto-cancel chain emits to
+  the original analyst with the documented shape
+
+**No production bugs found**. The notification path went
+through Ring 1's chokepoint scrutiny already; this ring
+just pinned the shape so future schema drift is caught at
+test time.
+
+### Day 3 — admin-limit edge cases (admin path mirror)
+
+**Tests added**: 12 across 5 classes in
+`tests/integration/test_admin_limit_edge_cases.py`. Mirrors
+Day 1 for the `set_admin_limits` write path.
+
+- `TestAdminLimitBoundaries` (3) — int range validator
+  on the 11 admin limits (`csv_save`, `csv_revert`,
+  `rule_deletion`, etc.)
+- `TestAdminPermissionToggles` (2) — bool coercion for
+  `allow_admin_purge_trash`, `allow_admin_reset_usage`
+- `TestAdminLimitScheduleRanges` (2) — independent
+  R2-D1-F1 regression test on the admin path; if a future
+  refactor lands the analyst-path fix but breaks the
+  admin path, this test catches it
+- `TestAdminLimitFrequencyAndTime` (3) — frequency enum +
+  `reset_time_utc` parsing on admin path
+- `TestAdminLimitRBAC` (2) — `analyst1` and built-in
+  `admin` both rejected; only `wl_superadmin` may call
+
+**Why a separate admin-path file**: the duplication gap
+exposed by R2-D1-F1 is structural — same validator
+duplicated in two places. As long as the duplication
+exists, both paths need their own contract pins. (The
+right long-term fix is extracting `SCHEDULE_INT_KEYS` to a
+single module-level constant; that refactor is out of
+scope for Ring 2 but these tests would catch any
+extraction that gets the admin path wrong.)
+
+**No new production bugs found**. R2-D1-F1's fix verified
+on the admin path via
+`test_reset_day_of_year_upper_bound_is_366`.
+
+**Suite status**: 254/254 integration tests pass after Day
+3. Ring 2 cumulative: 54 new tests across 3 days.
