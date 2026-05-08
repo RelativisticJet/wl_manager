@@ -1370,3 +1370,74 @@ on the admin path via
 
 **Suite status**: 254/254 integration tests pass after Day
 3. Ring 2 cumulative: 54 new tests across 3 days.
+
+### Day 4 — role × action RBAC matrix
+
+**Tests added**: 62 across 4 classes in
+`tests/integration/test_rbac_matrix.py`. Pins the
+dispatcher's permission-gating contract for every
+`GET_ACTIONS` and `POST_ACTIONS` entry in `wl_handler.py`.
+
+- `TestPostRBACDenialMatrix` (36) — every (forbidden user
+  tier × POST action) cell asserts the dispatcher rejects
+  with `Permission denied: insufficient role`. Generated
+  from `POST_ACTION_TIER × USER_SATISFIES`. Each test sends
+  an empty payload — the dispatcher rejects BEFORE the
+  action method is called, so the absence of required
+  fields can't accidentally turn the failure into a
+  non-permission error.
+- `TestGetRBACDenialMatrix` (11) — same contract for GET
+  actions. Specifically pins `get_deploy_window_status`
+  (superadmin-only read) against built-in `admin`, which
+  was not previously exercised by any test.
+- `TestRBACPermittedSamples` (11) — sample one action per
+  (tier, qualified user) showing RBAC does NOT block when
+  it shouldn't. Asserts the failure is *not* permission
+  denial — the action may still fail downstream
+  (validation error, missing field) but RBAC let it
+  through. Not exhaustive; sampled to keep matrix runtime
+  reasonable.
+- `TestMatrixCoverage` (2) — drift detector. Reads the
+  source of `POST_ACTIONS` / `GET_ACTIONS` and asserts that
+  every dispatch entry is classified in the matrix's tier
+  tables. If a new action is added to the handler but
+  never gets a tier classification, this test fails
+  immediately and points at the missing entry — preventing
+  silent matrix drift the way Ring 1's audit-event
+  invariant prevents silent envelope drift.
+
+**Coverage delta**: prior to Day 4, RBAC was spot-checked
+per-action (e.g., Day 3 admin-limit RBAC test, the
+existing `test_set_admin_limits` analyst denial). The
+matrix exhausts the (action × insufficient tier) combination
+space in one file, with a drift detector that ensures the
+matrix stays in sync with the dispatch table.
+
+**Built-in `admin` × superadmin**: 7 actions (one per
+SUPERADMIN_ROLES POST + GET) now have an explicit
+regression test that the built-in `admin` account is
+rejected. This pins the contract documented in
+`feedback_use_role_specific_accounts.md` — the built-in
+`admin` is an **EDIT_ROLES + ADMIN_ROLES** member but
+NOT a `SUPERADMIN_ROLES` member, so it cannot configure
+admin limits / activate lockdown / open deploy windows /
+bootstrap CSV hashes. CI/test scripts that authenticate
+as built-in `admin` will continue to fail at these
+boundaries, which is the intended behavior.
+
+**No new production bugs found**. The matrix's drift
+detector did flag an artifact during development — the
+initial draft had `cancel_request` in the wrong tier
+(I had written `"edit"`, but the dispatch table marks it
+as `None` / open). Caught by `TestMatrixCoverage` before
+the file shipped.
+
+**Suite status**: 316/316 integration tests pass after Day
+4 (254 prior + 62 new). Ring 2 cumulative: 116 new tests
+across 4 days.
+
+**Findings inventory (Ring 2 to date)**:
+
+| ID | Title | Status |
+| -- | ----- | ------ |
+| R2-D1-F1 | `reset_day_of_year` clamped to 31, not 366 (multi-write-path bug) | Fixed Day 1, shipped build 646 |
