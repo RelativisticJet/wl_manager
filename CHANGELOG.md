@@ -64,6 +64,60 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-08 (build 647, Ring 2 Day 6: visual regression structural snapshot)
+
+### Tests — Ring 2 Day 6 visual regression (5 tests)
+
+New file `tests/e2e/test_visual_regression.cjs` plus baselines
+under `tests/e2e/visual_baselines/` (committed) and diagnostic
+artifacts under `tests/e2e/visual_artifacts/` (gitignored).
+
+- 3 viewports of `whitelist_manager` (desktop / tablet / mobile)
+- 1 viewport of `control_panel` (desktop)
+- 1 viewport of `audit` (desktop)
+
+**Approach**: structural DOM snapshot, not pixel diff. Only
+`playwright-core` is in the manifest (not `@playwright/test`),
+so `toHaveScreenshot()` is unavailable. Instead, captures DOM
+invariants — element counts (buttons / inputs / headings /
+tables / modals), critical-element presence flags
+(`#rule-search`, `#csv-table-container`, etc.), `wl-*` body
+class flags, h1/h2 text strings, layout dimensions bucketed to
+50px — and asserts against committed baseline JSON files.
+
+Catches: missing/extra buttons, layout collapse, heading
+rename, theme regression. Doesn't catch: pixel-level styling,
+visual hierarchy that doesn't affect counts. Diagnostic
+screenshots saved on every run for post-failure inspection.
+
+**Stabilization defenses** (each addresses a flake mode that
+surfaced during development):
+
+1. Sample-stabilization for control_panel — poll button count
+   every 400ms, declare ready after 4 consecutive matches
+   (~1.6s of stable count).
+2. `networkidle` + 8-consecutive-match stabilization for audit
+   (SPL search panels populate over multi-second window).
+3. ±1 tolerance band on count comparisons — absorbs
+   data-dependent variance (queue depth, audit alert count)
+   while still failing on ≥2 deltas (real structural changes).
+
+**Verified**: 8/8 consecutive runs clean after defenses
+landed. Failure detection demonstrated by tampering a baseline
+to expect 5 extra headings + a phantom heading text — test
+correctly failed with specific deltas, then passed again after
+restore.
+
+**Update workflow**: `WL_VISUAL_UPDATE=1 node tests/e2e/test_visual_regression.cjs`
+overwrites baselines when intentional structural changes ship.
+The JSON diff in the commit shows the new contract — easy to
+review.
+
+No production bugs found. Ring 2 cumulative: 142 tests across
+6 days (35 + 7 + 12 + 62 + 21 + 5).
+
+---
+
 ## Unreleased — 2026-05-08 (build 647, Ring 2 Day 5: performance smoke + legacy manifest crash fix)
 
 ### Bug — `read_version_manifest` crashed on legacy bare-list format (R2-D5-F1)

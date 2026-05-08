@@ -122,3 +122,9 @@ backups/
 # auto-cleaned on success but leftover after a failed run.
 .tmp_smoke_*/
 .tmp_restore_*/
+
+# Visual regression diagnostic artifacts (Ring 2 Day 6). Screenshots
+# saved on every run for post-failure inspection; baselines (the
+# actual contract) live under tests/e2e/visual_baselines/ and ARE
+# committed.
+tests/e2e/visual_artifacts/

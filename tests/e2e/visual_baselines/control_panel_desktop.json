@@ -1,0 +1,27 @@
+{
+  "url_path": "/en-US/app/wl_manager/control_panel",
+  "viewport": {
+    "w": 1440,
+    "h": 900
+  },
+  "body_classes": [
+    "wl-dark"
+  ],
+  "scroll_height_bucket": 900,
+  "counts": {
+    "buttons": 9,
+    "inputs": 1,
+    "headings": 3,
+    "tables": 0,
+    "modals": 0
+  },
+  "presence": {
+    "rule_search": false,
+    "csv_table_container": false,
+    "control_panel_tabs": false,
+    "action_filter": false
+  },
+  "h1_h2_texts": [
+    "Control Panel"
+  ]
+}

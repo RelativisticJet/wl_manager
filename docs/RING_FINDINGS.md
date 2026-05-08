@@ -1612,3 +1612,98 @@ endpoints are well within budget.
 integration suite runs at 328/330 pass (was 312/316 before;
 fix unblocked 2 tests). Ring 2 cumulative: 137 new tests
 across 5 days.
+
+### Day 6 — visual regression (structural snapshot)
+
+**Tests added**: 5 visual regression tests in
+`tests/e2e/test_visual_regression.cjs`. Captures DOM-level
+structural invariants for the three main dashboards across
+viewport breakpoints, asserts them against committed baseline
+JSON files at `tests/e2e/visual_baselines/`.
+
+Views × viewports captured:
+
+- `whitelist_manager` × {desktop 1440, tablet 1024, mobile 375}
+- `control_panel` × {desktop 1440}
+- `audit` × {desktop 1440}
+
+**Why structural, not pixel diff**: only `playwright-core` is
+in the dependency manifest, not `@playwright/test`. Adding a
+pixel-diff dep (pixelmatch / `@playwright/test`) would expand
+the dependency surface. Structural snapshots ship today with
+what's already available and catch the most common regression
+categories. A future ring can layer pixel-diff on top once
+`@playwright/test` is on the dep manifest.
+
+**Snapshot fields** (per view × viewport):
+
+- `viewport` — width × height
+- `body_classes` — wl-* class flags + splunk-application (catches
+  theme regressions, e.g., `wl-dark` accidentally removed)
+- `scroll_height_bucket` — bucketed to nearest 50px (catches
+  layout collapse without flapping on minor browser-version
+  rendering deltas)
+- `counts` — visible buttons, inputs, headings, tables, modals
+- `presence` — `#rule-search`, `#csv-table-container`,
+  control panel tabs, audit action filters (each true/false;
+  flips fail the test)
+- `h1_h2_texts` — visible heading strings, sorted (catches
+  rename regressions)
+
+**What this DOES catch**:
+
+- Missing/extra buttons (count delta > 1)
+- Layout collapse (scrollHeight delta > 50px)
+- Heading text rename
+- Critical element disappearance
+- Theme regression (body class flag mismatch)
+
+**What it does NOT catch**: pixel-level styling differences
+(color, font, anti-aliasing), visual hierarchy changes that
+don't affect element counts, issues only visible in
+screenshots. Diagnostic screenshots are still saved to
+`tests/e2e/visual_artifacts/` (gitignored) for post-failure
+inspection.
+
+**Stabilization gauntlet**: writing this test surfaced three
+flakiness modes that needed defenses, each documented inline:
+
+1. **Async tab content rendering (control_panel)** — initial
+   `waitForTimeout(3500)` was flaky, button count drifted
+   8↔9. Replaced with sample-stabilization: poll the visible
+   button count every 400ms, declare ready after 4 consecutive
+   matches (~1.6s of stable count). Caps at 20s.
+2. **SPL search panels populating (audit)** — table count
+   drifted 2→4 over multi-second window. Added `networkidle`
+   wait + 8-consecutive-match stabilization at 500ms cadence
+   (~4s of dead-stable).
+3. **Data-dependent variance (queue depth, audit alert
+   count)** — even with stabilization, button counts varied
+   by ±1 between cold/warm loads (queue had different entry
+   counts). Added ±1 tolerance band on count comparisons.
+   Larger deltas (≥2) still fail — that's structural, not
+   data variance.
+
+After all three defenses: 8/8 consecutive runs clean.
+
+**Failure detection verified**: tampered the
+`whitelist_manager_desktop` baseline to expect 5 extra
+headings + a phantom heading text. Test correctly failed with
+specific deltas (`counts.headings: 6 → 1 (delta 5 exceeds ±1
+tolerance)`, `h1_h2_texts: [...|Phantom Heading...] → [...]`).
+Restored baseline → test passes again. Confirms the contract
+detects real structural changes.
+
+**Update workflow**: when an intentional structural change
+ships (new button, heading rename, panel reorganization), run
+with `WL_VISUAL_UPDATE=1` to overwrite the baselines. The JSON
+diff in the commit shows what the new contract is — easy
+review.
+
+**Why no Day 6 finding**: zero structural regressions found.
+The dashboards' current contracts are now committed as
+baselines; future regressions will surface here.
+
+**Suite status**: 5/5 visual regression tests pass; 8/8
+consecutive runs stable. Ring 2 cumulative: 142 new tests
+across 6 days (35 + 7 + 12 + 62 + 21 + 5).

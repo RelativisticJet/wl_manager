@@ -1,0 +1,27 @@
+{
+  "url_path": "/en-US/app/wl_manager/whitelist_manager",
+  "viewport": {
+    "w": 1024,
+    "h": 768
+  },
+  "body_classes": [
+    "wl-dark"
+  ],
+  "scroll_height_bucket": 750,
+  "counts": {
+    "buttons": 3,
+    "inputs": 2,
+    "headings": 1,
+    "tables": 0,
+    "modals": 0
+  },
+  "presence": {
+    "rule_search": true,
+    "csv_table_container": true,
+    "control_panel_tabs": false,
+    "action_filter": false
+  },
+  "h1_h2_texts": [
+    "Whitelist Manager"
+  ]
+}
