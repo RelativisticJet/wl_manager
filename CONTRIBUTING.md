@@ -53,6 +53,36 @@ make test        # Integration tests against Docker Splunk
 make package     # Build .spl package
 ```
 
+### Continuous Integration
+
+Every PR and every push to `main` triggers a set of GitHub Actions
+workflows under `.github/workflows/`:
+
+| Workflow | Purpose | Approx duration |
+| --- | --- | --- |
+| [`ci.yml`](.github/workflows/ci.yml) | Validation, doc-drift, packaging, ~600 unit tests | 2-3 min |
+| [`integration-tests.yml`](.github/workflows/integration-tests.yml) | Spin up Splunk 9.3.1 container, provision test users/roles, run the 337-test integration suite against the live REST handler | 10-15 min |
+| [`semgrep.yml`](.github/workflows/semgrep.yml) | Security taint analysis (SSRF, command injection, path traversal) | 1-2 min |
+| [`pip-audit.yml`](.github/workflows/pip-audit.yml) | Dependency vulnerability scan | 1-2 min |
+| [`validate-and-package.yml`](.github/workflows/validate-and-package.yml) | AppInspect-style checks + .spl artifact build | 2-3 min |
+| [`release.yml`](.github/workflows/release.yml) | Sigstore keyless signing on tag push | 3-5 min |
+
+The integration-tests workflow uses `docker compose up` to bring up
+the official `splunk/splunk:9.3.1` image, runs
+[`tests/e2e/setup_test_env.sh`](tests/e2e/setup_test_env.sh) to
+provision the role/user matrix, then runs `pytest tests/integration/`
+exactly as it would locally. On failure, splunkd logs are uploaded
+as a workflow artifact (retained 7 days). The session-level
+canonical-state restore fixture (Ring 2 Day 7) ensures every CI run
+starts from the same baseline.
+
+**Local equivalent**: the same `docker compose up` →
+`setup_test_env.sh` → `pytest tests/integration/` sequence works
+identically on a developer machine. If a test passes locally but
+fails in CI (or vice versa), it's almost always an environmental
+difference (host disk speed, rate limiter behavior under load) —
+not a logic difference.
+
 ## Project Structure
 
 | Directory | Purpose |

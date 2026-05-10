@@ -1,0 +1,144 @@
+name: Integration Tests (Splunk Docker)
+
+# Runs the live-container integration suite (tests/integration/)
+# against a real Splunk 9.3.1 instance brought up via
+# docker-compose. This complements ci.yml's unit-tests job, which
+# covers the mocked-Splunk paths (~600 tests, ~12s) but cannot
+# exercise the dispatch/RBAC/audit-emission paths that depend on
+# a running splunkd.
+#
+# Triggered on PR and push to main. Captures Splunk logs on
+# failure for post-mortem.
+#
+# Ring 3 Day 1 (2026-05-08) — closes the Ring 1 retrospective
+# gap: "containerized Splunk in CI requires significant new
+# engineering" was the original deferral reason. Now closed.
+#
+# E2E TEST HARNESS GATE — same gate as ci.yml. The destructive
+# E2E tests under tests/e2e/ (with `.cjs` extension) are NOT run
+# by this workflow because they require WL_TEST_HARNESS=1 +
+# explicit container-name verification. This workflow runs only
+# the non-destructive integration suite under tests/integration/
+# (Python pytest, idempotent against container_state fixture's
+# snapshot/restore + the Day 7 session-level canonical restore).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    # 30 minutes is generous: ~1 min container startup + ~1 min
+    # setup + ~9 min suite runtime + ~1 min teardown. The
+    # remaining headroom absorbs cold-runner variance and a
+    # rate-limit-induced retry burst.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install Python deps
+        # Pinned to the same versions as ci.yml's unit-tests job.
+        # Including pytest-cov even though the integration suite
+        # doesn't use --cov by default — keeps the env identical
+        # so a failure here vs there isn't dep-drift.
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest==9.0.3 pytest-cov==5.0.0 freezegun==1.5.1 \
+                      hypothesis==6.90.0 pytest-timeout==2.1.0
+
+      - name: Start Splunk container
+        # docker-compose.yml binds default/, bin/, lookups/, etc.
+        # from the checked-out repo into the container. No image
+        # build needed — uses the official splunk/splunk:9.3.1
+        # image. First-run startup includes license accept +
+        # initial admin password set; ~30-60s on warm runners.
+        run: docker compose up -d
+
+      - name: Fix bind-mount permissions for Splunk user
+        # On Linux runners (ubuntu-latest), bind mounts preserve
+        # the host UID/GID. The repo files are owned by the runner
+        # user; Splunk runs as `splunk` (UID 41812) inside the
+        # container and can't write to lookups/ until we chown.
+        # On Windows/Docker Desktop this isn't required (implicit
+        # user mapping handles it) but it's a no-op there too if
+        # chown is run inside the container as root.
+        # Ring 2 Day 7 session-level state restore depends on
+        # writable lookups/, so this MUST run before the test
+        # phase.
+        run: |
+          docker exec -u 0 wl_manager_test \
+            chown -R splunk:splunk \
+              /opt/splunk/etc/apps/wl_manager/bin \
+              /opt/splunk/etc/apps/wl_manager/default \
+              /opt/splunk/etc/apps/wl_manager/lookups \
+              /opt/splunk/etc/apps/wl_manager/appserver \
+              /opt/splunk/etc/apps/wl_manager/metadata
+
+      - name: Wait for Splunk + provision test users/roles
+        # setup_test_env.sh polls /services/server/info until 200,
+        # waits for KV store to reach "ready" status, then creates
+        # roles (wl_editor, wl_admin, wl_superadmin, sc_admin) and
+        # 6 test users (analyst1/2, wladmin1/2, superadmin1/2)
+        # via REST. Idempotent — safe on container restart and
+        # multiple invocations.
+        run: bash tests/e2e/setup_test_env.sh wl_manager_test
+
+      - name: Run integration suite
+        # The session-level _restore_canonical_demo_state fixture
+        # (Ring 2 Day 7) copies host lookups/ into the container
+        # before any test runs, so the suite starts from a known
+        # baseline regardless of how the container was initialized.
+        # ~9 min for 337 tests (mostly bound by docker exec
+        # overhead + rate-limit pacing, not handler latency).
+        run: python -m pytest tests/integration/ -q --tb=short
+
+      - name: Capture Splunk container logs on failure
+        if: failure()
+        # Three log sources are useful when triaging a CI failure:
+        # 1. compose logs — startup banner + any container-level
+        #    errors before splunkd took over
+        # 2. splunkd.log — the actual Splunk service log; reveals
+        #    REST handler errors, KV store issues, scripted-input
+        #    failures
+        # 3. wl_handler audit/error output — our own logs at
+        #    splunkd_access.log
+        run: |
+          mkdir -p ci-logs
+          docker compose logs --tail=500 > ci-logs/compose.log 2>&1 || true
+          docker exec wl_manager_test \
+            cat /opt/splunk/var/log/splunk/splunkd.log 2>/dev/null \
+            | tail -1000 > ci-logs/splunkd.log || true
+          docker exec wl_manager_test \
+            cat /opt/splunk/var/log/splunk/splunkd_access.log 2>/dev/null \
+            | tail -500 > ci-logs/splunkd_access.log || true
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: splunk-logs-${{ github.run_id }}
+          path: ci-logs/
+          retention-days: 7
+
+      - name: Teardown Splunk container
+        if: always()
+        # `down -v` removes the splunk_var named volume too, so
+        # the next run starts fresh. CI runners are ephemeral
+        # anyway, but explicit teardown ensures no resource leak
+        # if the runner is reused (self-hosted scenario).
+        run: docker compose down -v
