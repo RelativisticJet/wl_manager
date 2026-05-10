@@ -373,11 +373,19 @@ class TestRecoveryLogContract:
     """
 
     REQUIRED_ENTRY_FIELDS = {"timestamp", "action"}
+    # Mirror the action set that ``default/data/ui/views/audit.xml``
+    # explicitly handles in its "Out-of-Band Recovery Actions" panel
+    # (see lines ~1035-1051). When a new recovery script lands, both
+    # this set AND the dashboard panel must be updated. R2-D7-F1
+    # added ``migrate_cooldowns`` here after Ring 2 broad sweep
+    # caught it: the dashboard already knew about it but this test
+    # was lagging.
     KNOWN_ACTIONS = {
         "fim_deploy_window_start",
         "fim_deploy_window_end",
         "emergency_unlock",
         "reset_cooldowns",
+        "migrate_cooldowns",
     }
 
     def test_open_close_window_appends_two_log_entries(

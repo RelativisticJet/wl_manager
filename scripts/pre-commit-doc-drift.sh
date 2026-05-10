@@ -133,6 +133,12 @@ is_runtime_path() {
         lookups/_versions/_*.json|lookups/_versions/_*.jsonl) return 0 ;;
         lookups/_versions/.fim_*) return 0 ;;
         lookups/_versions/.csv_*) return 0 ;;
+        # Lookups-root runtime files (handler writes on demand).
+        # Examples: _trash_config.json, _approval_queue.json,
+        # _detection_rules.json, _emergency_lockdown.json. Listed
+        # via prefix-glob — adding new ones doesn't require a
+        # script change.
+        lookups/_*.json|lookups/_*.jsonl) return 0 ;;
         *) return 1 ;;
     esac
 }

@@ -1707,3 +1707,304 @@ baselines; future regressions will surface here.
 **Suite status**: 5/5 visual regression tests pass; 8/8
 consecutive runs stable. Ring 2 cumulative: 142 new tests
 across 6 days (35 + 7 + 12 + 62 + 21 + 5).
+
+### Day 7 — Ring 2 close (cleanup + cascade root cause)
+
+Ring 2 close pass: investigate and resolve the 3 lingering
+integration failures that pre-dated Ring 2, then add a
+session-level state-hygiene fixture to prevent the
+inherited-state cascade that made these failures intermittent
+and order-dependent.
+
+**Findings shipped**:
+
+| ID | Title | Type | Status |
+| -- | ----- | ---- | ------ |
+| R2-D7-F1 | Recovery log test's `KNOWN_ACTIONS` missing `migrate_cooldowns` | Test bug | Fixed Day 7 |
+| R2-D7-F2 | `test_submit_grows_the_queue_by_one` count-based assertion broken by queue auto-cleanup | Test bug | Fixed Day 7 |
+| R2-D7-F3 | `test_set_retention_updates_config_file` checks stale `_versions/` path before canonical | Test bug | Fixed Day 7 |
+| R2-D7-F4 | `container_state` snapshot inherits damage from prior session, propagates through suite | Test infrastructure | Fixed Day 7 (session-autouse fixture) |
+
+#### R2-D7-F1 — `KNOWN_ACTIONS` missing `migrate_cooldowns`
+
+The recovery-log invariant test (`test_log_actions_are_known`)
+maintains a `KNOWN_ACTIONS` set that mirrors the audit
+dashboard's "Out-of-Band Recovery Actions" panel switch
+statement. When `wl_migrate_cooldowns.py` was added, the
+dashboard panel was updated (lines 1037, 1051 in `audit.xml`)
+but the test's set was not. The test was correct in spirit
+("every action in the recovery log must have a dashboard
+explanation") but its data drifted out of sync with the
+canonical source.
+
+**Fix**: added `migrate_cooldowns` to `KNOWN_ACTIONS` in
+`tests/integration/test_recovery_scripts.py`. Also added a
+docstring linking the set to the dashboard panel so future
+contributors update both sides together.
+
+#### R2-D7-F2 — Queue-grows-by-1 assertion broken by auto-cleanup
+
+`test_submit_grows_the_queue_by_one` asserted
+`len(after) == before_count + 1`. The handler's
+`submit_approval` invokes `expire_pending_approvals` as a
+side effect on every submit, which prunes expired entries.
+When `before` was inflated by stale entries from prior tests,
+`after` was smaller than `before` — observed `before=5,
+after=1` even though the new entry landed correctly.
+
+**Fix**: switched to request-id set diff. Compute
+`new_ids = after_ids - before_ids`, assert exactly one new id,
+assert it matches the submit response's `request_id`. Catches
+the real regression (silent loss of submitted request) without
+flapping on cleanup-driven shrinkage.
+
+#### R2-D7-F3 — Retention test reads stale `_versions/` copy
+
+`test_set_retention_updates_config_file` checked
+`lookups/_versions/_trash_config.json` first and only fell back
+to the canonical `lookups/_trash_config.json` if the
+`_versions/` path didn't exist. The handler writes to
+`OWN_LOOKUPS + TRASH_CONFIG_FILE` = `lookups/_trash_config.json`
+(canonical). On systems with a stale `_versions/` copy from
+earlier code paths, the test read the stale file with
+`retention_days: 30` instead of the just-written
+`retention_days: 90`.
+
+**Fix**: removed the fallback. The test now asserts only
+against the canonical handler-write path. No more "be liberal
+in what you accept" — tests assert exactly what the contract
+says.
+
+**Methodology insight**: this and R2-D5-F1 (legacy bare-list
+manifest) are the same bug class — code that tolerates "either
+of two formats / locations" will silently consume the wrong
+one when both are present. Validators (handlers, readers)
+should normalize and assert; tests should match the strictest
+interpretation of the contract.
+
+#### R2-D7-F4 — Inherited-state cascade
+
+The most interesting finding of the ring. Symptoms:
+
+- 5 tests fail in a full integration suite run
+- All 5 pass in isolation
+- Failures vary across runs (not deterministic)
+- Always involve missing CSVs (`rule_csv_map.csv`,
+  `DR102_whitelist.csv`)
+
+Bisection through every individual module showed each was
+clean in isolation. Pairs were clean. Even the full alphabetical
+sequence of likely-suspect modules ran clean — but only after
+restoring host state. Running the suite immediately after a
+prior failed run reproduced the failures.
+
+**Root cause**: `container_state` is a function-scoped fixture
+that does snapshot → test → restore. Each test's snapshot
+captures whatever state exists at THAT MOMENT. If a prior test
+session crashed mid-run, hit a teardown error, or left damaged
+state from any source (FIM watcher race, expired-row cleanup,
+manual debugging), the FIRST test's snapshot in the next
+session captures the damage. Every subsequent
+`container_state`-using test snapshots from the already-damaged
+baseline. Damage propagates through the entire suite. Tests
+that need files which were damaged fail; tests that don't
+care pass.
+
+This is **not** a single test mutating state outside the
+fixture — that's what we initially looked for and didn't find.
+It's the function-scoped fixture having no concept of a known
+canonical baseline beyond "whatever state existed at test
+start."
+
+**Fix**: session-scoped autouse fixture
+`_restore_canonical_demo_state` in `tests/integration/conftest.py`
+that copies the version-controlled host `lookups/` directory
+into the container at session start, before any test runs.
+Every session begins from the same baseline regardless of how
+the previous session ended.
+
+The fixture has two escape hatches:
+- `WL_SKIP_STATE_RESTORE=1` env var
+- `--no-state-restore` pytest flag
+
+For benchmarking against custom container state or rapid
+iteration where the ~1-2s restore cost matters.
+
+**Why session-scoped, not function-scoped**: function-scope
+would force every test to have a clean canonical baseline,
+but tests that don't use `container_state` would lose any
+state setup their predecessors did intentionally
+(e.g., creating an entity that a later test reads). Session-
+scope restores ONCE at the start, then the existing
+function-scoped `container_state` handles per-test
+snapshot/restore as before.
+
+**Suite verified**: 337/337 integration tests pass with the
+fix. Compare to the start of Day 7: 5 failures + 1 error.
+
+### Day 7 — also closed: 2-test queue/cancel pass
+
+While running the full suite for verification, two additional
+small test wins surfaced (no findings — just confirmation):
+
+- `test_response_shape` and `test_widths_round_trip_via_get`
+  in `TestSaveColWidths` — were failing on inherited state;
+  now passing
+- `test_get_csv_content` and `test_check_csv_status` in
+  `test_docker_handler_smoke.py` — were 404'ing on inherited
+  state; now passing
+
+These had no individual fixes — they were collateral damage
+from R2-D7-F4 cascade. With session-level state hygiene,
+they're stable.
+
+---
+
+## Ring 2 retrospective
+
+**Date closed**: 2026-05-08. **Build at close**: 647.
+
+### Numbers
+
+| Metric | Value |
+| ------ | ----- |
+| Days | 7 (Days 1-7) |
+| Tests authored | 142 (Days 1-6) + 4 fixes (Day 7) = 146 |
+| Production bugs found and fixed | 2 (R2-D1-F1 reset_day_of_year clamp; R2-D5-F1 legacy manifest crash) |
+| Test bugs found and fixed | 4 (R2-D7-F1 KNOWN_ACTIONS; R2-D7-F2 queue assumption; R2-D7-F3 stale path; R2-D7-F4 cascade) |
+| Builds shipped during ring | 2 (646, 647) |
+| Final integration suite | 337/337 pass (100%) |
+| Final unit suite | 600/600 pass (1 Windows-only skip) |
+| Visual regression baselines committed | 5 (3 viewports of whitelist_manager, control_panel desktop, audit desktop) |
+
+### What worked
+
+1. **Schema-pin pattern carried over from Ring 1** — every
+   new test surface (limit edge cases, notification payloads,
+   admin-limit, RBAC matrix) used the same template:
+   `REQUIRED_FIELDS` set asserted against actual response.
+   Predictable, low-friction.
+
+2. **Drift detectors built into matrix tests** — the RBAC
+   matrix (Day 4) and budget tier coverage (Day 5)
+   self-check that their internal tables don't drift behind
+   the source. New action / new budget tier added → matrix
+   fails immediately, points at the gap. Caught one
+   development-time mistake (`cancel_request` mis-tiered
+   in Day 4 draft) before commit.
+
+3. **Tampering baselines beats tampering production code**
+   for failure-detection demos. Day 6's visual regression
+   contract was proven by editing the baseline JSON to expect
+   structural changes that don't exist; test correctly fails;
+   restore baseline; test passes. Cleaner than touching CSS
+   and reverting.
+
+4. **Stabilization gauntlet for async UIs**. Day 6 surfaced
+   three distinct flake modes (sample-stabilization for
+   JS-rendered tabs, networkidle for SPL searches,
+   tolerance bands for data-dependent counts) that needed
+   layered defenses. Each is now codified inline so the
+   pattern is reusable when adding new visual-regression
+   coverage.
+
+5. **R2-D7-F4 root cause**. Spent serious bisection time
+   chasing "which test damages state" before realizing the
+   cascade was inherited from prior sessions, not produced
+   by the current one. The fix (session-autouse canonical
+   restore) eliminates an entire class of intermittent
+   suite failures and makes the suite genuinely reproducible.
+
+### What was painful
+
+1. **Cascade investigation took longer than the actual fix**.
+   Three sessions of bisection narrowed the search to
+   "everything passes individually but the suite fails" —
+   which only made sense once I considered SESSION-level
+   inheritance, not test-level mutation. Lesson: when
+   per-test isolation looks fine but the suite is broken,
+   check fixture-scope assumptions before continuing the
+   bisection.
+
+2. **`be liberal in what you accept` patterns in tests**
+   silently consumed wrong values. R2-D7-F3 (stale
+   `_versions/` path checked first) and R2-D5-F1 (bare-list
+   manifest format accepted) are the same bug class on
+   opposite sides of the contract. Tests need to match the
+   strictest interpretation; readers in production need
+   normalization at boundaries; both sides need
+   documentation that says "the canonical form is X."
+
+3. **Visual regression flakiness** required three
+   independent stabilization defenses before reaching 8/8
+   stability. Initially looked like one knob would fix
+   everything; turned out to be three different async
+   categories needing three different approaches.
+
+### Findings inventory
+
+| ID | Title | Status |
+| -- | ----- | ------ |
+| R2-D1-F1 | `reset_day_of_year` clamped to 31, not 366 (multi-write-path) | Fixed Day 1, originally shipped build 646 |
+| R2-D5-F1 | `read_version_manifest` crashes on legacy bare-list format | Fixed Day 5, shipped build 647 |
+| R2-D7-F1 | `KNOWN_ACTIONS` missing `migrate_cooldowns` | Fixed Day 7 |
+| R2-D7-F2 | Queue-grows-by-1 assertion broken by auto-cleanup | Fixed Day 7 |
+| R2-D7-F3 | Retention test reads stale `_versions/` path | Fixed Day 7 |
+| R2-D7-F4 | Inherited-state cascade (session-level fixture gap) | Fixed Day 7 |
+
+### Day-by-day production output
+
+| Day | Tests added | Production fixes | Build |
+| --- | ----------- | ---------------- | ----- |
+| 1 | 35 (limit edge cases analyst path) | R2-D1-F1 reset_day_of_year clamp | 646 |
+| 2 | 7 (notification payload contracts) | None | — |
+| 3 | 12 (admin-limit edge cases) | None | — |
+| 4 | 62 (role × action RBAC matrix) | None | — |
+| 5 | 21 (perf smoke) | R2-D5-F1 legacy manifest fix | 647 |
+| 6 | 5 (visual regression baselines) | None | — |
+| 7 | 0 (test fixes only) | R2-D7-F1/F2/F3/F4 | — |
+
+### Pattern catalog (Ring 1 + Ring 2 combined)
+
+These patterns are now established across the suite and ready
+to apply on future rings:
+
+1. **Schema-pin** — `REQUIRED_FIELDS` set asserted against
+   actual response/queue/metadata
+2. **Chokepoint over callsite** — fix at the single intercept
+   point, not 20 callsites
+3. **Schema-tolerant reads, strict writers** — normalize at
+   read boundary; emit only canonical form; document
+   "the canonical form is X"
+4. **Drift detectors** — tests that self-check their own
+   internal tables don't drift behind the source
+5. **Stabilization gauntlet** — async UI testing layers
+   sample-stabilization + networkidle + tolerance bands per
+   async category
+6. **Baseline-tampering for failure-detection demos** —
+   prove a regression test catches regressions without
+   touching production code
+
+### Sign-off
+
+Ring 2 closed at 2026-05-08, build 647. All findings either
+fixed or pinned with regression tests. 337/337 integration
+tests pass with session-level state hygiene. 600/600 unit
+tests pass.
+
+Suggested Ring 3 scope (not committed):
+
+- **Mutation testing** (originally Ring 2 scope, deferred):
+  integrate `mutmut` into a weekly CI run; require ≥80% kill
+  rate; treat survivors as missing tests.
+- **Pixel-level visual regression** — add `@playwright/test`
+  to the dependency manifest, layer pixel-diff (with
+  tolerance) on top of Day 6's structural snapshot.
+- **Containerized CI integration** — current integration tests
+  are local-only because they need the live `wl_manager_test`
+  container. Worth investigating whether a GitHub Actions
+  service container can stand up Splunk in CI.
+- **Performance benchmarking** (deeper than Day 5 smoke) —
+  cold-start latency, concurrency under load, memory leak
+  detection over many calls. Requires a dedicated
+  benchmarking harness (not pytest assertions).

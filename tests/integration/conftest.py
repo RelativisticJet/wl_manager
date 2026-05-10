@@ -69,6 +69,7 @@ When NOT to use this fixture
 import os
 import json
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 
@@ -288,6 +289,95 @@ def docker_available() -> bool:
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pytest.skip("docker not available")
     return True
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _restore_canonical_demo_state(docker_available, request):
+    """Copy host ``lookups/`` into the container at session start.
+
+    Why this exists (R2-D7 cascade root cause)
+    ------------------------------------------
+
+    ``container_state`` (function-scoped) snapshots whatever state
+    exists at test start. If a previous test session crashed
+    mid-run, hit a teardown error, or hung partway through —
+    leaving the container in a damaged state (e.g., missing
+    ``rule_csv_map.csv``) — every subsequent ``container_state``
+    snapshot captures the damage and propagates it forward
+    through the entire suite. Symptom: tests pass in isolation
+    but fail in a full suite run with errors like ``CSV file
+    not found``, ``no mappings in demo state``, ``rule_csv_map.csv
+    not found``.
+
+    This session-level fixture short-circuits the inheritance:
+    every session starts by force-restoring the
+    version-controlled ``lookups/`` directory (the committed
+    canonical demo state) into the container, so tests always
+    begin from a known-good baseline regardless of how the prior
+    session ended.
+
+    Disabled when:
+
+    - ``WL_SKIP_STATE_RESTORE=1`` is set (escape hatch for
+      benchmarking against a custom container state)
+    - ``--no-state-restore`` is passed to pytest (same)
+
+    The restore is idempotent: copying host files into a
+    matching container directory just overwrites identical files
+    in place. Cost is ~1-2s per session.
+    """
+    if os.environ.get("WL_SKIP_STATE_RESTORE") == "1":
+        return
+    if request.config.getoption("--no-state-restore", default=False):
+        return
+
+    # Locate the host's lookups/ directory. ``conftest.py`` lives
+    # at ``tests/integration/conftest.py``, so two parents up is
+    # the repo root.
+    repo_root = Path(__file__).resolve().parents[2]
+    host_lookups = repo_root / "lookups"
+    if not host_lookups.is_dir():
+        # Repo not laid out as expected — skip rather than fail.
+        # Tests that depend on demo state will skip with their
+        # own "no mappings in demo state" check.
+        return
+
+    # Copy host lookups/ → container lookups/, then chown to splunk
+    env = {**os.environ, "MSYS_NO_PATHCONV": "1"}
+    cp_proc = subprocess.run(  # noqa: S603 — list-form, no shell
+        ["docker", "cp",
+         str(host_lookups) + os.sep + ".",
+         f"{CONTAINER_NAME}:{APP_PATH}/{LOOKUPS_REL}/"],
+        capture_output=True, text=True, timeout=30,
+        check=False, env=env,
+    )
+    if cp_proc.returncode != 0:
+        # Soft-fail: log but don't break the session.
+        sys.stderr.write(
+            f"warning: canonical state restore (docker cp) "
+            f"returned {cp_proc.returncode}: {cp_proc.stderr}\n")
+        return
+    # Chown so Splunk can read/write the restored files
+    subprocess.run(  # noqa: S603 — list-form, no shell
+        ["docker", "exec", "-u", "0", CONTAINER_NAME,
+         "chown", "-R", "splunk:splunk",
+         f"{APP_PATH}/{LOOKUPS_REL}"],
+        capture_output=True, timeout=10,
+        check=False, env=env,
+    )
+
+
+def pytest_addoption(parser):
+    """Register the ``--no-state-restore`` flag so the
+    session-level state restore can be disabled without
+    setting the env var (useful for repeated runs in
+    quick-iteration mode)."""
+    parser.addoption(
+        "--no-state-restore", action="store_true",
+        default=False,
+        help="Skip the session-start canonical-state restore "
+             "(see _restore_canonical_demo_state in conftest.py).",
+    )
 
 
 @pytest.fixture

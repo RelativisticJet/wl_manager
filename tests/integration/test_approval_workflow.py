@@ -177,12 +177,24 @@ class TestSubmitApprovalShape:
 
     def test_submit_grows_the_queue_by_one(
             self, container_state, container_curl):
-        """Side-effect verification: the queue length goes up by
-        exactly 1. Catches a regression where submit_approval
-        returns success but the queue isn't actually updated
-        (silent loss of the request)."""
+        """Side-effect verification: the new request_id is in the
+        post-submit queue, and exactly one new request_id was
+        added relative to the pre-submit queue.
+
+        R2-D7-F2: a previous version asserted ``len(after) ==
+        before_count + 1``. That assertion was too strict because
+        ``submit_approval`` invokes ``expire_pending_approvals``
+        as a side effect, pruning expired entries on every
+        submit. So a ``before`` count inflated by stale entries
+        from prior tests would shrink instead of grow:
+        observed ``before=5, after=1`` even though the new
+        entry was successfully added. The right contract is
+        request-id-based, not count-based — that's what catches
+        a real regression where the submit returns success but
+        the entry isn't persisted.
+        """
         before = _read_queue_via_get(container_curl)
-        before_count = len(before)
+        before_ids = {e.get("request_id") for e in before}
 
         # Pick any CSV+rule
         mapping_proc = container_curl(
@@ -199,9 +211,17 @@ class TestSubmitApprovalShape:
             pytest.skip(f"submit_approval setup failed: {body}")
 
         after = _read_queue_via_get(container_curl)
-        assert len(after) == before_count + 1, \
-            (f"queue did not grow by 1: before={before_count}, "
-             f"after={len(after)}")
+        after_ids = {e.get("request_id") for e in after}
+        new_ids = after_ids - before_ids
+        assert len(new_ids) == 1, (
+            "expected exactly 1 new request_id, got {}: "
+            "before_ids={}, after_ids={}".format(
+                len(new_ids), sorted(before_ids),
+                sorted(after_ids)))
+        assert body["request_id"] in new_ids, (
+            "submit response request_id {} is not the one that "
+            "actually landed in the queue. The new id was {}."
+            .format(body["request_id"], sorted(new_ids)))
         # Find our entry by request_id
         new_entry = next(
             (e for e in after if e["request_id"] == body["request_id"]),

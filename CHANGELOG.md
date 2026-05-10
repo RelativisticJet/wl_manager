@@ -64,6 +64,57 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-08 (Ring 2 close — Day 7: cleanup + cascade root cause)
+
+### Tests — Ring 2 Day 7 close-out
+
+Resolved the 3 lingering integration test failures that pre-dated
+Ring 2 + 1 test-infrastructure bug surfaced by the cleanup pass.
+All findings are test-side (no production code changed):
+
+- **R2-D7-F1**: `test_log_actions_are_known` `KNOWN_ACTIONS` set
+  was missing `migrate_cooldowns`. The audit dashboard's
+  "Out-of-Band Recovery Actions" panel already explained this
+  action; the test's data drifted out of sync. Added the entry +
+  docstring linking to the dashboard panel.
+- **R2-D7-F2**: `test_submit_grows_the_queue_by_one` asserted
+  `len(after) == before_count + 1`, but `submit_approval` calls
+  `expire_pending_approvals` as a side effect and prunes stale
+  entries. Switched to request-id set diff
+  (`new_ids = after_ids - before_ids`) — catches silent loss of
+  the submitted request without flapping on cleanup-driven
+  shrinkage.
+- **R2-D7-F3**: `test_set_retention_updates_config_file` checked
+  the stale `lookups/_versions/_trash_config.json` path FIRST
+  and only fell back to the canonical `lookups/_trash_config.json`
+  if the `_versions/` path was missing. The handler writes only
+  to the canonical path. Removed the fallback; test now asserts
+  exactly the path the handler writes to.
+- **R2-D7-F4**: `container_state` (function-scoped) snapshots
+  whatever state exists at test start. If a prior session
+  crashed mid-run and left damaged state (e.g., missing
+  `rule_csv_map.csv`), every subsequent `container_state`
+  snapshot captured the damage and propagated it forward
+  through the entire suite. Symptoms: tests pass in isolation
+  but fail in full suite runs with errors like "CSV file not
+  found" or "no mappings in demo state". Added session-scoped
+  autouse fixture `_restore_canonical_demo_state` that copies
+  the version-controlled host `lookups/` directory into the
+  container at session start. Every session now begins from
+  the same baseline regardless of how the previous session
+  ended. Escape hatches: `WL_SKIP_STATE_RESTORE=1` env var or
+  `--no-state-restore` pytest flag.
+
+**Suite status**: 337/337 integration tests pass (was 5
+failures + 1 error at start of Day 7). 600/600 unit tests
+pass. No production code touched. Ring 2 closed.
+
+Ring 2 cumulative: 142 tests added across Days 1-6, plus 4
+test-bug fixes on Day 7. 2 production bugs found and fixed
+(R2-D1-F1, R2-D5-F1).
+
+---
+
 ## Unreleased — 2026-05-08 (build 647, Ring 2 Day 6: visual regression structural snapshot)
 
 ### Tests — Ring 2 Day 6 visual regression (5 tests)

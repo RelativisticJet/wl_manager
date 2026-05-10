@@ -229,15 +229,21 @@ class TestSetTrashRetention:
         assert body.get("success") is True, \
             f"set_trash_retention failed: {body}"
 
-        # Verify the side effect on disk
-        config_path = (
-            f"{APP_LOOKUPS}/_versions/_trash_config.json")
-        # The handler stores the file at OWN_LOOKUPS, which is
-        # `lookups/`, not `lookups/_versions/`. Check both.
-        if not _container_file_exists(config_path):
-            config_path = f"{APP_LOOKUPS}/_trash_config.json"
+        # Verify the side effect on disk. The handler writes to
+        # ``OWN_LOOKUPS + TRASH_CONFIG_FILE`` =
+        # ``lookups/_trash_config.json`` — that's the canonical
+        # location (and the only one the handler writes to).
+        # R2-D7-F3 fixed: a previous version of this test tried
+        # ``lookups/_versions/_trash_config.json`` first and fell
+        # back to the canonical path only if that didn't exist.
+        # On systems where a stale ``_versions/`` copy survived
+        # from earlier code paths, the test read the stale file
+        # and got the old retention value. Assert only against
+        # the path the handler actually writes.
+        config_path = f"{APP_LOOKUPS}/_trash_config.json"
         assert _container_file_exists(config_path), \
-            f"trash config file not written"
+            (f"trash config file not written at canonical "
+             f"path {config_path}")
         config_text = _read_container_file(config_path)
         config = json.loads(config_text)
         assert config["retention_days"] == 90, \
