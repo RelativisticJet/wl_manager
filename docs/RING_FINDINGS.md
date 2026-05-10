@@ -1484,7 +1484,7 @@ permanent no-op for any rule with a legacy-format manifest.
   `{"error": "expected list or dict"}` instead of silently
   producing a broken manifest
 
-Build 647.
+Shipped at build 647 (2026-05-08).
 
 **Pin tests** (two new unit tests in
 `tests/unit/test_versions.py::TestReadVersionManifest`):
@@ -2008,3 +2008,171 @@ Suggested Ring 3 scope (not committed):
   cold-start latency, concurrency under load, memory leak
   detection over many calls. Requires a dedicated
   benchmarking harness (not pytest assertions).
+
+---
+
+## Ring 3 (mutation testing + pixel regression + perf bench)
+
+Started 2026-05-08, build 647 → in progress.
+
+### Day 1 — Containerized CI integration tests
+
+Added `.github/workflows/integration-tests.yml`. Triggered on
+push to main + every PR. Spins up the project's
+`docker-compose.yml` Splunk 9.3.1 container, chowns
+`bin/`/`default/`/`lookups/`/`appserver/`/`metadata/` under
+the `splunk` user, runs `tests/e2e/setup_test_env.sh` to
+provision the role/user matrix, then runs
+`pytest tests/integration/`. On failure, three log sources
+(compose, splunkd, splunkd_access) are uploaded as a
+workflow artifact retained for 7 days.
+
+The destructive E2E suite under `tests/e2e/*.cjs` is NOT
+run in this workflow — those are gated behind
+`WL_TEST_HARNESS=1` and require explicit container-name
+verification. This workflow runs only the idempotent
+integration suite that uses the `container_state` snapshot/
+restore fixture + the Day 7 session-level canonical state
+restore.
+
+CONTRIBUTING.md "Continuous Integration" section now lists
+all 6 workflows (`ci.yml`, `integration-tests.yml`,
+`semgrep.yml`, `pip-audit.yml`, `validate-and-package.yml`,
+`release.yml`) with duration estimates so contributors can
+reason about CI feedback time before opening a PR.
+
+### Day 2 — Mutation testing (mutmut, Dockerized)
+
+#### Harness — `scripts/mutmut.sh`
+
+`mutmut` does not run on Windows (upstream issue #397).
+Created a Dockerized harness using `python:3.11-slim`
+(pytest 9.0.3 needs >=3.10) that mounts the repo into a
+persistent container `wl_manager_mutmut`, installs the same
+deps `ci.yml`'s unit-tests job uses, and reuses the cache
+across `run`/`results`/`show` invocations. Default target
+is `bin/wl_validation.py` (the security choke point most
+worth mutating). `MUTATE_PATH` and `TEST_RUNNER_FILES`
+env-var overrides allow targeting other modules.
+
+Per-module test scoping (`TEST_RUNNER_FILES` defaults to
+just the validation-relevant test files) instead of running
+the full `tests/unit/` tree as the baseline, because two
+filelock tests (`test_set_limit_config_valid`,
+`test_write_daily_limits_success`) need fcntl semantics
+the slim Linux container lacks. They pass on Windows host
+and in the actual Splunk container. Scoping also gives a
+~5x faster mutation cycle (~2-5s per mutant vs ~15-20s).
+
+#### R3-D2-F1 — Platform-dependent basename check (build 648)
+
+`is_safe_filename` in `bin/wl_validation.py` relied on
+`os.path.basename(name) != name` to reject path separators.
+Splunk runs on Linux in production, where
+`posixpath.basename("dir\\file.csv")` returns the input
+unchanged (backslash is a valid POSIX filename character).
+The check only caught backslash on Windows hosts. The
+existing test
+`test_basename_check_independently_rejects_path_separators`
+exposed this when the mutmut harness ran the same test
+under Linux: the assertion `not is_safe_filename("dir\\file.csv")`
+failed. Added explicit `if "/" in name or "\\" in name: return False`
+ahead of the basename call so the defense is identical on
+every platform. Build bumped to 648.
+
+#### R3-D2-F2 — Mutation coverage on `wl_validation.py`
+
+Initial run: 85/100 killed (15 survivors). Three were real
+coverage gaps:
+
+- **#7** — `_CONTROL_CHAR_RE.sub("", text)`: existing
+  `test_sanitize_text_removes_control_chars` only used
+  `'x' in result` containment, so substituting `'XXXX'`
+  for `''` survived.
+- **#9** — `_SANITIZE_RE.sub("", cleaned)`: same
+  containment-vs-equality issue.
+- **#88** — `os.path.join(APPS_DIR, safe_app, "lookups")`:
+  no test exercised the `app_context` branch of
+  `build_csv_path`, so the literal `"lookups"` could be
+  mutated to `"XXlookupsXX"` undetected.
+
+Added `TestMutationCoverageGaps` to
+`tests/unit/test_validation.py` pinning each:
+
+- `test_sanitize_text_replaces_control_chars_with_empty`
+- `test_sanitize_text_replaces_special_chars_with_empty`
+- `test_build_csv_path_with_app_context_uses_lookups_subdir`
+- `test_is_safe_filename_rejects_backslash_on_any_os`
+  (regression pin for R3-D2-F1)
+
+Re-run: 88/100 killed (12 survivors). The remaining 12 are
+analytically explainable as either equivalent mutations
+(arithmetic identity, `>` vs `>=` at exact-boundary inputs)
+or downstream-defense redundancy (control-char check
+mutated but the stem regex `[A-Za-z0-9_-]+\Z` still
+rejects the same characters). They are documented in the
+test class docstring rather than pinned, because pinning
+would either fail (equivalent mutations cannot be killed)
+or require relaxing downstream defenses.
+
+#### R3-D2-F3 — Mutation coverage on `wl_audit.py`
+
+53/90 killed (37 survivors, 59% kill rate). Most survivors
+are in the urllib HTTP POST path to `/services/receivers/simple`,
+which is integration-test territory. Added one targeted
+unit test for a real coverage gap:
+
+- `test_truncation_count_message_reports_exact_dropped_count` —
+  pins the arithmetic in the truncation marker. Existing
+  test only asserted the marker contained the word
+  `"truncated"`; the count itself could be flipped from
+  `len - MAX` to `len + MAX` (reporting 1024 dropped when
+  only 10 were) without any test failing.
+
+#### R3-D2-F4 — Mutation coverage on `wl_rbac.py`
+
+29/118 killed (89 survivors, 25% kill rate). Investigation
+showed all surviving mutants are in I/O-bound paths:
+`read_notification_users_fallback` (conf-file parser),
+`get_user`/`get_roles` (request-shape parsing), and
+`get_admin_users`/`get_superadmin_users` (Splunk REST
+calls). The pure role-predicate functions (`is_admin`,
+`is_editor`, `is_superadmin`, `can_approve`,
+`can_approve_own_requests` — lines 97-117) have ALL their
+mutants killed by the existing `TestRolePredicates` class.
+The 25% kill rate is a measurement artifact of mutmut
+treating every line equally; the security-critical decision
+logic has full unit-test coverage. The Splunk-bound
+functions are correctly exercised by the 337-test
+integration suite + the 62-test RBAC matrix from Ring 2 Day 4.
+
+#### Mutation testing — closing observation
+
+Mutation kill rate scales inversely with I/O density:
+
+| Module | Kill rate | I/O references | Comment |
+| --- | --- | --- | --- |
+| `wl_validation.py` | 88% | 0 (pure) | Achievable target for pure helpers |
+| `wl_audit.py` | 59% | 2 (urllib) | Most survivors in HTTP POST path |
+| `wl_rbac.py` | 25% | 3 (REST + conf) | Most survivors in Splunk REST path |
+
+This is the correct signal, not a defect. The unit-test
+suite covers what unit tests should cover — pure helper
+functions and decision logic. The integration suite
+(337/337 against live Splunk) covers the I/O paths. The
+test pyramid is well-stratified.
+
+The mutmut harness is checked in (`scripts/mutmut.sh`) and
+the workflow is:
+
+```bash
+scripts/mutmut.sh run [<module>]   # MUTATE_PATH override
+scripts/mutmut.sh results
+scripts/mutmut.sh show <id>
+scripts/mutmut.sh kill              # tear down container
+```
+
+Future use: when a security-critical pure-helper module is
+added, run mutmut on it and pin any real coverage gaps.
+Don't chase a high kill rate on I/O-bound modules — that
+is integration-test territory.

@@ -64,6 +64,115 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-08 (build 648, Ring 3 Day 2-3: mutation testing)
+
+### Fixed — R3-D2-F1: Platform-dependent path-separator check
+
+`is_safe_filename` in `bin/wl_validation.py` relied on
+`os.path.basename(name) != name` to reject path separators, but
+`posixpath.basename` does NOT treat backslash as a separator.
+Splunk runs on Linux in production, so backslash slipped past the
+basename check on the host that actually matters. The defense was
+two-layered (basename + downstream stem regex `[A-Za-z0-9_-]+`),
+so production was never exploitable, but the basename layer was
+silently broken on Linux. Surfaced when the mutmut harness ran
+the existing `test_basename_check_independently_rejects_path_separators`
+test under Linux (Windows-only test passing previously).
+
+Added explicit `if "/" in name or "\\" in name: return False`
+ahead of the basename call. Pinned by
+`test_is_safe_filename_rejects_backslash_on_any_os`. Build bumped
+to 648.
+
+### Tests — Ring 3 Day 2-3 mutation testing (5 tests)
+
+Added `scripts/mutmut.sh` — Dockerized mutmut runner (mutmut has
+no Windows support, upstream issue #397). Uses `python:3.11-slim`
+with a persistent container `wl_manager_mutmut` for cache reuse.
+Per-module test scoping via `TEST_RUNNER_FILES` env var skips two
+filelock tests that need fcntl semantics the slim container
+lacks.
+
+**`bin/wl_validation.py`**: 88/100 killed (88%, up from 85% on
+first run). Added 4 unit tests in `TestMutationCoverageGaps`:
+
+- `test_sanitize_text_replaces_control_chars_with_empty`
+  (kills mutmut #7)
+- `test_sanitize_text_replaces_special_chars_with_empty`
+  (kills mutmut #9)
+- `test_build_csv_path_with_app_context_uses_lookups_subdir`
+  (kills mutmut #88)
+- `test_is_safe_filename_rejects_backslash_on_any_os`
+  (regression pin for R3-D2-F1)
+
+The 12 remaining survivors are equivalent mutations
+(arithmetic identity, `>` vs `>=` at exact-boundary inputs) or
+downstream-defense redundancy (control-char check mutations
+caught by the stem regex). Documented in the test class
+docstring.
+
+**`bin/wl_audit.py`**: 53/90 killed (59%). Most survivors are in
+the urllib HTTP POST path — integration-test territory. Added 1
+unit test:
+
+- `test_truncation_count_message_reports_exact_dropped_count`
+  pins the truncation arithmetic. Existing test only asserted
+  the marker contained the word `"truncated"`; the count itself
+  could be flipped from `len - MAX` to `len + MAX` (reporting
+  1024 dropped when only 10 were) without any test failing.
+
+**`bin/wl_rbac.py`**: 29/118 killed (25%). All surviving mutants
+are in I/O-bound paths (`read_notification_users_fallback`,
+`get_user`, `get_roles`, `get_admin_users`,
+`get_superadmin_users`). Pure role-predicate functions
+(`is_admin`, `is_editor`, `is_superadmin`, `can_approve`,
+`can_approve_own_requests`) had ALL their mutants killed by the
+existing `TestRolePredicates`. The 25% kill rate is a measurement
+artifact — security-critical decision logic has full unit-test
+coverage; Splunk-bound functions are exercised by the 337-test
+integration suite + Ring 2 Day 4's 62-test RBAC matrix.
+
+Mutation kill rate scales inversely with I/O density. The
+test pyramid is well-stratified (unit → pure logic; integration
+→ I/O paths). Don't chase a high mutmut kill rate on I/O-heavy
+modules.
+
+See `docs/RING_FINDINGS.md` "Ring 3 Day 2 — Mutation testing"
+for the full per-module survivor analysis.
+
+---
+
+## Unreleased — 2026-05-08 (Ring 3 Day 1: containerized CI integration tests)
+
+### CI — Containerized integration suite on every PR
+
+Added `.github/workflows/integration-tests.yml`. Spins up
+`splunk/splunk:9.3.1` via `docker compose up -d`, chowns
+bind-mounted directories under the `splunk` user (Linux runner
+preserves host UID/GID, container needs writable lookups for the
+session-level state restore fixture), runs
+`tests/e2e/setup_test_env.sh` to provision the role/user matrix,
+then runs `pytest tests/integration/`. On failure, three log
+sources (compose, splunkd, splunkd_access) are uploaded as a
+workflow artifact retained for 7 days.
+
+The destructive E2E suite under `tests/e2e/*.cjs` is NOT run in
+this workflow — those are gated behind `WL_TEST_HARNESS=1` and
+require explicit container-name verification. This workflow runs
+only the idempotent integration suite under `tests/integration/`.
+
+`CONTRIBUTING.md` "Continuous Integration" section now lists all
+6 workflows (`ci.yml`, `integration-tests.yml`, `semgrep.yml`,
+`pip-audit.yml`, `validate-and-package.yml`, `release.yml`) with
+duration estimates so contributors can reason about CI feedback
+time before opening a PR.
+
+Closes the Ring 1 retrospective deferral
+("containerized Splunk in CI requires significant new
+engineering"). Now closed.
+
+---
+
 ## Unreleased — 2026-05-08 (Ring 2 close — Day 7: cleanup + cascade root cause)
 
 ### Tests — Ring 2 Day 7 close-out

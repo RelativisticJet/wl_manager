@@ -356,3 +356,56 @@ class TestPostAuditEvent:
         assert event["reverted_from_version"] == "2026-03-31 12:00:00"
         assert event["reverted_to_version"] == "2026-03-31 11:00:00"
         assert event["new_record_version"] == "2026-03-31 13:00:00"
+
+
+@pytest.mark.unit
+class TestAuditMutationCoverageGaps:
+    """Pin specific behaviors mutmut (Ring 3 Day 2) found could be
+    silently mutated. See docs/RING_FINDINGS.md "R3-D2-F3 Mutation
+    coverage (wl_audit.py)" for the full survivor analysis.
+    """
+
+    @patch('wl_audit.urllib.request.urlopen')
+    def test_truncation_count_message_reports_exact_dropped_count(
+        self, mock_urlopen
+    ):
+        """Kill mutmut #36: ``len(event['value']) - MAX`` mutated to
+        ``+ MAX``.
+
+        Existing ``test_post_audit_event_truncates_large_value_list``
+        only asserts that the truncation marker contains the word
+        ``'truncated'``. It does not pin the COUNT in the message,
+        so flipping the arithmetic from subtract to add survives:
+        the message still contains 'truncated', just with a wildly
+        wrong count (e.g. 150 instead of 10).
+        """
+        from wl_audit import build_audit_event, post_audit_event
+        from wl_constants import MAX_AUDIT_VALUE_LINES
+
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_urlopen.return_value = mock_response
+
+        # Send exactly MAX+10 items so the dropped count is
+        # deterministically 10, regardless of MAX_AUDIT_VALUE_LINES'
+        # value.
+        excess = 10
+        large_list = [f"row_{i}" for i in range(MAX_AUDIT_VALUE_LINES + excess)]
+        event = build_audit_event(
+            action="removed",
+            analyst="jsmith",
+            detection_rule="Rule 1",
+            csv_file="file.csv",
+            value=large_list,
+        )
+
+        success, _ = post_audit_event("test-session-key", event)
+        assert success is True
+
+        # Last entry must literally contain "truncated 10 more"
+        # (not "truncated 1024 more" from len + MAX arithmetic).
+        marker = str(event["value"][-1])
+        assert "truncated {} more".format(excess) in marker, (
+            "expected the truncation marker to report the exact "
+            "number of dropped entries, got: {!r}".format(marker)
+        )

@@ -384,3 +384,96 @@ class TestResolveCsvPath:
         except OSError:
             # Symlink creation might fail on some systems
             pytest.skip("Unable to create symlinks on this system")
+
+
+@pytest.mark.unit
+class TestMutationCoverageGaps:
+    """Pin specific behaviors that mutmut (Ring 3 Day 2, build 648)
+    found could be silently mutated without any existing test
+    failing. Each test below kills a specific surviving mutant.
+
+    See docs/RING_FINDINGS.md "R3-D2-F2 Mutation coverage" for the
+    full survivor analysis. Other survivors are equivalent
+    mutations (caught by downstream defenses) and intentionally
+    not pinned here.
+    """
+
+    def test_sanitize_text_replaces_control_chars_with_empty(self):
+        """Kill mutmut #7: ``_CONTROL_CHAR_RE.sub('', text)``.
+
+        Existing ``test_sanitize_text_removes_control_chars`` only
+        asserts ``'\\x00' not in result`` and ``'hello' in result``,
+        which still passes if the replacement string is mutated to
+        ``'XXXX'`` (the substring assertions remain true). Pin the
+        exact result so any non-empty replacement is caught.
+        """
+        from wl_validation import sanitize_text
+
+        # Adjacent control chars must collapse to nothing, not
+        # leave artifacts. Use input with no whitespace so the
+        # whitespace-collapse step doesn't mask the issue.
+        assert sanitize_text("hello\x00world") == "helloworld"
+        assert sanitize_text("a\x01b\x02c\x03d") == "abcd"
+
+    def test_sanitize_text_replaces_special_chars_with_empty(self):
+        """Kill mutmut #9: ``_SANITIZE_RE.sub('', cleaned)``.
+
+        ``_SANITIZE_RE`` strips characters NOT in the allowlist
+        ``[a-zA-Z0-9_ \\t.,;:!?'\"()\\-/@#&+=[]{}%$\\n\\r]``. Without
+        an exact-equality assertion, mutating the replacement to
+        ``'XXXX'`` survives.
+        """
+        from wl_validation import sanitize_text
+
+        # Tilde, caret, asterisk, pipe are not in the allowlist —
+        # they must be stripped to nothing.
+        assert sanitize_text("hello~world") == "helloworld"
+        assert sanitize_text("a^b*c|d") == "abcd"
+
+    def test_build_csv_path_with_app_context_uses_lookups_subdir(
+        self, tmp_path, monkeypatch
+    ):
+        """Kill mutmut #88: ``os.path.join(APPS_DIR, safe_app, 'lookups')``
+        with the literal 'lookups' mutated.
+
+        No existing test exercised the ``app_context`` branch of
+        ``build_csv_path``, so the literal directory name could be
+        replaced and still pass. Pin that the path goes through a
+        directory literally named 'lookups'.
+        """
+        import wl_validation
+        from wl_validation import build_csv_path
+
+        # Stand up a fake APPS_DIR layout under tmp_path. The
+        # function only joins paths and normalizes — it doesn't
+        # check existence — so the directory doesn't need to be
+        # populated.
+        fake_apps = tmp_path / "apps"
+        fake_apps.mkdir()
+        monkeypatch.setattr(wl_validation, "APPS_DIR", str(fake_apps))
+
+        result = build_csv_path("rule.csv", app_context="other_app")
+        assert result is not None
+        # The path MUST contain a 'lookups' directory between the
+        # app context and the csv filename — that is the contract
+        # the mutation breaks.
+        norm = result.replace("\\", "/")
+        assert "/other_app/lookups/rule.csv" in norm
+
+    def test_is_safe_filename_rejects_backslash_on_any_os(self):
+        """Pin the platform-independent backslash rejection added
+        in build 648 (R3-D2-F1).
+
+        ``os.path.basename`` is platform-aware: posixpath does NOT
+        treat backslash as a separator. Splunk runs on Linux, so
+        the explicit ``'\\\\' in name`` check is the only thing
+        rejecting backslash on the production host. This test
+        pins that defense.
+        """
+        from wl_validation import is_safe_filename
+
+        # On Linux, os.path.basename("dir\\file.csv") == "dir\\file.csv"
+        # (no separator interpretation). The explicit check must
+        # still reject it.
+        assert not is_safe_filename("dir\\file.csv")
+        assert not is_safe_filename("a\\b\\c.csv")

@@ -128,3 +128,8 @@ backups/
 # actual contract) live under tests/e2e/visual_baselines/ and ARE
 # committed.
 tests/e2e/visual_artifacts/
+
+# Mutation-testing cache (Ring 3 Day 2). Local-only; the harness
+# (`scripts/mutmut.sh`) recreates it on each `run` invocation
+# inside the wl_manager_mutmut container.
+.mutmut-cache

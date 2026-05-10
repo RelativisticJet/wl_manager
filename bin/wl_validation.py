@@ -182,7 +182,14 @@ def is_safe_filename(name: str, allowed_extensions: Tuple[str, ...] = (".csv",))
     if not name or not isinstance(name, str):
         return False
 
-    # Reject if contains path separators
+    # Reject any path separator independently of host OS. os.path.basename
+    # is platform-aware: posixpath only treats "/" as a separator and
+    # passes "dir\\file.csv" through unchanged, while ntpath treats both.
+    # Splunk runs on Linux in production, so relying on os.path.basename
+    # alone leaves a backslash gap on the production host. Reject both
+    # explicitly so the defense is the same on every platform.
+    if "/" in name or "\\" in name:
+        return False
     if os.path.basename(name) != name:
         return False
 
