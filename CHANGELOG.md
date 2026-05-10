@@ -64,6 +64,61 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-10 (Ring 3 close — Day 6: retrospective)
+
+### Tests — Ring 3 sign-off
+
+Ring 3 closed at build 648. Cumulative deliverables across
+Days 1-5:
+
+- **Day 1**: Containerized CI integration suite
+  (`.github/workflows/integration-tests.yml`). Closes the
+  Ring 1 deferral.
+- **Day 2-3**: Dockerized mutmut harness
+  (`scripts/mutmut.sh`) + 5 targeted unit tests pinning
+  surviving mutants. Surfaced 1 production bug (R3-D2-F1,
+  build 648) — platform-dependent path-separator check in
+  `is_safe_filename`. Mutation kill rates documented per
+  module: `wl_validation.py` 88%, `wl_audit.py` 59%,
+  `wl_rbac.py` 25% — the gradient correlates with I/O
+  density and validates test-pyramid stratification.
+- **Day 4**: Pixel-diff visual regression layer
+  (`tests/e2e/lib_pixel_diff.cjs`) on top of Ring 2 Day 6's
+  structural snapshot. 5 PNG baselines committed. Fixed
+  R3-D4-F1: `control_panel` structural snapshot was
+  data-coupled (counted in-table buttons that grow with
+  approval traffic).
+- **Day 5**: Performance benchmark harness
+  (`scripts/bench.py`) with cold-start / concurrency /
+  memory subcommands. JSON output to `bench_results/`
+  (gitignored) for trend tracking.
+
+Test-suite totals at Ring 3 close:
+
+- 605/605 unit tests pass on Windows host (1 symlink test
+  skipped — Windows has no usable `os.symlink`)
+- 83/83 critical-integration tests verified at close-out
+  (62 RBAC matrix + 21 perf smoke)
+
+Three core deliverables (mutmut, pixel-diff, perf bench)
+are checked in but NOT gated by CI — they're
+investigatory tooling, not regression detectors. Mutation
+testing is too slow to gate PRs, pixel-diff is too
+platform-flaky to gate CI, perf benchmarks need percentile
+reasoning that pytest's pass/fail model can't express.
+
+Suggested Ring 4 scope (not committed): concurrency stress
+at 10× worker count, weekly `bench.py memory` baseline
+trending, mutation testing in CI, cross-platform pixel
+baselines, hypothesis fuzzing of `wl_csv.py` round-trip.
+
+See `docs/RING_FINDINGS.md` "Ring 3 retrospective" for the
+full sign-off, including lessons learned (mutation testing
+as platform-bug surface area, test-data coupling as a
+category, pre-commit hook regex sensitivity).
+
+---
+
 ## Unreleased — 2026-05-10 (Ring 3 Day 5: performance benchmark harness)
 
 ### Tests — Dedicated benchmark harness, three subcommands
