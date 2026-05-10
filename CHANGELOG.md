@@ -64,6 +64,72 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-10 (Ring 3 Day 4: pixel-level visual regression)
+
+### Tests — Pixel-diff layer on visual regression suite
+
+Added `pixelmatch` (^7.2.0) + `pngjs` (^7.0.0) as
+devDependencies — tiny single-purpose deps with no
+transitives. Implementation in
+`tests/e2e/lib_pixel_diff.cjs`; wired into
+`tests/e2e/test_visual_regression.cjs` as a post-structural
+check.
+
+Off by default — structural snapshot remains the always-on
+contract. Activated by `WL_VISUAL_PIXEL=1`. Default mode is
+advisory (logs `% diff`, saves diff PNG to
+`visual_artifacts/`, does NOT fail under 5% pixel delta).
+Strict mode (`WL_VISUAL_PIXEL_STRICT=1`) escalates the
+soft-threshold breach to a test failure. The hard 20%
+threshold ALWAYS fails regardless of strict mode.
+Update mode (`WL_VISUAL_UPDATE=1 WL_VISUAL_PIXEL=1`)
+overwrites both JSON structural baselines and PNG pixel
+baselines in lock-step.
+
+5 PNG baselines committed under
+`tests/e2e/visual_baselines_pixel/` (~830 KB total). CI
+does NOT run pixel diff (would be perpetually flaky across
+font rendering / OS hinting / DPI). The structural
+snapshot remains the CI-gated contract; pixel diff is a
+local pre-commit tool for UI-change PRs.
+
+### Tests — R3-D4-F1: control_panel structural snapshot data-coupled
+
+Surfaced during the Day 4 sanity run. Ring 2 Day 6 baseline
+expected 9 buttons; current run found 16. Root cause: the
+control_panel renders Approval Queue and Recent History
+tables with per-row action buttons (Approve / Reject /
+Show Data / Download CSV). The structural snapshot's
+`buttons` selector counted EVERY visible button on the
+page, making the count data-coupled — as approval traffic
+accumulates in the test environment, the per-row count
+grows.
+
+Fixed by tightening the `buttons` and `inputs` selectors to
+exclude descendants of `<table>` (data-driven row content),
+and capping the `tables` count at 2 (presence-bucket:
+0/1/many). All 5 visual baselines regenerated under
+`WL_VISUAL_UPDATE=1` with the new selectors:
+
+- `audit_desktop`: `tables` 5 → 2 (capped),
+  `scroll_height_bucket` 5500 → 5450 (bucket noise)
+- `control_panel_desktop`: `buttons` 9 → 8 (excluded
+  one in-table button silently included before),
+  `tables` 0 → 2 (now reflects queue + history tables)
+
+Sister tests (whitelist_manager × 3 viewports) unchanged.
+
+This is the kind of test-fragility regression visual
+regression introspection is supposed to surface — the test
+was structurally passing in production but
+state-dependently fragile. Now resolved.
+
+See `docs/RING_FINDINGS.md` "Ring 3 Day 4 — Pixel-level
+visual regression" for the full design notes (modes,
+thresholds, why-not-@playwright/test).
+
+---
+
 ## Unreleased — 2026-05-08 (build 648, Ring 3 Day 2-3: mutation testing)
 
 ### Fixed — R3-D2-F1: Platform-dependent path-separator check

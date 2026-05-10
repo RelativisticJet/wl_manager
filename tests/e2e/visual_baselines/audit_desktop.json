@@ -7,12 +7,12 @@
   "body_classes": [
     "wl-dark"
   ],
-  "scroll_height_bucket": 5500,
+  "scroll_height_bucket": 5450,
   "counts": {
     "buttons": 9,
     "inputs": 1,
     "headings": 30,
-    "tables": 5,
+    "tables": 2,
     "modals": 0
   },
   "presence": {

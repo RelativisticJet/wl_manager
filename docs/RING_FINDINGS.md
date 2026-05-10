@@ -2176,3 +2176,98 @@ Future use: when a security-critical pure-helper module is
 added, run mutmut on it and pin any real coverage gaps.
 Don't chase a high kill rate on I/O-bound modules — that
 is integration-test territory.
+
+### Day 4 — Pixel-level visual regression
+
+Layered pixel-diff on top of the structural snapshot from Ring
+2 Day 6. Added `pixelmatch` + `pngjs` as devDependencies (~100
+lines + 0 transitives — much smaller than `@playwright/test`).
+Implementation in `tests/e2e/lib_pixel_diff.cjs`; wired into
+the existing structural test as a post-structure check that
+runs only when `WL_VISUAL_PIXEL=1`.
+
+#### Modes
+
+- **Default off** — structural snapshot is the always-on
+  contract. Pixel layer is a no-op without env var.
+- **Advisory** (`WL_VISUAL_PIXEL=1`) — captures pixel diff,
+  saves diff PNG to `visual_artifacts/`, logs `% diff` to
+  console, does NOT fail the test under 5%.
+- **Strict** (`WL_VISUAL_PIXEL_STRICT=1`) — turns the 5% soft
+  threshold into a hard failure.
+- **Hard 20% threshold** — always fails regardless of strict
+  mode. At 20% pixel diff the screen is fundamentally
+  different and the structural test should also have flagged
+  it (a >20% pixel diff with green structural test indicates
+  a structural-test coverage gap).
+- **Update** (`WL_VISUAL_UPDATE=1 WL_VISUAL_PIXEL=1`) —
+  rewrites both JSON structural baseline AND PNG pixel
+  baseline in lock-step, so the two layers can't drift apart
+  when an intentional UI change ships.
+
+#### Why not @playwright/test
+
+The existing test framework in `lib_helpers.cjs` is light
+and well-tuned. Switching to `@playwright/test` would
+require rewriting every `.cjs` test file under `tests/e2e/`
+into the `@playwright/test` format. `pixelmatch` + `pngjs`
+are tiny single-purpose deps (no transitives) — much smaller
+delta. They're also pure ESM (v7), bridged into our CJS test
+files via dynamic `import()`.
+
+#### Baselines committed
+
+5 PNG baselines under `tests/e2e/visual_baselines_pixel/`,
+~37-600KB each (~830KB total). Diff PNGs land in
+`visual_artifacts/` (gitignored) when there's any pixel
+delta — human inspection of a diff overlay is faster than
+parsing a percentage.
+
+#### Why CI does NOT run pixel diff
+
+Pixel rendering varies across:
+
+- Headless vs headed Chrome (font rasterization differs)
+- OS font hinting (Windows ClearType vs Linux fontconfig vs
+  macOS subpixel antialiasing)
+- Display DPI
+
+Pinning baselines to one of those configurations would force
+the others into perpetual flakiness. Pixel diff is therefore
+local-only — developers run it before/after a UI change to
+verify intent, then commit the regenerated baseline. The
+structural snapshot remains the CI-gated contract.
+
+#### R3-D4-F1 — `control_panel` structural snapshot data-coupled
+
+Surfaced when running the test against the current Splunk
+container state. The Ring 2 Day 6 baseline expected 9
+buttons; current run found 16. Investigation: the
+control_panel renders Approval Queue and Recent History
+tables with per-row action buttons (Approve / Reject /
+Show Data / Download CSV). As approval traffic accumulates
+in the test environment, the per-row button count grows.
+Tables count similarly drifted from 0 (no queue/history
+items at baseline-capture time) to 2.
+
+The structural snapshot's `buttons` selector counted EVERY
+visible button on the page, making the count data-coupled.
+Fixed by tightening both `buttons` and `inputs` selectors
+to exclude descendants of `<table>` (data-driven row
+content), and capping the `tables` count at 2 (presence-
+bucket: 0/1/many).
+
+Side effect: the control_panel baseline's `buttons` count
+changed 9 → 8. The "9" had silently included one in-table
+button at the time of baseline capture; the new "8" is the
+true structural button count (5 tabs + 3 Splunk-native
+header buttons: Edit, Export, More).
+
+The audit_desktop baseline also updated: `tables` was 5
+(capped to 2 by the new bucket logic), `scroll_height_bucket`
+shifted 5500 → 5450 (within bucket noise).
+
+This is exactly the kind of regression mutmut/visual-test
+introspection is supposed to surface — the test was
+*structurally passing in production* but *fundamentally
+fragile across data states*. Now resolved.

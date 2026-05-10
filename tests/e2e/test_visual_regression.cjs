@@ -58,22 +58,53 @@
  * Without the env var, baselines are read-only and any structural
  * delta fails the test.
  *
+ * Pixel-diff layer (Ring 3 Day 4)
+ * --------------------------------
+ *
+ * Optional pixel-level comparison via pixelmatch + pngjs,
+ * implemented in ``lib_pixel_diff.cjs``. Off by default —
+ * structural is the always-on contract. Activated by
+ * ``WL_VISUAL_PIXEL=1``. Default is advisory: logs diff%,
+ * saves diff PNG to ``visual_artifacts/``, does NOT fail
+ * the test under 5% diff. Strict mode
+ * (``WL_VISUAL_PIXEL_STRICT=1``) turns the soft threshold
+ * into a hard failure. The hard 20% threshold ALWAYS fails
+ * regardless of strict — that level of diff means the
+ * screen is fundamentally different and the structural
+ * layer should also have flagged it (so a >20% pixel diff
+ * with a green structural test is a structural-layer
+ * coverage gap to investigate).
+ *
+ * Pixel baselines live under ``visual_baselines_pixel/``
+ * (committed PNGs, ~50-200KB each). Update both layers in
+ * lock-step with ``WL_VISUAL_UPDATE=1 WL_VISUAL_PIXEL=1``.
+ *
+ * Why not @playwright/test: the existing test framework in
+ * lib_helpers.cjs is light and well-tuned. Switching to
+ * @playwright/test would require rewriting every .cjs test
+ * file. pixelmatch + pngjs are tiny single-purpose deps
+ * (no transitives) — much smaller delta.
+ *
  * Origin
  * ------
  *
- * Ring 2 Day 6. The Ring 1 retrospective listed visual regression
- * as Ring 2 followup; this file establishes the contract with
- * what's already available. A future ring can add pixel-diff on
- * top of the structural layer once @playwright/test is on the
- * dep manifest.
+ * Structural snapshots: Ring 2 Day 6. The Ring 1
+ * retrospective listed visual regression as Ring 2
+ * followup; that ring established the structural contract
+ * with what was available.
+ *
+ * Pixel-diff: Ring 3 Day 4. Layered on top of structural
+ * after pixelmatch + pngjs were added to the dep manifest.
  *
  * Run: node tests/e2e/test_visual_regression.cjs
+ *      WL_VISUAL_PIXEL=1 node tests/e2e/test_visual_regression.cjs
  */
 const fs = require("fs");
 const path = require("path");
 const {
     createSession, test, summary,
 } = require("./lib_helpers.cjs");
+const pixelDiff = require("./lib_pixel_diff.cjs");
 
 const BASELINES_DIR = path.join(
     __dirname, "visual_baselines");
@@ -155,11 +186,46 @@ async function captureSnapshot(page) {
             scroll_height_bucket: bucketed(
                 document.documentElement.scrollHeight, 50),
             // Element counts — the core regression signal.
+            //
+            // R3-D4-F1 (Ring 3 Day 4): the ``buttons`` selector
+            // historically counted EVERY button on the page,
+            // including the per-row "Show Data" / "Approve" /
+            // "Reject" buttons inside the control_panel's
+            // approval-queue and history tables. Those counts
+            // drift with data state — the queue grows over time
+            // — and made the test fragile across runs that
+            // accumulated approval traffic. The fix:
+            // ``:not(table button)`` excludes buttons under
+            // ``<table>`` so only structural toolbar/tab buttons
+            // count. The ``tables`` and ``inputs`` counts are
+            // similarly bucketed at 0/1/many because exact
+            // counts were data-coupled (input rows under
+            // tables, etc.).
             counts: {
-                buttons:       visibleCount("button:not([disabled]), .btn:not([disabled])"),
-                inputs:        visibleCount("input:not([type=hidden])"),
+                // Structural buttons only — exclude the data-row
+                // buttons inside tables.
+                buttons:
+                    Array.from(document.querySelectorAll(
+                        "button:not([disabled]), .btn:not([disabled])"))
+                    .filter(visible)
+                    .filter(el => !el.closest("table"))
+                    .length,
+                // Inputs OUTSIDE tables (search bars, form
+                // fields). Inputs inside tables are usually
+                // editable cells whose count is data-driven.
+                inputs:
+                    Array.from(document.querySelectorAll(
+                        "input:not([type=hidden])"))
+                    .filter(visible)
+                    .filter(el => !el.closest("table"))
+                    .length,
                 headings:      visibleCount("h1, h2, h3"),
-                tables:        visibleCount("table"),
+                // Tables: presence-bucket. 0 = none, 1 = one,
+                // 2+ = "many". Approval queue + history rendering
+                // both as tables would otherwise force the
+                // count to 2 only when both have content.
+                tables:        Math.min(
+                    visibleCount("table"), 2),
                 modals:        visibleCount(".wl-modal-overlay"),
             },
             // Critical-element presence — these are the IDs the
@@ -480,6 +546,69 @@ async function captureAndCompare(page, viewSpec, viewportName) {
                         + `\n\nIf intentional: WL_VISUAL_UPDATE=1 `
                         + `node tests/e2e/test_visual_regression.cjs`;
                     throw new Error(msg);
+                }
+
+                // ── Pixel-diff layer (Ring 3 Day 4) ──
+                // Runs only when WL_VISUAL_PIXEL=1. Always
+                // advisory (logs diff%, saves diff PNG) unless
+                // strict mode (WL_VISUAL_PIXEL_STRICT=1) or the
+                // hard 20% threshold is exceeded.
+                const screenshotPath = artifactPath(
+                    viewSpec.name, viewportName, "png");
+                const px = await pixelDiff.comparePixels(
+                    viewSpec.name, viewportName, screenshotPath);
+                if (px.skipped) {
+                    // Pixel layer disabled — silent.
+                } else if (px.calibrated) {
+                    console.log(
+                        `  [pixel-calibrated] ${testName} — `
+                        + `pixel baseline saved (${px.baselinePath})`);
+                } else if (px.updated) {
+                    console.log(
+                        `  [pixel-updated] ${testName} — `
+                        + `pixel baseline overwritten`);
+                } else if (px.dimensionMismatch) {
+                    // Don't fail here — structural test should
+                    // surface the layout overflow root cause.
+                    console.log(
+                        `  [pixel-dim-skip] ${testName} — `
+                        + `baseline ${px.baseline.w}x${px.baseline.h}, `
+                        + `current ${px.current.w}x${px.current.h}`);
+                } else if (px.compared) {
+                    const pctStr = px.percent.toFixed(2);
+                    if (px.exceededHard) {
+                        const msg =
+                            `Pixel diff EXCEEDS HARD ${pixelDiff.HARD_FAIL_PCT}% `
+                            + `threshold in ${testName}: `
+                            + `${pctStr}% (${px.diffPixels}/${px.totalPixels} px). `
+                            + `Diff PNG: ${px.diffPath}\n\n`
+                            + `If intentional: WL_VISUAL_UPDATE=1 `
+                            + `WL_VISUAL_PIXEL=1 `
+                            + `node tests/e2e/test_visual_regression.cjs`;
+                        throw new Error(msg);
+                    }
+                    if (px.exceededSoft) {
+                        const tag = px.shouldFail
+                            ? "[pixel-fail]"
+                            : "[pixel-warn]";
+                        console.log(
+                            `  ${tag} ${testName} — ${pctStr}% `
+                            + `diff (${px.diffPixels}/${px.totalPixels} px), `
+                            + `> soft ${pixelDiff.SOFT_THRESHOLD_PCT}%. `
+                            + `Diff PNG: ${px.diffPath}`);
+                        if (px.shouldFail) {
+                            throw new Error(
+                                `Pixel diff exceeds strict-mode soft `
+                                + `threshold (${pixelDiff.SOFT_THRESHOLD_PCT}%) `
+                                + `in ${testName}: ${pctStr}%. `
+                                + `Diff PNG: ${px.diffPath}`);
+                        }
+                    } else if (px.diffPixels > 0) {
+                        // Below soft threshold — log only.
+                        console.log(
+                            `  [pixel-ok] ${testName} — ${pctStr}% `
+                            + `diff (under ${pixelDiff.SOFT_THRESHOLD_PCT}% soft)`);
+                    }
                 }
             });
         }

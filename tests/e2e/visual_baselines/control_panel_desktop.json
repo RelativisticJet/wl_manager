@@ -9,10 +9,10 @@
   ],
   "scroll_height_bucket": 900,
   "counts": {
-    "buttons": 9,
+    "buttons": 8,
     "inputs": 1,
     "headings": 3,
-    "tables": 0,
+    "tables": 2,
     "modals": 0
   },
   "presence": {
