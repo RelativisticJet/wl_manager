@@ -133,3 +133,10 @@ tests/e2e/visual_artifacts/
 # (`scripts/mutmut.sh`) recreates it on each `run` invocation
 # inside the wl_manager_mutmut container.
 .mutmut-cache
+
+# Performance benchmark output (Ring 3 Day 5). The harness
+# (`scripts/bench.py`) writes timestamped JSON files for each
+# run under bench_results/. Local-only by default; users who
+# want to commit a reference baseline override the ignore for
+# specific files (e.g. `bench_results/!cold_start_baseline.json`).
+bench_results/*.json

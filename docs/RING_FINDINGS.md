@@ -2271,3 +2271,64 @@ This is exactly the kind of regression mutmut/visual-test
 introspection is supposed to surface — the test was
 *structurally passing in production* but *fundamentally
 fragile across data states*. Now resolved.
+
+### Day 5 — Performance benchmark harness
+
+Added `scripts/bench.py` — three-subcommand benchmark harness
+that goes deeper than the Ring 2 Day 5 perf smoke. The smoke
+catches order-of-magnitude regressions (loose 1.5/2.5/8s
+budgets, single-call assertions); this harness handles the
+cases the smoke explicitly doesn't:
+
+- **`cold-start`** — restarts Splunk, polls
+  `/services/server/info` until 200, fires N sequential read
+  requests against `get_mapping`. Captures the cold-cache
+  effects the smoke median-of-3-eliminates. Reports
+  first-call ms, p50, p95, max, and a `first_vs_third_ms_delta`
+  warmth-recovery metric.
+- **`concurrency`** — spawns W worker threads (default 6,
+  matching the test-user roster) issuing R sequential requests
+  each. Each worker uses a different role-specific user
+  (`superadmin1`, `superadmin2`, `wladmin1`, `wladmin2`,
+  `analyst1`, `analyst2`) so the per-user 120-reads/60s rate
+  limit doesn't saturate. Reports throughput, p50/p95/p99,
+  per-worker breakdown, and error count.
+- **`memory`** — fires K sequential reads, samples container
+  RSS via `docker stats --no-stream` every S calls, reports
+  baseline / final / max RSS plus a crude linear slope
+  (MiB-per-call). Detects monotonic leaks while tolerating
+  transient GC peaks.
+
+Output goes to console + JSON under `bench_results/`
+(gitignored except `.gitkeep` to preserve the directory).
+Each run gets a timestamped filename so trend tracking is
+just `jq '.summary.p95_ms' bench_results/*.json`.
+
+Why a separate script, not pytest:
+
+- Each subcommand takes 1-10 minutes
+- Pytest is pass/fail; benchmarks are continuous values that
+  need percentile reasoning
+- CI gating would force conservative thresholds that hide
+  real signal under noise
+
+Smoke-tested on the live container. Concurrency 6×10 = 60
+calls completed in 1.5s at 39.72 req/s with zero errors,
+p50=128 ms / p95=384 ms. Memory test at 50 calls / sample-every
+10 showed baseline 1861 MiB, transient peak 1917 MiB at
+call 40, return to 1861 MiB by call 50, slope 0.0000 MiB/call —
+clean GC behavior, no leak signal.
+
+Use cases:
+
+- Before/after a hot-path refactor ("did the wl_csv.py
+  extraction change dispatch cost?")
+- Quarterly trend baseline (compare this quarter's p95 to
+  last quarter's; commit reference baselines under
+  `bench_results/!ref_*.json` if needed)
+- Investigation when `tests/integration/test_performance_smoke.py`
+  fails (the smoke flags it; this harness localizes whether
+  it's cold-cache, concurrency, or memory)
+
+Not run on every developer's machine on every change. Not
+gated by CI. Manual / scheduled / investigatory only.

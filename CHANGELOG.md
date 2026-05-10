@@ -64,6 +64,58 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-10 (Ring 3 Day 5: performance benchmark harness)
+
+### Tests — Dedicated benchmark harness, three subcommands
+
+Added `scripts/bench.py` — a benchmark harness that goes
+deeper than the Ring 2 Day 5 perf smoke. The smoke catches
+order-of-magnitude regressions via loose 1.5/2.5/8s budgets;
+this harness handles the cases the smoke explicitly doesn't:
+cold-start latency, concurrency under load, memory leaks
+across many calls.
+
+Three subcommands, all writing timestamped JSON to
+`bench_results/` (gitignored except `.gitkeep`):
+
+- `cold-start` — restart Splunk, poll
+  `/services/server/info` until 200, fire N sequential
+  reads. Reports first-call ms, p50/p95/max, and
+  `first_vs_third_ms_delta` warmth-recovery metric.
+- `concurrency` — W workers (default 6) × R requests
+  each, distributed across `superadmin1`/`superadmin2`/
+  `wladmin1`/`wladmin2`/`analyst1`/`analyst2` so the
+  per-user 120-reads/60s rate limit doesn't saturate.
+  Reports throughput, p50/p95/p99, per-worker breakdown.
+- `memory` — sustained K calls with `docker stats`-based
+  RSS sampling every S calls. Reports baseline / final /
+  max RSS plus a crude linear slope (MiB-per-call).
+  Detects monotonic leaks while tolerating transient GC
+  peaks.
+
+Why a separate script (not pytest):
+
+- Each subcommand takes 1-10 minutes
+- Pytest is pass/fail; benchmarks are continuous values
+  needing percentile reasoning
+- CI gating would force conservative thresholds that hide
+  real signal under noise
+
+Smoke-tested on the live container. Concurrency 6×10 = 60
+calls completed in 1.5s at 39.72 req/s with zero errors,
+p50=128 ms / p95=384 ms. Memory test (50 calls, sample-every
+10) showed baseline 1861 MiB, transient peak 1917 MiB at
+call 40, return to 1861 MiB by call 50, slope 0.0000 MiB/call —
+clean GC behavior, no leak signal.
+
+Manual / scheduled / investigatory only. Not run in CI.
+
+See `docs/RING_FINDINGS.md` "Ring 3 Day 5 — Performance
+benchmark harness" for design rationale, use cases, and
+trend-tracking workflow.
+
+---
+
 ## Unreleased — 2026-05-10 (Ring 3 Day 4: pixel-level visual regression)
 
 ### Tests — Pixel-diff layer on visual regression suite
