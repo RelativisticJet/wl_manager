@@ -3532,3 +3532,77 @@ CI signal on every test layer it owns (Python unit,
 JS unit, integration, E2E smoke + full, security
 baseline, accessibility) and the operational
 foundation for adding more.
+
+---
+
+## Ring 6 — Multi-user concurrency (in progress)
+
+**Goal**: tighten browser-level concurrency coverage
+by deterministically interleaving actions across 2-N
+parallel browser sessions. Plan in
+`memory/project_ring_6_plan.md`. Premise was that
+prior rings had no multi-session coverage; on Day 1
+inspection that proved partially false (round-6
+audit on 2026-04-29 shipped `test_concurrency.cjs`,
+`test_concurrent_approval_race.cjs`, and
+`test_concurrent_save_race.cjs`). User chose to
+proceed as planned anyway, because the existing
+tests use raw `Promise.all` jitter to race calls
+while Ring 6 builds a barrier-based deterministic
+rendezvous that may surface bugs the looser timing
+misses.
+
+**Method**: each day delivers one concurrency
+scenario backed by `tests/e2e/lib_multi_session.cjs`.
+If any day surfaces >3 unknown bugs, declare a
+sub-ring (precedent: Ring 3 split into 3 + 3A).
+
+### R6-F1 — Multi-session driver and rendezvous primitive
+
+**Severity**: N/A — infrastructure delivery, no
+production bug surfaced.
+
+**Day 1 deliverable**: `tests/e2e/lib_multi_session.cjs`
+and `tests/e2e/test_multi_session_smoke.cjs`.
+
+The driver exposes four primitives chosen against
+the day-by-day needs of Ring 6:
+
+- `createBarrier(n, opts?)` — single-use rendezvous.
+  The first n-1 callers block; the nth releases all
+  waiters in the same microtask tick. Built-in 30s
+  timeout fires cleanly if a session never arrives.
+  Single-use by design — reusable barriers add
+  "which round are we in" state that none of Days
+  2-5 actually need.
+- `delay(ms)` — phased-timing primitive for Day 5,
+  where one session must fire WHILE another's
+  request is in-flight (a single barrier can't
+  express this — both arrivals happen "before" the
+  action, not "during" it).
+- `createSessions({alias: [user, pass]})` — parallel
+  login via `Promise.allSettled`. Sequential cost is
+  ~5-10s × N on this host (chromium cold-start
+  dominates); Day 3's same-user N=7 test would lose
+  ~14-70s of setup without this.
+- `closeSessions(sessions)` — idempotent, safe in
+  catch blocks.
+
+**Smoke test (5/5 green)**: parallel-logged-in
+analyst1 + wladmin1 navigate to `control_panel`,
+hit `barrier(2)`, resume with 0ms skew. Overflow
+arrival throws. Single-arrival barrier times out
+within window. `delay(150)` measured in window.
+
+**Testing-infrastructure lesson (filed during Day 1,
+not a production bug)**: my first smoke-test version
+hard-failed if `createSessions` took >6s. On a cold
+chromium-binary page-cache the first run took 10s
+even though it WAS parallel (proven by the 0ms
+barrier-skew in the next test). The right assertion
+is the causal property (rendezvous skew), not a
+latency budget. Latency budgets mix "is the logic
+right" with "is the machine fast" and only the first
+matters for a smoke test. Adjusted to log latency
+for diagnostics and only fail above an
+obviously-serialized threshold (20s).
