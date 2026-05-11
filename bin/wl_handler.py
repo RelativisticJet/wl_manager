@@ -5882,10 +5882,30 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             result = self._process_approval_inner(
                 request, payload, admin_user)
 
-        # Increment admin approval counter on success
+        # Increment admin approval counter on success.
+        #
+        # R6-F2 fix (build 649, 2026-05-11): previously this check was
+        # ``resp_body.get("success")``, but the canonical approve return
+        # body in _process_approval_inner is ``{message, request_id,
+        # diff}`` — no ``success`` field. Only the inline bulk_row_edit
+        # path (which returns the ``_save_csv`` result directly) carried
+        # ``success: true``. Result: the admin ``approval_count`` daily
+        # rate-limit was silently unenforced for every approve action
+        # type except inline bulk_row_edit, including bulk_row_removal,
+        # column_removal, bulk_row_addition, csv_import_replace, and the
+        # rule/csv lifecycle approvals. Verified live: wladmin1 had 39
+        # request_approved events in 30 days while ``_daily_limits.json``
+        # did not exist in the container at all.
+        #
+        # New gate: HTTP status 200 + no top-level error field. Matches
+        # the response contract used by every approve-success path in
+        # _process_approval_inner and by _fail_approval_request's
+        # status_code/error envelope on the failure side.
         decision = payload.get("decision", "")
         resp_body = json.loads(result.get("payload", "{}"))
-        if decision == "approve" and resp_body.get("success"):
+        if (decision == "approve"
+                and result.get("status", 500) == 200
+                and not resp_body.get("error")):
             admin_roles = get_roles(request)
             if is_admin(admin_roles) and \
                not is_superadmin(admin_roles):

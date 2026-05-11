@@ -2064,7 +2064,7 @@ the slim Linux container lacks. They pass on Windows host
 and in the actual Splunk container. Scoping also gives a
 ~5x faster mutation cycle (~2-5s per mutant vs ~15-20s).
 
-#### R3-D2-F1 — Platform-dependent basename check (build 648)
+#### R3-D2-F1 — Platform-dependent basename check (shipped at build 648)
 
 `is_safe_filename` in `bin/wl_validation.py` relied on
 `os.path.basename(name) != name` to reject path separators.
@@ -2345,7 +2345,7 @@ What landed (Days 1-5):
   (`scripts/mutmut.sh`) + targeted coverage tests for 3
   surviving mutants in `wl_validation.py` (88% kill rate)
   and 1 in `wl_audit.py` (59% kill rate). Surfaced one real
-  production bug: R3-D2-F1 (build 648), a Linux-vs-Windows
+  production bug: R3-D2-F1 (shipped at build 648), a Linux-vs-Windows
   path-separator gap in `is_safe_filename` exposed by
   running an existing Windows-authored test under POSIX
   semantics.
@@ -2362,7 +2362,7 @@ What landed (Days 1-5):
 
 Production impact:
 
-- **1 production bug fixed**: R3-D2-F1 (build 648) — `is_safe_filename`
+- **1 production bug fixed**: R3-D2-F1 (shipped at build 648) — `is_safe_filename`
   now rejects backslash on every platform, not just Windows.
   Defense-in-depth meant production was never exploitable
   (downstream stem regex caught it), but the basename layer
@@ -3606,3 +3606,100 @@ right" with "is the machine fast" and only the first
 matters for a smoke test. Adjusted to log latency
 for diagnostics and only fail above an
 obviously-serialized threshold (20s).
+
+### R6-F2 — Admin approval_count daily rate-limit silently unenforced
+
+**Severity**: HIGH — defense-in-depth control bypassed for
+~all approve action types.
+
+**Found**: Day 2 (2026-05-11) while building stronger
+side-effect dedup assertions in
+`tests/e2e/test_concurrent_approval.cjs`. The
+existing `test_concurrent_approval_race.cjs` did
+not catch this because it only checked response
+shapes; the counter was never verified.
+
+**Root cause**: In `_process_approval` at
+[wl_handler.py:5888](../bin/wl_handler.py#L5888) (pre-fix), the
+admin daily-limit increment was gated on
+`resp_body.get("success")`. But the canonical
+approve return body in `_process_approval_inner`
+(line 6717) is `{message, request_id, diff}` — no
+`success` field. Only the inline `bulk_row_edit`
+path returned the `_save_csv` result directly,
+which carries `success: true`. So the
+`approval_count` counter incremented only for that
+one path; every other approve action type (which is
+~90% of them: bulk_row_removal, column_removal,
+bulk_row_addition, csv_import_replace, create_csv,
+create_rule, remove_csv, remove_rule, the non-inline
+bulk_row_edit) silently skipped the increment.
+
+**Verification that the bug was live**: an SPL
+search over `index=wl_audit` for the previous 30
+days returned 39 `request_approved` events for
+`wladmin1` and 1 for `wladmin2`, while
+`_daily_limits.json` did not exist in the container
+at all — `find /opt/splunk/etc/apps/wl_manager
+-name '*daily*'` returned nothing. The counter
+file is lazy-created on first increment, so its
+absence proves no increment ever fired despite 40
+approvals.
+
+**Security impact**: the admin `approval_count`
+daily limit is the defense-in-depth control against
+a compromised admin rubber-stamping queued requests
+in bulk (e.g. a malicious admin scripting `curl`
+calls to auto-approve everything). The default
+limit is 5/day, but with the gate broken admins
+could approve unlimited requests per day with no
+audit-trail signal that the cap was bypassed.
+Superadmins are intentionally exempt (they ARE the
+policy), so the bug specifically eroded the
+regular-admin tier's containment.
+
+**Fix shipped** (build 649,
+[wl_handler.py:5888-5904](../bin/wl_handler.py#L5888-L5904)):
+gate on `result.get("status", 500) == 200 and not
+resp_body.get("error")` instead of
+`resp_body.get("success")`. The new check matches
+the response contract used by every approve-success
+path on the inner side AND by
+`_fail_approval_request`'s status_code/error
+envelope on the failure side. Inline change kept
+minimal (one expression replaced) so the diff is
+reviewable.
+
+**Regression coverage**:
+[tests/integration/test_process_approval_gate.py](../tests/integration/test_process_approval_gate.py) (7 cases). Pins
+that the gate fires iff (decision=approve AND
+status=200 AND no error field), with the inline
+`bulk_row_edit` case included as the only one the
+PRE-FIX code also passed. All 7 cases green against
+the fixed handler.
+
+**End-to-end coverage**:
+[tests/e2e/test_concurrent_approval.cjs](../tests/e2e/test_concurrent_approval.cjs) A4 reads
+`_daily_limits.json` before and after the race and
+asserts winner_delta == 1 AND loser_delta == 0.
+This is the integration-level pin and would catch
+any future drift in either the response-shape side
+(handler returning different bodies) or the
+gate-logic side (someone "simplifying" the gate
+back to checking `success`).
+
+**Lessons for the broader test strategy**:
+1. Side-effect dedup tests catch bugs response-shape
+   tests cannot. The lock test passed every prior
+   audit run because the response shapes were
+   consistent; the counter was never asserted.
+2. "File doesn't exist" can be a stronger signal
+   than "file has wrong content." 30 days of
+   approvals + zero counter writes = the bug had
+   been live for at least that long.
+3. When testing a defense-in-depth control,
+   exercise the role tier the control is intended
+   to constrain (regular admin), not the one
+   exempt from it (superadmin). The original test
+   used wladmin + superadmin; the counter bug only
+   surfaced when both racers were regular admins.

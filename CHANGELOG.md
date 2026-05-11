@@ -787,7 +787,7 @@ bridge mechanics, what makes a good first target).
 
 ### Tests — Ring 3 sign-off
 
-Ring 3 closed at build 648. Cumulative deliverables across
+Ring 3 closed at build 648 (shipped 2026-05-10). Cumulative deliverables across
 Days 1-5:
 
 - **Day 1**: Containerized CI integration suite
@@ -796,7 +796,7 @@ Days 1-5:
 - **Day 2-3**: Dockerized mutmut harness
   (`scripts/mutmut.sh`) + 5 targeted unit tests pinning
   surviving mutants. Surfaced 1 production bug (R3-D2-F1,
-  build 648) — platform-dependent path-separator check in
+  shipped at build 648) — platform-dependent path-separator check in
   `is_safe_filename`. Mutation kill rates documented per
   module: `wl_validation.py` 88%, `wl_audit.py` 59%,
   `wl_rbac.py` 25% — the gradient correlates with I/O
