@@ -3703,3 +3703,91 @@ back to checking `success`).
    exempt from it (superadmin). The original test
    used wladmin + superadmin; the counter bug only
    surfaced when both racers were regular admins.
+
+### R6-F3 — Admin usage_reset daily rate-limit silently unenforced
+
+**Severity**: MEDIUM-HIGH — defense-in-depth
+control bypassed for the daily-usage-reset action;
+same root-cause class as R6-F2 but on a
+lower-frequency action.
+
+**Found**: Day 2 bonus audit (2026-05-11, build
+650). After R6-F2 shipped at build 649, the user
+requested a structured audit of every
+``_increment_admin_daily_limit`` and
+``_increment_daily_limit`` call site for the same
+shape-mismatch bug class. 10 sites total. 8 of
+them used the canonical correct gate
+(``status == 200 AND not body.get("error")``).
+Two had the buggy pattern: ``approval_count``
+(R6-F2, already fixed) and ``usage_reset``
+(R6-F3, this finding).
+
+**Root cause**:
+[wl_handler.py:3225](../bin/wl_handler.py#L3225) (pre-fix)
+checked ``body.get("success")`` for the gate. But
+``_reset_daily_usage_action`` at
+[wl_handler.py:7247-7286](../bin/wl_handler.py#L7247-L7286)
+returns five distinct response bodies on the 200
+path:
+
+- ``{"message": "No usage to reset."}``           (no-counters case)
+- ``{"error": "Cannot reset your own ..."}``       (self-reset block)
+- ``{"message": "Daily usage reset for X"}``       (single-user reset)
+- ``{"message": "No usage found for X"}``          (single-user not-found)
+- ``{"message": "Daily usage reset for all..."}``  (all-users reset)
+
+None of them carry ``success: true``. So the gate
+never fired and the admin ``usage_reset`` counter
+was silently unenforced.
+
+**Security impact**: lower-frequency than R6-F2
+because usage_reset is itself rate-limited at the
+admin tier (default 5/day) and gated behind a
+permission toggle (``allow_admin_reset_usage``).
+But the entire purpose of the counter is to bound
+HOW MANY usage-resets a single admin can perform
+per day. With the gate broken, an admin permitted
+to reset usage at all could reset other admins'
+counters unlimited times per day — e.g. to mask
+their own audit-trail by repeatedly clearing
+analyst counters, or to grant unlimited "free
+attempts" to a colluding analyst.
+
+**Fix shipped** (build 650): same one-line change
+pattern as R6-F2 — gate on ``not body.get("error")``
+instead of ``body.get("success")``. The outer
+``status == 200`` check was already correct.
+
+**Regression coverage**:
+[tests/integration/test_reset_usage_gate.py](../tests/integration/test_reset_usage_gate.py) (5 cases). Pins
+that the gate fires on every response shape
+``_reset_daily_usage_action`` actually emits
+(message-only success, no-usage-to-reset
+message), and does NOT fire on self-reset block,
+superadmin caller, or non-200.
+
+**Audit-of-all-sites summary**:
+
+| Counter        | Gate pattern | Verdict |
+|----------------|--------------|---------|
+| csv_save        | status==200 + not error | OK |
+| csv_revert      | status==200 + not error | OK |
+| csv_creation    | status==200 + not error | OK |
+| rule_creation   | status==200 + not error | OK |
+| csv_deletion    | data.get("trashed") (pipeline) | OK |
+| rule_deletion   | data.get("trashed") (pipeline) | OK |
+| usage_reset     | body.get("success") | **R6-F3 BUG, fixed** |
+| trash_restore   | early-return on pipeline failure | OK |
+| approval_count  | body.get("success") | **R6-F2 BUG, fixed in 649** |
+| _increment_daily_limit (analyst, ×3) | guarded by save-success path | OK |
+
+**Lesson reinforcement**: When fixing a bug, audit
+the same shape across the codebase. R6-F2 alone
+would have been treated as an isolated incident;
+finding R6-F3 in the same audit proves the pattern
+was REUSED across the codebase, which means a
+class-level lesson is more valuable than the
+individual fixes. The audit took ~15 minutes and
+yielded a second HIGH severity bug — high
+ROI per audit-minute.

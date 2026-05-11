@@ -3218,11 +3218,19 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     "disabled": maximum == 0,
                 })
         result = self._reset_daily_usage_action(payload, user)
+        # R6-F3 fix (build 650, 2026-05-11): same shape mismatch as
+        # R6-F2 — the gate was checking ``body.get("success")``, but
+        # _reset_daily_usage_action returns ``{"message": "..."}`` on
+        # success (no ``success`` field) and ``{"error": "..."}`` on
+        # self-reset-block or other failures. The gate never fired,
+        # so the admin ``usage_reset`` daily rate-limit was silently
+        # unenforced. Aligned with the canonical gate pattern: status
+        # 200 + no top-level error field.
         if (not is_superadmin(roles)
                 and isinstance(result, dict)
                 and result.get("status") == 200):
             body = json.loads(result.get("payload", "{}"))
-            if body.get("success"):
+            if not body.get("error"):
                 _increment_admin_daily_limit(user, "usage_reset")
         return result
 
