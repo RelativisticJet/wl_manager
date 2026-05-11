@@ -1,0 +1,142 @@
+name: OWASP ZAP Baseline Scan
+
+# Passive security scan of the Splunk Web UI at http://localhost:8000.
+# Runs weekly + on-demand. Generates HTML and Markdown reports of any
+# new security findings (missing headers, cookie issues, info
+# disclosures, etc).
+#
+# Why baseline (not full or API):
+#   - Baseline is passive — no attack payloads, no destructive ops.
+#   - Full scan sends SQLi/XSS/etc. payloads — would mutate state
+#     and trigger our own rate limiters + audit alerts on every run.
+#   - API scan needs an OpenAPI spec we don't ship; the REST
+#     handler at /custom/wl_manager is documented in code, not
+#     a machine-readable spec.
+#
+# Cadence: weekly (Sunday 04:00 UTC) + manual workflow_dispatch.
+# Daily is overkill for header-level findings that rarely change;
+# weekly catches drift without burning CI minutes.
+#
+# Findings triage flow:
+#   1. Open the artifact `zap-baseline-report.html` for the
+#      readable report. Markdown variant also uploaded.
+#   2. For each NEW finding: either fix upstream (preferred) or
+#      add an IGNORE entry to `.zap/rules.tsv` with a reason.
+#   3. The maintenance rule in rules.tsv: every IGNORE must cite
+#      WHY it's acceptable for this app. No silent suppressions.
+#
+# First-run note: at Ring 5 Day 3 inception, .zap/rules.tsv is
+# empty. The first run will produce a baseline of likely
+# 20-30 WARN-level findings (mostly Splunk Web UI defaults).
+# Triage that report and populate rules.tsv.
+
+on:
+  schedule:
+    # 04:00 UTC Sunday. Off-peak so it doesn't collide with the
+    # daily 03:00 UTC nightly E2E run (e2e-full.yml).
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # ZAP action needs to write issues for findings discovery if
+  # `allow_issue_writing: true`. We keep that DISABLED (default
+  # false) for now — issue spam isn't worth it at our scale.
+  # If we later want one auto-issue per scan with the report
+  # attached, flip allow_issue_writing to true AND add
+  # `issues: write` here.
+
+jobs:
+  zap-baseline:
+    name: ZAP Baseline Scan
+    runs-on: ubuntu-latest
+    # 30 minutes: ~1 min container startup + ~30s setup +
+    # ~5-15 min ZAP scan + ~30s teardown. The scan duration
+    # scales with how many endpoints ZAP discovers from the
+    # Splunk default page; 15 min is a generous upper bound.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start Splunk container
+        run: docker compose up -d
+
+      - name: Fix bind-mount permissions for Splunk user
+        run: |
+          docker exec -u 0 wl_manager_test \
+            chown -R splunk:splunk \
+              /opt/splunk/etc/apps/wl_manager/bin \
+              /opt/splunk/etc/apps/wl_manager/default \
+              /opt/splunk/etc/apps/wl_manager/lookups \
+              /opt/splunk/etc/apps/wl_manager/appserver \
+              /opt/splunk/etc/apps/wl_manager/metadata
+
+      - name: Wait for Splunk Web UI to come up
+        # ZAP scans http://localhost:8000, so we wait until the
+        # Web UI returns a 2xx/3xx (Splunk redirects unauthenticated
+        # users to /en-US/account/login, which is a 200 — that's
+        # the signal we want).
+        run: |
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              http://localhost:8000/en-US/account/login \
+              || true)
+            if [ "$code" = "200" ]; then
+              echo "Splunk Web UI ready (HTTP $code) at t=${i}*2s"
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Run OWASP ZAP baseline scan
+        # zaproxy/action-baseline runs `zap-baseline.py` in a
+        # Docker container against the target URL. Passive only
+        # — no attack payloads. Findings written to
+        # report_html.html / report_md.md.
+        #
+        # cmd_options:
+        #   -l FAIL   — only FAIL-level findings cause CI failure.
+        #               WARN-level findings get reported but don't
+        #               block. (Default is WARN+ which would
+        #               flag every Splunk default header.)
+        #   -a        — include alpha rules (broader coverage)
+        #
+        # rules_file_name: .zap/rules.tsv — our suppression list
+        # (see file's own comments for the maintenance contract).
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: "http://localhost:8000"
+          rules_file_name: ".zap/rules.tsv"
+          cmd_options: "-l FAIL -a"
+          # Don't auto-create issues. Findings live in the
+          # uploaded artifacts; humans decide whether to file
+          # tickets after triage.
+          allow_issue_writing: false
+          # The artifact upload step below replaces the action's
+          # built-in upload (we want to control the artifact
+          # name and retention).
+          artifact_name: "zap-baseline-report"
+
+      - name: Capture Splunk logs on failure
+        if: failure()
+        run: |
+          mkdir -p ci-logs
+          docker compose logs --tail=500 > ci-logs/compose.log 2>&1 || true
+          docker exec wl_manager_test \
+            cat /opt/splunk/var/log/splunk/splunkd.log 2>/dev/null \
+            | tail -1000 > ci-logs/splunkd.log || true
+
+      - name: Upload Splunk logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-splunk-logs-${{ github.run_id }}
+          path: ci-logs/
+          retention-days: 14
+
+      - name: Teardown
+        if: always()
+        run: docker compose down -v

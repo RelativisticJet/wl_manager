@@ -64,6 +64,69 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-11 (Ring 5 Day 3: OWASP ZAP baseline scan)
+
+### CI — passive security scan of the Splunk Web UI
+
+Adds a passive OWASP ZAP baseline scan that runs weekly
+against the Splunk Web UI at `http://localhost:8000`. The
+scan inspects response headers, cookies, info-disclosure
+patterns, and basic surface security — no attack
+payloads, no mutations.
+
+Added:
+
+- `.github/workflows/zap-baseline.yml` — runs on
+  Sunday 04:00 UTC + manual `workflow_dispatch`. Spins
+  up the Splunk container, waits for the Web UI, runs
+  `zaproxy/action-baseline@v0.14.0`, uploads the HTML
+  and Markdown reports as `zap-baseline-report` artifact.
+  30-min timeout. Uses `cmd_options: -l FAIL -a` — only
+  FAIL-level findings cause CI failure; WARN-level
+  findings are reported but don't block.
+- `.zap/rules.tsv` — suppression list (initially empty)
+  with the maintenance contract: every `IGNORE` entry
+  must cite the rule's title, the Splunk-specific
+  reason it's acceptable, and the date it was added.
+  No silent suppressions.
+
+#### First-run expectations
+
+The first nightly run will produce a baseline of
+likely 20-30 WARN-level findings — mostly Splunk Web
+UI defaults (X-Frame-Options=ALLOWFROM, missing CSP,
+anti-CSRF token presence on Splunk-bundled forms,
+etc.). These are NOT our code; they're Splunk's
+default header set. Triage flow:
+
+1. Open the artifact `zap-baseline-report.html`.
+2. For each NEW finding: either fix upstream
+   (preferred for app-specific issues) or add an
+   IGNORE entry to `.zap/rules.tsv` with a reason.
+3. Update CHANGELOG with the triage outcome.
+
+The first run also tests whether `zaproxy/action-baseline@v0.14.0`
+is current — if the action has been deprecated or
+restructured, the first run will fail loudly and we
+update the version pin.
+
+#### Why baseline (not full or API)
+
+- **Baseline** — passive, no payloads. Right cadence for
+  CI: catches header drift, doesn't pollute audit
+  trails or rate-limit counters.
+- **Full** — active, sends SQLi/XSS payloads. Would
+  trigger our own rate limiters and FIM alerts on
+  every run. Not suitable for unattended CI; better
+  as an ad-hoc developer-machine tool.
+- **API scan** — needs an OpenAPI spec we don't ship.
+  The handler at `/custom/wl_manager` is documented in
+  code, not a machine-readable schema. If we ever
+  publish an OpenAPI spec for the REST handler,
+  promote this to an `action-api-scan` workflow.
+
+---
+
 ## Unreleased — 2026-05-11 (Ring 5 Day 2: E2E CI-gating)
 
 ### CI — two new workflows wire E2E tests into CI on a tiered cadence

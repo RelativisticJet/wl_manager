@@ -1,0 +1,57 @@
+# OWASP ZAP baseline-scan rule suppressions for wl_manager.
+#
+# Format (tab-separated, ZAP standard):
+#   <rule_id>	<action>	<reason>
+#
+# Actions:
+#   IGNORE  — suppress the finding entirely (treat as known-accepted)
+#   WARN    — keep at WARN level (informational; doesn't fail the run)
+#   FAIL    — escalate to FAIL (causes ZAP exit code != 0 and CI failure)
+#
+# Default if a rule isn't listed here: WARN.
+# Workflow setting `-l FAIL` means only FAIL-level findings fail CI;
+# WARN findings get reported in the HTML/Markdown artifacts.
+#
+# Maintenance rule: every IGNORE entry MUST cite (1) the rule's
+# title, (2) the Splunk-specific reason it's acceptable, and (3)
+# the date it was added. Don't suppress a finding just because it's
+# noisy — explain WHY it's acceptable for this app.
+#
+# First-run note: this file is intentionally minimal at Ring 5 Day 3
+# inception. The first nightly run will produce a baseline of ~20-30
+# WARN-level findings (mostly Splunk Web UI defaults: X-Frame-Options
+# value, missing CSP, anti-CSRF tokens on Splunk's own forms, etc.).
+# Triage that run's report (artifact: zap-baseline-report.html),
+# then either suppress here (IGNORE) or fix upstream. Update the
+# CHANGELOG with the triage outcome.
+
+# ── Suppressions (start empty; populate after first run triage) ───
+
+# Example entry format (commented out so it doesn't take effect):
+# 10020	IGNORE	X-Frame-Options not set — Splunk's own Web UI emits
+#		ALLOWFROM by default; acceptable for our app context
+#		(2026-05-11)
+
+# ── Notes for triage ──────────────────────────────────────────────
+#
+# Likely first-run findings (predicted; verify against actual report):
+#
+# 10020 — Missing Anti-clickjacking Header (X-Frame-Options)
+#   Splunk sets X-Frame-Options ALLOWFROM on its own pages, which
+#   modern browsers treat as missing. Splunk's design assumes
+#   trusted intranet deployment. ACTION: likely IGNORE with a
+#   pointer to Splunk's design rationale.
+#
+# 10038 — Content Security Policy (CSP) Header Not Set
+#   Splunk doesn't ship a CSP. Setting one is a Splunk-bundle
+#   change, not a wl_manager change. ACTION: IGNORE with note.
+#
+# 10049 — Storable but Non-Cacheable Content
+#   Informational. ACTION: WARN (no action needed).
+#
+# 10063 — Permissions Policy Header Not Set
+#   Splunk default. ACTION: IGNORE with note.
+#
+# 10096 — Timestamp Disclosure
+#   Splunk dashboards include timestamps as part of the UX.
+#   ACTION: IGNORE with note.
