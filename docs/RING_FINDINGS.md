@@ -2841,3 +2841,81 @@ These are the categories `feedback_non_atomic_operations.md`
 called out. Day 5-6 will pick the 3-4 with the highest
 likelihood of finding a real bug.
 
+### Day 5 — CSV save chain chaos test
+
+First concrete chaos scenario on top of the Day 4 fixture.
+`save_csv` is a 4-step mutation:
+
+1. Write new rows to `lookups/<csv_file>`
+2. Write a version snapshot to
+   `lookups/_versions/<base>_<timestamp>.csv`
+3. Update the JSON manifest
+   `<base>_versions.json`
+4. Update the hash registry
+   `.csv_expected_hashes.json`
+5. Emit an audit event to `wl_audit`
+
+If splunkd dies between any two steps, the system can be
+left with (a) CSV updated but no snapshot/audit (forensic
+gap), (b) snapshot on disk but missing from manifest
+(revert dropdown invisible), (c) hash registry diverging
+from CSV (next FIM cycle fires a false positive). None
+of these had been tested before.
+
+`tests/integration/test_chaos_save_csv_chain.py` captures
+pre-state across all four stores, submits save_csv with
+an 80-row payload, kills splunkd 100ms later, recovers,
+and asserts the post-state is fully consistent. Either
+the operation committed (CSV + snapshot + manifest +
+registry all updated and self-consistent) or didn't
+start (all stores unchanged). Half-applied state =
+test failure.
+
+Target rule: `DR_VERSION_TEST` (dedicated chaos target,
+no other tests touch it).
+
+#### Subprocess `text=True` ate the content hash
+
+The first test version computed a SHA-256 hash that
+didn't match the handler's. Diagnosis: `subprocess.run(
+text=True)` on Windows triggers universal-newlines
+translation. For an ASCII-only file with `\n` endings
+this is a no-op, but the moment a CRLF appears in
+content, the "decoded text bytes" diverge from the
+"raw file bytes". The handler's
+`_get_csv_content_hash()` reads `open(..., "rb")` and
+hashes raw bytes. Fix: split the helper into
+`_docker_read_bytes()` (binary, for hashing) and
+`_docker_read()` (decoded text, for inspection).
+
+This is the same class of bug as the build-528 `\r\n`
+incident, which is why it's been called out
+specifically.
+
+#### Result
+
+Two consecutive runs at ~26s each. Both committed the
+operation (kill landed AFTER the 80-row save completed,
+which takes ~50ms in practice). To force more mid-write
+hits, future iterations can bump row_count to 2000+ or
+shorten `kill_delay_ms`. The current pass exercises the
+"normal save followed by chaos kill" path — also a
+real recovery scenario, though not the mid-write case
+the docstring promises.
+
+#### What's pinned
+
+- The handler's content-hash schema (SHA-256 of raw
+  bytes, no encoding transformation, no metadata
+  wrapper) — pinned via `_capture_state()` reading the
+  exact same bytes the handler hashes.
+- The hash registry schema (flat map
+  `{ "<filename>": "<hex>" }`, no envelope) — pinned by
+  the test's parser.
+- The version manifest's invariant: snapshot files on
+  disk == manifest `versions` entries, after any
+  successful save.
+- The recovery contract: an `expected_content_hash`
+  mismatch returns the new server-side hash so the
+  client can reload — pinned by the
+  `_state_implies_commit()` branching.

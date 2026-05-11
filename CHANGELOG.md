@@ -64,6 +64,71 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-11 (Ring 4 Day 5: CSV save chain chaos test)
+
+### Tests — first chaos scenario on top of the Day 4 fixture
+
+Exercises the 4-step `save_csv` mutation under SIGKILL
+chaos and verifies post-recovery state is fully
+consistent across all four state stores: CSV file,
+version snapshot directory, JSON manifest, and CSV
+hash registry.
+
+Added:
+
+- `tests/integration/test_chaos_save_csv_chain.py` —
+  captures pre-state, submits save_csv (80 rows) as
+  `wladmin1`, kills splunkd 100ms later, recovers,
+  asserts post-state is either fully-committed (all four
+  stores updated and self-consistent) or fully-pre (all
+  unchanged). Half-applied state = test failure.
+
+Acceptance branches and what each pins:
+
+- **Operation committed**: CSV hash changed, snapshot
+  count increased by 1, manifest entry count increased
+  by 1, hash registry matches new CSV hash. Manifest
+  must NEVER be corrupt JSON (would render every version
+  unrecoverable). Hash registry must NEVER be corrupt
+  JSON (would cause `wl_fim_watch.py` to fail-closed
+  and treat every CSV as unregistered).
+- **Operation didn't commit**: snapshot count unchanged,
+  manifest entry count unchanged. ANY divergence (e.g.
+  orphan snapshot file with no manifest entry) is a
+  half-write and fails the test.
+
+Diagnosed and fixed during construction: `subprocess.run(
+text=True)` on Windows triggers universal-newlines
+translation which silently rewrites `\r\n` → `\n` on
+read. For an ASCII-only file with `\n` endings this is
+a no-op, but the moment a CRLF appears in content the
+"decoded text bytes" diverge from the "raw file bytes".
+The handler's content-hash is over raw bytes, so the
+test was sending a mismatching `expected_content_hash`
+to the server. Fix: split the helper into
+`_docker_read_bytes()` (binary, for hashing) and
+`_docker_read()` (decoded text, for inspection).
+
+Target rule: `DR_VERSION_TEST` (dedicated chaos target;
+no other tests touch this rule, so chaos mutations
+don't pollute neighbouring suites).
+
+Two consecutive runs at ~26s each. Both ran the
+"commit + restart" branch — the kill landed AFTER the
+80-row save completed (which takes ~50ms in practice).
+Future iterations can bump row_count to 2000+ or shorten
+`kill_delay_ms` to force mid-write hits more often.
+The current pass still validates a real recovery
+contract: a normal save followed by a chaos kill
+preserves all four state stores intact.
+
+See `docs/RING_FINDINGS.md` "Day 5 — CSV save chain
+chaos test" for the full investigation including the
+subprocess-text-mode bug and the schemas pinned by the
+test.
+
+---
+
 ## Unreleased — 2026-05-11 (Ring 4 Day 4: chaos-test fixture)
 
 ### Tests — SIGKILL-mid-operation infrastructure (smoke green)
