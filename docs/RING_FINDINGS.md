@@ -2621,3 +2621,87 @@ Estimated 15-25 new tests by end of Day 3. The bridge
 will likely need to grow a minimal `_` (underscore.escape)
 mock for the render-style tests; `parseCSV` didn't need it.
 
+### Day 2-3 — JS unit coverage expansion (+41 tests)
+
+Beat the Day 3 estimate by ~16 tests. Three test files added:
+
+- **`test_wl_csv_io_validation.test.mjs`** (18 tests) —
+  `csvEscape()` and `validateImportedCSV()`. csvEscape is
+  the CSV-injection-prevention primitive (formula chars
+  `=+-@\t\r` get `'` prefix, RFC 4180 quoting for embedded
+  commas / quotes / newlines). validateImportedCSV is the
+  schema/safety guard before any import — filename rules,
+  column-name rules, cell content rules.
+- **`test_wl_diff.test.mjs`** (10 tests) — `renderDiff()`
+  HTML output. Tests structural sections, count display,
+  internal `_`-prefixed column exclusion (security
+  contract — admin metadata must not leak to analysts),
+  edit truncation at DIFF_MAX_ROWS (10), column-change
+  badges.
+- **`test_wl_approval_ui.test.mjs`** (13 tests) —
+  pure-helper subset of the approval UI:
+  `extractApprovalReason` (per-action-type payload
+  schema), `getPendingRowIndices` (counter-based matching
+  for duplicate rows — the bug pattern explicitly listed
+  in MEMORY.md), `buildLockedState` (queue-presence gate).
+
+Test totals at Day 3 close:
+
+- 5 (parseCSV) plus 18 (csvEscape + validate) plus 10
+  (renderDiff) plus 13 (approval_ui) = **46 JS unit tests**
+- Total runtime: ~27ms test time (~210ms incl. Vitest
+  startup)
+- 100% pass
+
+#### Bridge enhancements
+
+The AMD bridge grew two minor capabilities to support these
+tests:
+
+- `underscoreEscape` helper in the test files mirrors the
+  production `_.escape` so error messages and rendered HTML
+  match the production form. Identity mock was insufficient
+  once tests started asserting against the actual rendered
+  output.
+- jQuery selector mock (`function() { return { on, is,
+  hide, show, text } }`) — chainable no-op for the
+  click-handler wiring inside `renderDiff`. The `$diff`
+  target gets a separate mock with `.html(s)` capturing the
+  rendered string for assertion.
+
+#### Security contracts pinned by these tests
+
+Three contracts that had NO existing test coverage are now
+unit-pinned:
+
+- **CSV formula injection prevention** (csvEscape): every
+  leading `=+-@\t\r` is prefixed with `'`. Embedded
+  formula chars in the middle are NOT prefixed (Excel only
+  evaluates leading-char formulas). Regression here would
+  let a malicious CSV value execute arbitrary spreadsheet
+  formulas on the analyst's machine.
+- **Reserved `_` column prefix enforcement**
+  (validateImportedCSV): user-uploaded columns starting
+  with `_` are rejected. Without this guard, an attacker
+  could create `_added_by` columns to overwrite the
+  internal metadata that audit trails depend on.
+- **Internal column exclusion from rendered diffs**
+  (renderDiff): `_added_by`, `_review_status`, etc. must
+  NOT appear in user-visible output. Regression would
+  expose admin user IDs to analysts.
+
+#### Bug-class regression pins
+
+Three CLAUDE.md-documented patterns now have unit-test
+coverage:
+
+- **Sets-lose-duplicate-count info** (getPendingRowIndices):
+  counter-based matching ensures N duplicate row keys
+  highlight exactly N rows, not all matching rows.
+- **Schema drift between handler and frontend**
+  (extractApprovalReason): each action-type branch tested
+  independently so adding a new action_type without wiring
+  the reason extraction surfaces at PR time.
+- **Schema drift defensive defaults** (extractApprovalReason):
+  missing payload returns `""`, not `undefined.something`.
+

@@ -64,6 +64,63 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-11 (Ring 4 Day 2-3: JS unit coverage expansion)
+
+### Tests — +41 JS unit tests across 3 new test files
+
+Beat the Day 3 estimate by ~16 tests. 5 (parseCSV from Day 1)
+plus 41 new = **46 total JS unit tests** in 4 files, all
+passing in ~27ms of test time.
+
+Added:
+
+- `tests/js/test_wl_csv_io_validation.test.mjs` (18 tests) —
+  `csvEscape()` formula-injection prevention + RFC 4180
+  field quoting; `validateImportedCSV()` filename rules,
+  column-name rules, cell content rules. Pins the
+  reserved-`_` column prefix enforcement that protects
+  internal metadata from user overwrite.
+- `tests/js/test_wl_diff.test.mjs` (10 tests) — `renderDiff()`
+  HTML output structure, count display, internal `_`-column
+  exclusion from rendered output (security contract — admin
+  metadata must not leak to analysts), edit truncation at
+  DIFF_MAX_ROWS=10, column-change badges.
+- `tests/js/test_wl_approval_ui.test.mjs` (13 tests) —
+  pure-helper subset of the approval UI:
+  `extractApprovalReason` per-action-type payload schema,
+  `getPendingRowIndices` counter-based row matching
+  (the bug pattern explicitly listed in MEMORY.md as
+  "Sets lose duplicate count info"), `buildLockedState`.
+
+Three security contracts and three CLAUDE.md-documented bug
+patterns are now unit-pinned:
+
+- CSV formula injection prevention (every leading
+  `=+-@\t\r` neutralized)
+- Reserved `_` column prefix enforcement (blocks user
+  overwrite of `_added_by`, `_review_status`, etc.)
+- Internal column exclusion from rendered diffs (admin
+  metadata never displayed to analysts)
+- Sets-lose-duplicate-count (counter-based row matching for
+  duplicates)
+- Schema-drift-per-action-type defensive defaults
+- Missing-payload defensive defaults (build 614 incident
+  pattern)
+
+Bridge enhancements: tests grew an `underscoreEscape` helper
+(real HTML escaping for the rendered-output tests), a
+chainable jQuery selector mock for the click-handler wiring
+in `renderDiff`, and a state-proxy mock pattern for the
+approval-queue helpers that consume `_state` via init().
+
+CI integration still deferred to Ring 5 Day 4-5.
+
+See `docs/RING_FINDINGS.md` "Day 2-3 — JS unit coverage
+expansion" for the full design notes (which contracts got
+pinned and why each matters).
+
+---
+
 ## Unreleased — 2026-05-11 (Ring 4 Day 1: JS unit-test layer)
 
 ### Tests — Vitest + AMD bridge + first 5 tests (parseCSV)
