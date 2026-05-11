@@ -122,7 +122,7 @@ echo -e "${GREEN}[doc-drift 1/2]${NC} verifying file-path references exist..."
 # Anchor on known top-level directories. Trailing punctuation (., ), ,, ;)
 # is trimmed because prose often writes `see foo/bar.py.`
 RAW_PATHS=$(
-    grep -ohE '(bin|appserver|default|scripts|lookups|docs|tests)/[A-Za-z0-9_./-]+\.(py|js|conf|xml|sh|csv|md|yaml|yml|json|jsonl)' "${STRIPPED[@]}" 2>/dev/null | \
+    grep -ohE '(bin|appserver|default|scripts|lookups|docs|tests)/[A-Za-z0-9_./-]+\.(mjs|cjs|py|js|conf|xml|sh|csv|md|yaml|yml|json|jsonl|png)' "${STRIPPED[@]}" 2>/dev/null | \
     sort -u || true
 )
 

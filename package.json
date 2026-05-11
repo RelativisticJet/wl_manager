@@ -1,7 +1,12 @@
 {
+  "scripts": {
+    "test:js": "vitest run --config tests/js/vitest.config.cjs",
+    "test:js:watch": "vitest --config tests/js/vitest.config.cjs"
+  },
   "devDependencies": {
     "pixelmatch": "^7.2.0",
     "playwright-core": "^1.59.1",
-    "pngjs": "^7.0.0"
+    "pngjs": "^7.0.0",
+    "vitest": "^3.2.4"
   }
 }

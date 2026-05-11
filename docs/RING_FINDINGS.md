@@ -2512,3 +2512,112 @@ PRs, pixel-diff is too platform-flaky to gate CI, perf
 benchmarks need percentile reasoning that pytest's pass/fail
 model can't express.
 
+---
+
+## Ring 4 (test-strategy completion: JS unit + chaos + state-machine fuzz)
+
+Started 2026-05-10, build 648. In progress.
+
+### Day 1 — JS unit-test layer (Vitest + AMD bridge)
+
+8000+ lines of frontend code across 13 AMD modules under
+`appserver/static/modules/` had ZERO direct unit tests
+coming into Ring 4. All JS testing went through the browser
+via the ad-hoc `lib_helpers.cjs` runner — slow
+(multi-minute per file), brittle (rendering, async timing),
+and tests the wrong layer for parsing / state-machine
+logic. Day 1 establishes the unit-test foundation.
+
+#### Framework choice — Vitest over Jest
+
+Vitest 3.2.4. Reasons:
+
+- Smaller dep footprint (15 packages, 0 vulnerabilities)
+  versus Jest's ~40 with periodic CVE churn
+- esbuild-based — no Babel config to maintain
+- Same Jest API surface (`describe`, `it`, `expect`,
+  `beforeAll`) so future contributors find familiar
+  ergonomics
+- ESM-only since v3, but the test file pattern `.test.mjs`
+  combined with the AMD bridge as `.cjs` cleanly separates
+  the two module systems
+
+Vitest 2.x flagged 5 moderate vulnerabilities in transitive
+deps (vite, vite-node); 3.x has zero. Pinned to `^3.0.0`.
+
+#### AMD → CommonJS bridge (`tests/js/lib_amd_bridge.cjs`)
+
+The frontend uses Splunk-bundled RequireJS at runtime:
+modules call `define([deps], factory)` and the factory's
+return value is the module's exports. Plain `require()` in
+Node throws "define is not defined" because Node has no
+AMD loader.
+
+The bridge is 30 lines — evaluate the module in Node's
+built-in `vm` context with a custom `define` that captures
+the factory's return value. Dep mocks are passed via a map;
+unmocked deps default to `{}` (so the factory doesn't throw
+on top-level destructuring like `var X = C.X`).
+
+Why VM not real RequireJS: RequireJS as a Node dep adds
+async loading semantics that complicate the test layer.
+Sync VM evaluation is faster, simpler, and matches how the
+module actually behaves at runtime (factories are
+synchronous in RequireJS too).
+
+#### First 5 tests — `parseCSV()` in `wl_csv_io.js`
+
+Chose `parseCSV` as the first target because it's genuinely
+pure (string → `{headers, rows, errors}`), no DOM access,
+no HTTP, no jQuery use in the body. CSV parsing is also
+historically buggy territory (BOM, embedded quotes, mixed
+line endings) — high signal per test.
+
+Tests cover the corner cases that have caused or could
+cause bugs:
+
+- LF line-endings happy path — baseline sanity
+- CRLF + UTF-8 BOM (Excel "Save As CSV (UTF-8)" output) —
+  catches the regression where a BOM-stripped header
+  becomes `"﻿user"` and silently breaks column
+  lookups
+- RFC 4180 quoted fields with embedded commas + escaped
+  double-quotes — the parser's most complex path
+- Binary-file rejection (null-byte detection in first
+  8KB) — guards against accidental PNG/PDF uploads
+- Header whitespace validation — catches `"col one"` which
+  would silently break downstream code that uses bare
+  identifiers as dict keys
+
+All 5 pass in ~4ms (178ms total including Vitest startup).
+That's the speed ratio that justifies the investment: pure
+unit tests run ~100× faster than browser E2E tests for the
+same logical assertions.
+
+#### Run
+
+```bash
+npm run test:js          # one-shot
+npm run test:js:watch    # interactive watch mode for TDD
+```
+
+Config in `tests/js/vitest.config.cjs`. CI integration
+deferred to Ring 5 Day 4-5 (where E2E gating gets decided
+together with JS unit gating).
+
+#### Next (Day 2-3)
+
+Apply the same pattern to:
+
+- `validateImportedCSV` in `wl_csv_io.js` (header
+  validation, row count limits, expire-date rules)
+- `wl_approval_ui.js` state-machine helpers (pure logic
+  for transition validation, decoupled from DOM access)
+- `wl_diff.js::renderDiff` (HTML output is pure
+  string-building given the input diff object — testable
+  by snapshot assertions on the returned string)
+
+Estimated 15-25 new tests by end of Day 3. The bridge
+will likely need to grow a minimal `_` (underscore.escape)
+mock for the render-style tests; `parseCSV` didn't need it.
+

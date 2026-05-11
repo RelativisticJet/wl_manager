@@ -64,6 +64,59 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-11 (Ring 4 Day 1: JS unit-test layer)
+
+### Tests — Vitest + AMD bridge + first 5 tests (parseCSV)
+
+Closes the largest single gap in the codebase: ~8000 lines of
+frontend code across 13 AMD modules under
+`appserver/static/modules/` had ZERO direct unit tests. All
+JS testing went through browser E2E — slow, brittle, wrong
+layer for parsing / state-machine logic.
+
+Added:
+
+- **Vitest 3.2.4** (`devDependency`) — zero vulnerabilities,
+  smaller dep footprint than Jest, esbuild-based, same
+  Jest API. Pinned `^3.0.0` (v2.x had 5 moderate transitive
+  vite CVEs).
+- **`tests/js/lib_amd_bridge.cjs`** — 30-line bridge that
+  evaluates AMD modules in a Node `vm` sandbox with a
+  custom `define` capturing the factory's return value.
+  Dep mocks passed via a map. No RequireJS runtime needed.
+- **`tests/js/test_wl_csv_io.test.mjs`** — 5 tests against
+  `parseCSV()`, covering LF, CRLF+BOM, RFC 4180 quoted
+  fields with embedded commas + escaped quotes, binary-file
+  rejection, and header whitespace validation.
+- **`tests/js/vitest.config.cjs`** — scoped include glob so
+  vitest only picks up `tests/js/**/*.test.{mjs,cjs}` and
+  ignores `tests/e2e/` playwright-core tests, `tests/unit/`
+  pytest files, and `tests/integration/` pytest files.
+- **`package.json` scripts** — `npm run test:js` (one-shot)
+  and `npm run test:js:watch` (TDD mode).
+
+Run timings: 5/5 pass in 178ms (4ms test time + Vitest
+startup). That's the speed ratio that justifies the
+investment — ~100× faster than browser E2E for the same
+logical assertions.
+
+Why parseCSV first: genuinely pure (string → `{headers,
+rows, errors}`), no DOM access, no HTTP, no jQuery use in
+body. CSV parsing is historically buggy territory (BOM,
+embedded quotes, mixed line endings) — high signal per
+test. Other modules mix DOM access into their pure helpers
+and need richer mocks; Day 2-3 will add those.
+
+CI integration deferred to Ring 5 Day 4-5 (where E2E gating
+gets decided together with JS unit gating, per the
+strategic plan).
+
+See `docs/RING_FINDINGS.md` "Ring 4 Day 1 — JS unit-test
+layer" for the full design rationale (framework choice,
+bridge mechanics, what makes a good first target).
+
+---
+
 ## Unreleased — 2026-05-10 (Ring 3 close — Day 6: retrospective)
 
 ### Tests — Ring 3 sign-off
