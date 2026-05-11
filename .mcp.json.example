@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "Project-level MCP server registry. Copy this to .mcp.json (which is",
+    "gitignored) and fill in your local Splunk admin password before",
+    "starting Claude Code.",
+    "",
+    "Why .mcp.json itself is gitignored: it holds the dev Splunk container",
+    "password in plaintext. The example is committed so contributors can",
+    "replicate the MCP topology without leaking that credential.",
+    "",
+    "Why playwright-iso lives here (not in ~/.claude/.mcp.json): the VSCode",
+    "Claude Code extension reads project .mcp.json + plugin marketplace",
+    "MCPs, but NOT the user-level ~/.claude/.mcp.json. Discovered",
+    "2026-05-11. See: ~/.claude/projects/c--Users-PC-wl-manager/memory/",
+    "reference_playwright_mcp_setup.md"
+  ],
+  "mcpServers": {
+    "splunk": {
+      "command": "C:\\Users\\PC\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
+      "args": ["C:\\Users\\PC\\.claude\\mcp\\splunk_mcp_server.py"],
+      "env": {
+        "SPLUNK_HOST": "localhost",
+        "SPLUNK_PORT": "8089",
+        "SPLUNK_USER": "admin",
+        "SPLUNK_PASS": "<your-splunk-admin-password>",
+        "SPLUNK_CONTAINER": "wl_manager_test",
+        "WL_APP_PATH": "C:/Users/PC/wl_manager"
+      }
+    },
+    "playwright-iso": {
+      "_note": "Isolated/headless Playwright MCP. Tools surface under mcp__playwright-iso__* namespace. First invocation downloads Chromium (~30 s, one-time per machine).",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    }
+  }
+}
