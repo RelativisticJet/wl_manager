@@ -64,6 +64,61 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-11 (Ring 5 Day 5: retrospective + ring close)
+
+### Docs — Ring 5 close
+
+Docs-only commit. Ring 5 was the CI-completion ring
+that wired automated signal into every test layer the
+project owns (Python unit, JS unit, integration, E2E
+smoke + full, security baseline, accessibility audit)
+and closed the deferred items from Rings 3-4.
+
+Final Ring 5 numbers:
+
+- 4 new GitHub Actions workflows: e2e-smoke,
+  e2e-full, zap-baseline, a11y-audit
+- 1 new job in the existing ci.yml (js-unit-tests)
+- 2 new devDeps: `@axe-core/playwright`, `axe-core`
+- 3 new infrastructure subdirs: `.zap/`, `tests/a11y/`
+- 1 Decision Log entry (E2E gating; the per-developer
+  CLAUDE.md row, not in this repo)
+
+Tests now CI-gated per PR:
+
+- Python unit (already existed)
+- Python integration (already existed)
+- JS unit (NEW — Day 1)
+- E2E smoke (NEW — Day 2; 3 non-destructive tests)
+
+Tests CI-gated nightly/weekly (NEW):
+
+- E2E full (20 tests, nightly Mon-Sun 03:00 UTC)
+- ZAP baseline (weekly Sun 04:00 UTC)
+- a11y audit (weekly Sat 04:00 UTC)
+
+Total CI surface change: ~5 minutes added to PR
+feedback time; ~75 minutes added to nightly + weekly
+windows (during low-traffic hours).
+
+Explicit non-deliverables (called out so future
+sessions don't mistake them for missed scope):
+
+- ZAP findings triage — needs first nightly run to
+  produce the artifact. Triage flow is documented.
+- a11y violations triage — same as ZAP.
+- Manual a11y verification (keyboard nav, screen
+  reader, reduced-motion) — out of scope for the
+  automated-tooling ring; tracked in tests/a11y/README.md.
+- FIM dual-store chaos — still deferred from Ring 4.
+
+Full retrospective with process observations, the
+two-workflow E2E pattern's generalizability, and
+suggested next-ring scope in `docs/RING_FINDINGS.md`
+"Ring 5 — Day 5 — Ring 5 retrospective".
+
+---
+
 ## Unreleased — 2026-05-11 (Ring 5 Day 4: a11y audit via axe-core)
 
 ### CI — automated WCAG 2.1 Level AA conformance check

@@ -3252,3 +3252,283 @@ during a multi-step mutation?" instead of just
 the second-biggest: it pins design contracts that
 nobody had written down before the test forced them
 into the open.
+
+## Ring 5 (CI completion: JS unit + E2E + ZAP + a11y)
+
+Started 2026-05-11 immediately after Ring 4 close.
+**Tooling-focused ring** — not feature work, not bug
+hunting. The goal was to close the operational gaps
+the prior rings deferred: PR-level signal on every
+test layer the project owns, plus the security and
+accessibility scans that a release-ready open-source
+project is expected to run.
+
+### Day 1 — JS unit CI integration
+
+The 46 JS unit tests added in Ring 4 Days 1-3 ran
+only via `npm run test:js` on a developer's machine.
+Day 1 wires them into `.github/workflows/ci.yml` as a
+separate `js-unit-tests` job so every PR gets a
+green/red signal on JS unit-test status.
+
+Design choices:
+
+- **Separate job, not folded into `unit-tests`**:
+  Python and JS dep stacks are unrelated. Mixing them
+  in one job means a dep failure in one ecosystem
+  breaks the signal of the other.
+- **Node 20 LTS**: Vitest 3.x requires Node ≥18; LTS
+  matches what most contributors run locally. Pinning
+  to LTS avoids surprises from non-LTS releases.
+- **`npm ci`** (strict, reproducible): fails on
+  package.json/lockfile drift instead of silently
+  resolving. Catches uncommitted lockfile changes at
+  CI time, not at deploy.
+- **2-min hard timeout**: tests run in <250ms locally.
+  Headroom for slow GitHub runners + the npm install
+  step.
+
+Also closes the Ring 4 Day 6 deferral on the stale
+legacy `lookups/_versions/_approval_queue.json` —
+already removed by the integration suite's teardown,
+so no code change needed. Deferral closed by
+observation.
+
+### Day 2 — E2E CI-gating (smoke on PR + full nightly)
+
+Closes the Ring 3 retrospective gap: 20 Playwright
+E2E tests under `tests/e2e/` were not CI-gated at
+all. PR-introduced regressions had to wait for a
+developer's ad-hoc manual run to surface.
+
+Chose a two-workflow shape over the four alternatives:
+
+- **e2e-smoke.yml** (`pull_request` + `push:main`) —
+  3 non-destructive tests (`test_trash_traversal`,
+  `test_rate_limit_burst`,
+  `test_control_panel_long_content`). ~3-5 min total.
+  Deliberately does NOT set `WL_TEST_HARNESS=1` —
+  accidental destructive helper calls fail at the gate
+  rather than silently mutating CI state.
+- **e2e-full.yml** (`schedule: 03:00 UTC nightly` +
+  `workflow_dispatch`) — all 20 tests including the 3
+  destructive ones (cooldown tamper, adversarial
+  hardening, admin limits), the pixel-diff visual
+  regression test, concurrency stress, and the RBAC
+  role matrix. `WL_TEST_HARNESS=1` set inline per
+  destructive step, never job-wide. 60-min timeout.
+
+**Alternatives considered and rejected**:
+
+- Full E2E on every PR — 30+ min added per PR, rate-
+  limit collisions worsen at scale
+- PR-label-gated (`e2e` label) — signal degrades as
+  contributors forget the label
+- Manual `workflow_dispatch` only with no nightly —
+  opt-in tools get used heavily for a month then
+  forgotten
+- Status quo (never run in CI) — what Day 2 replaced
+
+Maintenance rule: new E2E tests land in nightly by
+default. Promote to smoke only after ≥2 weeks of
+stability in nightly AND a smoke slot opens (cap ~5
+tests to keep PR latency <5 min).
+
+### Day 3 — OWASP ZAP baseline scan
+
+Passive security scan of the Splunk Web UI at
+`http://localhost:8000`. Weekly cadence (Sunday 04:00
+UTC) + `workflow_dispatch`. Uses
+`zaproxy/action-baseline@v0.14.0`. Inspects response
+headers, cookies, info-disclosure patterns, and basic
+surface security. No attack payloads, no mutations.
+
+Why baseline (not full or API):
+
+- **Full** scan sends SQLi/XSS payloads — would
+  trigger our own rate limiters and FIM alerts every
+  run. Not suitable for unattended CI; better as an
+  ad-hoc developer-machine tool.
+- **API** scan needs an OpenAPI spec we don't ship.
+  The REST handler is documented in code, not a
+  machine-readable schema. If we ever publish an
+  OpenAPI spec, promote to `action-api-scan`.
+- **Baseline** catches header drift cheaply (~5-15
+  min per run) and surfaces real issues without
+  polluting state.
+
+`cmd_options: -l FAIL -a` — only FAIL-level findings
+cause CI failure; WARN-level findings get reported in
+the HTML/Markdown artifacts but don't block. Default
+behavior (fail on WARN+) would flag every Splunk
+default header.
+
+Maintenance contract in `.zap/rules.tsv`: every
+`IGNORE` entry must cite the rule title, the
+Splunk-specific reason it's acceptable, and the date
+added. Initially empty; first run will produce a
+baseline to triage.
+
+### Day 4 — a11y audit via axe-core
+
+WCAG 2.1 Level AA conformance check for the three
+main wl_manager dashboards (`whitelist_manager`,
+`control_panel`, `audit`). Uses
+`@axe-core/playwright`. Weekly cadence (Saturday
+04:00 UTC) + `workflow_dispatch`.
+
+Logs in as `superadmin1` so every role-conditional UI
+subtree renders. An analyst-tier scan would miss
+admin-rendered content. Severity threshold:
+`serious`/`critical` violations fail; `moderate`/`minor`
+are reported but informational.
+
+Why axe-core (not pa11y or Lighthouse):
+
+- **axe-core**: highest signal-to-noise of any open
+  a11y engine. Rules tightly aligned with WCAG
+  criteria and curated by Deque.
+- **pa11y**: wraps axe-core, less direct rule control.
+  Equivalent quality, more layers.
+- **Lighthouse**: bundles a11y into a full perf
+  audit. We only want the a11y signal.
+
+Maintenance contract in `tests/a11y/README.md`: every
+suppression in `baseline.json` must cite the rule
+id, selectors, Splunk-specific reason, and date. The
+README documents the triage flow for the first
+nightly run.
+
+Caveats (documented): axe-core is the automated floor.
+It doesn't catch keyboard-only navigation, screen-
+reader announcement quality, or reduced-motion
+preferences. Those need periodic manual testing.
+
+### Day 5 — Ring 5 retrospective
+
+This entry.
+
+#### What landed
+
+| Day | Artifact | Trigger | Commit |
+|-----|----------|---------|--------|
+| 1 | `js-unit-tests` job in `ci.yml` | PR + push:main | `d083fb0` |
+| 2 | `e2e-smoke.yml` + `e2e-full.yml` | PR (smoke) + nightly (full) | `92d2b7a` |
+| 3 | `zap-baseline.yml` + `.zap/rules.tsv` | Weekly + dispatch | `17e44fd` |
+| 4 | `a11y-audit.yml` + `tests/a11y/` | Weekly + dispatch | `96c7a15` |
+| 5 | This retro (docs only) | n/a | (this commit) |
+
+Net additions:
+
+- **4 new GitHub Actions workflows** (e2e-smoke,
+  e2e-full, zap-baseline, a11y-audit) + 1 new job in
+  the existing ci.yml.
+- **2 new devDeps**: `@axe-core/playwright` and
+  `axe-core`.
+- **3 new infrastructure subdirs**: `.zap/`,
+  `tests/a11y/` (with `lib_a11y.cjs`,
+  `test_a11y_dashboards.cjs`, `baseline.json`,
+  `README.md`).
+- **1 Decision Log entry** in CLAUDE.md (per-developer,
+  not committed) covering the E2E gating rationale.
+
+Tests now CI-gated per PR:
+
+- Python unit (already existed): 609 tests, ~15s
+- Python integration (already existed): 330 fast
+  tests, ~7.5 min
+- **JS unit (new)**: 46 tests, ~250ms
+- **E2E smoke (new)**: 3 tests, ~3-5 min
+
+Tests CI-gated nightly/weekly (new):
+
+- E2E full (20 tests, nightly 03:00 UTC)
+- ZAP baseline (weekly Sun 04:00 UTC)
+- a11y audit (weekly Sat 04:00 UTC)
+
+Total CI surface change: ~5 minutes added to PR
+feedback time; ~75 minutes added to nightly +
+weekly windows (during low-traffic hours).
+
+#### What didn't land — explicit non-deliverables
+
+This was a tooling ring. None of these were in scope:
+
+- **Triage of ZAP findings** — requires first CI run
+  to produce the report. Triage flow is documented;
+  the first nightly producing the artifact starts the
+  clock.
+- **Triage of a11y violations** — same. The first
+  weekly artifact will surface the work.
+- **Manual a11y verification** (keyboard nav, screen
+  reader, reduced-motion) — explicitly out of scope
+  for an automated-tooling ring.
+- **FIM dual-store chaos** — deferred from Ring 4,
+  still deferred. Genuine 2-3x complexity bump that
+  needs a dedicated scripted-input chaos module.
+
+#### Bugs / process issues surfaced
+
+Two small things caught during the ring:
+
+1. **CLAUDE.md is gitignored** (Day 2). I drafted a
+   Decision Log entry directly into CLAUDE.md before
+   realizing it wouldn't be committed. Moved the
+   public-facing rationale into the workflow file
+   header comments + the CHANGELOG entry. Lesson:
+   for any decision that future contributors need to
+   see, the home is a committed file (workflow YAML
+   comments, CHANGELOG, or `docs/`) — not CLAUDE.md.
+2. **MD060/table-column-style noise** persists across
+   most CHANGELOG entries. The warnings are
+   pre-existing in the table on line 56 (the
+   round-by-round summary). Worth a one-shot
+   reformat pass to silence them, but not Ring 5
+   scope.
+
+#### Process observations
+
+- The four Ring 5 days each came in well under
+  estimated time (15-30 min of editing per day, not
+  counting CI debug which would happen post-merge).
+  Tooling rings have a different shape from
+  feature/test rings: most of the work is YAML +
+  thinking-about-failure-modes, not code.
+- The "first-run flow" pattern (used in both ZAP and
+  a11y) is the right shape for any audit-tool
+  integration: ship the infrastructure with empty
+  baselines, document the triage flow in a README,
+  let the first CI run produce the report, then
+  triage in a follow-up commit. This avoids the trap
+  of "we ran the tool locally, fixed all the easy
+  findings, shipped" — which leaves the CI side
+  fragile because nobody updated the suppressions
+  to match what CI sees.
+- The two-workflow E2E pattern (smoke + full)
+  generalizes. If we later add a `mutation-testing`
+  workflow or a `load-test` workflow, the same
+  cadence question applies and the answer is
+  probably the same: smoke on PR, full on schedule.
+
+#### Suggested next rings (not committed)
+
+The user explicitly asked these two be surfaced
+AFTER all rings close (recorded in
+`memory/project_post_rings_reminders.md`):
+
+1. **"Show Requested Data" feature** in the approval
+   queue UI (next feature on post-hardening backlog,
+   per CLAUDE.md "Pending / Future Work").
+2. **Sigstore release-verification dry-run**
+   (release-blocking per CLAUDE.md; runbook in
+   `docs/RELEASE_CHECKLIST.md` section 8).
+
+Both are user-visible work, distinct from the
+audit/test infrastructure rings. Surface them at the
+ring-close transition AFTER the final ring closes.
+
+Ring 5 closes here. The project now has automated
+CI signal on every test layer it owns (Python unit,
+JS unit, integration, E2E smoke + full, security
+baseline, accessibility) and the operational
+foundation for adding more.
