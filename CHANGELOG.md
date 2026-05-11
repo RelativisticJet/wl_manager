@@ -64,6 +64,44 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-11 (Ring 5 Day 1: JS unit CI integration)
+
+### CI — `js-unit-tests` job added to `.github/workflows/ci.yml`
+
+The 46 JS unit tests added in Ring 4 (Days 1-3) were
+runnable only via `npm run test:js`. Day 1 of Ring 5
+wires them into the existing CI workflow as a separate
+`js-unit-tests` job so every PR gets a green/red signal
+on JS unit-test status without manual intervention.
+
+Job design:
+
+- Separate from `unit-tests` (Python) so a dep failure
+  in one ecosystem doesn't break the signal of the
+  other.
+- Node 20 LTS (Vitest 3.x requires Node ≥18; LTS matches
+  what most contributors run locally).
+- `npm ci` (strict, reproducible — fails on
+  package.json/lockfile drift instead of silently
+  resolving).
+- 2-minute hard timeout (tests run in <250ms locally;
+  generous headroom for slow runners).
+- npm cache keyed on `package-lock.json` for fast
+  reruns when deps unchanged.
+
+#### Legacy queue file cleanup (no-op as of Day 1)
+
+Ring 4 Day 6 flagged the stale legacy
+`lookups/_versions/_approval_queue.json` as dead state
+for cleanup. Verified during Day 1 setup that the
+integration suite's teardown step has already removed
+it from the dev container — the cleanup is already a
+no-op on the running instance. No code change needed;
+the deferral is closed by observation rather than
+action.
+
+---
+
 ## Unreleased — 2026-05-11 (Ring 4 Day 8: retrospective + suite verification)
 
 ### Docs — Ring 4 close
