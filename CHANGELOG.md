@@ -64,6 +64,85 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-11 (Ring 5 Day 2: E2E CI-gating)
+
+### CI — two new workflows wire E2E tests into CI on a tiered cadence
+
+Before Day 2, the 20 Playwright E2E tests under `tests/e2e/`
+were not CI-gated at all — they ran only when a developer
+manually invoked them. PR-introduced regressions had to
+wait for an ad-hoc local run to surface. Day 2 closes that
+gap with a two-workflow shape that matches the standard
+test-pyramid principle: heavier tests run less frequently
+but never skip.
+
+Added:
+
+- `.github/workflows/e2e-smoke.yml` — runs on every PR
+  and push-to-main. Three non-destructive flow tests:
+  `test_trash_traversal.cjs` (path-traversal security
+  regression), `test_rate_limit_burst.cjs` (concurrent
+  GETs against the rate limiter), and
+  `test_control_panel_long_content.cjs` (long-content UI
+  rendering regression). ~3-5 min total, 15-min timeout.
+  Deliberately does NOT set `WL_TEST_HARNESS=1` — if any
+  smoke test accidentally tries a destructive helper, it
+  fails cleanly at the gate.
+- `.github/workflows/e2e-full.yml` — runs nightly at
+  03:00 UTC and via manual `workflow_dispatch`. All 20
+  E2E tests including the 3 destructive ones
+  (`test_cooldown_tamper`, `test_adversarial_hardening`,
+  `test_admin_limits`), the visual-regression pixel-diff
+  test, the concurrency stress tests, and the role-matrix
+  RBAC tests. `WL_TEST_HARNESS=1` is set inline only on
+  the destructive steps, never job-wide. 60-min timeout.
+  Visual diff PNGs and Splunk logs uploaded as artifacts
+  on failure.
+
+Design rationale lives in the workflow file comments
+(both files have extensive header comments covering
+the alternatives considered, why this won, and a
+maintenance rule for promoting new tests from nightly
+to smoke). The rule caps smoke at ~5 tests to keep PR
+latency under 5 minutes.
+
+**Alternatives considered**:
+
+- Full E2E on every PR — rejected (30+ min added per
+  PR, rate-limit collisions worsen at scale).
+- PR-label-gated (`e2e` label opt-in) — rejected
+  (signal degrades over time as contributors forget
+  the label).
+- Manual `workflow_dispatch` only with no nightly —
+  rejected (opt-in tools get used heavily for a month
+  then forgotten).
+- Status quo (never run in CI) — what Day 2 replaces;
+  20 tests with real bug-finding signal lived entirely
+  outside CI.
+
+**Reversal cost**: low. To revert to full-E2E-on-PR,
+change `schedule` and `workflow_dispatch` to
+`pull_request` in `e2e-full.yml` and delete
+`e2e-smoke.yml`. To revert to status quo, delete both
+workflow files.
+
+**Maintenance rule**: by default, NEW E2E tests land
+in `e2e-full.yml` (nightly). Promote to `e2e-smoke.yml`
+only after the test has been stable in nightly for
+≥2 weeks AND a smoke slot opens up (cap ~5 tests).
+If promoted, document the choice in the workflow
+header and remove an existing smoke test if the cap
+is hit.
+
+#### Closing the Ring 3 retrospective gap
+
+The Ring 3 retrospective flagged E2E CI-gating as a
+real risk: "E2E browser tests aren't CI-gated and
+impose the real risk." Day 2 closes that gap with the
+two-workflow shape above.
+
+---
+
 ## Unreleased — 2026-05-11 (Ring 5 Day 1: JS unit CI integration)
 
 ### CI — `js-unit-tests` job added to `.github/workflows/ci.yml`

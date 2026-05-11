@@ -1,0 +1,190 @@
+name: E2E Full (nightly + manual)
+
+# Runs the COMPLETE tests/e2e/ Playwright suite — 20 tests including
+# destructive ops (KV tampering, baseline rebuild, admin-limit rate
+# exhaustion), visual regression (pixel-diff baselines), concurrency
+# stress, and the adversarial-hardening matrix. Nightly cadence keeps
+# regressions caught within 24h of merge without paying the cost on
+# every PR.
+#
+# Triggers:
+#   - schedule: nightly at 03:00 UTC (low-traffic for GitHub runners)
+#   - workflow_dispatch: manual trigger for ad-hoc verification (e.g.,
+#     after a large refactor before merging)
+#
+# PR gating goes through e2e-smoke.yml — see the CHANGELOG entry
+# "Ring 5 Day 2: E2E CI-gating" for the alternatives-considered
+# rationale (full-on-PR vs tag-gated vs manual-only vs this
+# two-workflow shape).
+#
+# WL_TEST_HARNESS=1 GATE — set INLINE per step that needs it, never
+# job-wide. The destructive helpers under tests/e2e/lib_helpers.cjs
+# require this env var AND the container name "wl_manager_test" to
+# proceed. Non-destructive tests omit the env var so any accidental
+# destructive call gets caught by the gate rather than silently
+# mutating CI state.
+
+on:
+  schedule:
+    # 03:00 UTC = 04:00 Europe/Warsaw (winter) / 05:00 (summer). Off
+    # peak for both EU and US contributor activity, so a flaky run
+    # is unlikely to collide with someone trying to merge.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    # Manual trigger for ad-hoc verification. No inputs — the suite
+    # is the same shape regardless of who launches it.
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-full:
+    name: E2E Full
+    runs-on: ubuntu-latest
+    # 60 minutes is the realistic upper bound: ~1 min container
+    # startup + ~30s setup + ~40-50 min full suite + ~30s teardown.
+    # The longest individual test is test_adversarial_hardening
+    # (1480 lines, runs the full RBAC matrix across 3 roles).
+    timeout-minutes: 60
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Start Splunk container
+        run: docker compose up -d
+
+      - name: Fix bind-mount permissions for Splunk user
+        run: |
+          docker exec -u 0 wl_manager_test \
+            chown -R splunk:splunk \
+              /opt/splunk/etc/apps/wl_manager/bin \
+              /opt/splunk/etc/apps/wl_manager/default \
+              /opt/splunk/etc/apps/wl_manager/lookups \
+              /opt/splunk/etc/apps/wl_manager/appserver \
+              /opt/splunk/etc/apps/wl_manager/metadata
+
+      - name: Wait for Splunk + provision test users/roles
+        run: bash tests/e2e/setup_test_env.sh wl_manager_test
+
+      # ── Non-destructive tests (no WL_TEST_HARNESS) ────────────────
+      # Order: cheap/fast first so an early failure surfaces quickly.
+
+      - name: Harness gate (verifies the gate itself works)
+        # This test EXPECTS WL_TEST_HARNESS=1 — its purpose is to
+        # verify the gate accepts AND rejects correctly. So unlike
+        # other non-destructive tests, this one needs the var set.
+        run: WL_TEST_HARNESS=1 node tests/e2e/test_harness_gate.cjs
+
+      - name: Trash path-traversal regression
+        run: node tests/e2e/test_trash_traversal.cjs
+
+      - name: Rate-limit burst
+        run: node tests/e2e/test_rate_limit_burst.cjs
+
+      - name: Control panel long-content rendering
+        run: node tests/e2e/test_control_panel_long_content.cjs
+
+      - name: Audit dropdowns
+        run: node tests/e2e/test_audit_dropdowns.cjs
+
+      - name: Role matrix (RBAC)
+        run: node tests/e2e/test_role_matrix.cjs
+
+      - name: Role analyst
+        run: node tests/e2e/test_role_analyst.cjs
+
+      - name: Role admin
+        run: node tests/e2e/test_role_admin.cjs
+
+      - name: Role superadmin
+        run: node tests/e2e/test_role_superadmin.cjs
+
+      - name: Concurrent save race
+        run: node tests/e2e/test_concurrent_save_race.cjs
+
+      - name: Concurrent approval race
+        run: node tests/e2e/test_concurrent_approval_race.cjs
+
+      - name: Concurrency (general)
+        run: node tests/e2e/test_concurrency.cjs
+
+      - name: Security bypass attempts
+        run: node tests/e2e/test_security_bypass.cjs
+
+      - name: State machine
+        run: node tests/e2e/test_state_machine.cjs
+
+      - name: Dual superadmin
+        run: node tests/e2e/test_dual_superadmin.cjs
+
+      - name: Audit stress
+        run: node tests/e2e/test_audit_stress.cjs
+
+      - name: Visual regression
+        run: node tests/e2e/test_visual_regression.cjs
+
+      # ── Destructive tests (WL_TEST_HARNESS=1 inline) ─────────────
+      # Per tests/e2e/README.md run-order guidance: cooldown tamper
+      # first (resets KV state cleanly), then adversarial (heavy),
+      # then admin_limits last (resets counter at start, safe).
+
+      - name: Cooldown tamper (destructive)
+        run: WL_TEST_HARNESS=1 node tests/e2e/test_cooldown_tamper.cjs
+
+      - name: Adversarial hardening matrix (destructive, heavy)
+        run: WL_TEST_HARNESS=1 node tests/e2e/test_adversarial_hardening.cjs
+
+      - name: Admin limits (destructive)
+        run: WL_TEST_HARNESS=1 node tests/e2e/test_admin_limits.cjs
+
+      # ── Failure capture ──────────────────────────────────────────
+
+      - name: Capture Splunk logs on failure
+        if: failure()
+        run: |
+          mkdir -p ci-logs
+          docker compose logs --tail=2000 > ci-logs/compose.log 2>&1 || true
+          docker exec wl_manager_test \
+            cat /opt/splunk/var/log/splunk/splunkd.log 2>/dev/null \
+            | tail -2000 > ci-logs/splunkd.log || true
+          docker exec wl_manager_test \
+            cat /opt/splunk/var/log/splunk/splunkd_access.log 2>/dev/null \
+            | tail -1000 > ci-logs/splunkd_access.log || true
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-full-logs-${{ github.run_id }}
+          path: ci-logs/
+          retention-days: 14
+
+      - name: Upload pixel-diff artifacts on failure
+        # test_visual_regression.cjs writes diff PNGs to tests/e2e/visual_diff/
+        # when a comparison fails. Uploading them lets the next morning's
+        # triage check the actual visual divergence.
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-diffs-${{ github.run_id }}
+          path: tests/e2e/visual_diff/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Teardown
+        if: always()
+        run: docker compose down -v

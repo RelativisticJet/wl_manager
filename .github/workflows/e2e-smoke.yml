@@ -1,0 +1,127 @@
+name: E2E Smoke (PR gate)
+
+# Runs a small, non-destructive subset of the tests/e2e/ Playwright
+# suite against a real Splunk 9.3.1 container on every PR. The
+# full 20-test suite (destructive + visual regression + concurrency
+# + stress) runs nightly via e2e-full.yml — only smoke runs here so
+# PR latency stays under ~5 minutes.
+#
+# Smoke selection (3 tests, ~3-5 min total runtime):
+#   - test_trash_traversal.cjs    — security regression for path
+#                                    traversal in dual-admin gate
+#   - test_rate_limit_burst.cjs   — concurrent-GET rate-limiter check
+#   - test_control_panel_long_content.cjs — UI rendering regression
+#                                    for long-content tables
+#
+# All three submit through the real REST + UI path. None call
+# `assertTestHarness()` (the destructive-ops gate), so we deliberately
+# do NOT set WL_TEST_HARNESS=1 here — if any smoke test accidentally
+# tries a destructive helper, it will fail cleanly with a gate error
+# instead of silently mutating CI container state.
+#
+# See the e2e-full.yml header for the nightly counterpart and
+# CHANGELOG entry "Ring 5 Day 2: E2E CI-gating" for the full
+# alternatives-considered rationale.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-smoke:
+    name: E2E Smoke
+    runs-on: ubuntu-latest
+    # 15 minutes is generous: ~1 min container startup + ~30s
+    # setup_test_env + ~3-5 min smoke runtime + ~30s teardown.
+    # The headroom absorbs cold-runner variance and Playwright
+    # browser download latency.
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install npm deps (Playwright bundled via playwright-core)
+        # `npm ci` reproducibly installs from package-lock.json. This
+        # pulls playwright-core which bundles the browsers needed by
+        # tests/e2e/lib_helpers.cjs :: createSession.
+        run: npm ci
+
+      - name: Install Playwright browsers
+        # playwright-core ships the JS API but not the browser binaries
+        # — we need an explicit install. Chromium is the only browser
+        # tests/e2e/ uses (per lib_helpers.cjs), so we install just it
+        # to keep CI runner provisioning fast.
+        run: npx playwright install --with-deps chromium
+
+      - name: Start Splunk container
+        run: docker compose up -d
+
+      - name: Fix bind-mount permissions for Splunk user
+        # Same fix as integration-tests.yml: bind-mount UIDs from the
+        # runner host don't match the in-container splunk user.
+        run: |
+          docker exec -u 0 wl_manager_test \
+            chown -R splunk:splunk \
+              /opt/splunk/etc/apps/wl_manager/bin \
+              /opt/splunk/etc/apps/wl_manager/default \
+              /opt/splunk/etc/apps/wl_manager/lookups \
+              /opt/splunk/etc/apps/wl_manager/appserver \
+              /opt/splunk/etc/apps/wl_manager/metadata
+
+      - name: Wait for Splunk + provision test users/roles
+        # Idempotent: creates wl_editor / wl_admin / wl_superadmin
+        # roles and analyst1 / wladmin1 / superadmin1 users.
+        run: bash tests/e2e/setup_test_env.sh wl_manager_test
+
+      # Smoke tests below. Each one runs as a separate step so a
+      # failure is attributed to a specific file in the GH Actions
+      # summary. We deliberately do NOT set WL_TEST_HARNESS=1 here
+      # — these tests don't need destructive helpers, and the
+      # missing var ensures any accidental destructive call gets
+      # caught by the gate.
+
+      - name: Smoke 1 — trash path-traversal regression
+        run: node tests/e2e/test_trash_traversal.cjs
+
+      - name: Smoke 2 — rate-limit burst
+        run: node tests/e2e/test_rate_limit_burst.cjs
+
+      - name: Smoke 3 — control-panel long-content rendering
+        run: node tests/e2e/test_control_panel_long_content.cjs
+
+      - name: Capture Splunk logs on failure
+        if: failure()
+        run: |
+          mkdir -p ci-logs
+          docker compose logs --tail=500 > ci-logs/compose.log 2>&1 || true
+          docker exec wl_manager_test \
+            cat /opt/splunk/var/log/splunk/splunkd.log 2>/dev/null \
+            | tail -1000 > ci-logs/splunkd.log || true
+          docker exec wl_manager_test \
+            cat /opt/splunk/var/log/splunk/splunkd_access.log 2>/dev/null \
+            | tail -500 > ci-logs/splunkd_access.log || true
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-smoke-logs-${{ github.run_id }}
+          path: ci-logs/
+          retention-days: 7
+
+      - name: Teardown
+        if: always()
+        run: docker compose down -v
