@@ -1,9 +1,12 @@
 {
   "scripts": {
     "test:js": "vitest run --config tests/js/vitest.config.cjs",
-    "test:js:watch": "vitest --config tests/js/vitest.config.cjs"
+    "test:js:watch": "vitest --config tests/js/vitest.config.cjs",
+    "test:a11y": "node tests/a11y/test_a11y_dashboards.cjs"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.11.3",
+    "axe-core": "^4.11.4",
     "pixelmatch": "^7.2.0",
     "playwright-core": "^1.59.1",
     "pngjs": "^7.0.0",

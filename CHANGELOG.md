@@ -64,6 +64,83 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-11 (Ring 5 Day 4: a11y audit via axe-core)
+
+### CI — automated WCAG 2.1 Level AA conformance check
+
+Adds an accessibility audit that scans the three main
+wl_manager dashboards (whitelist_manager, control_panel,
+audit) with axe-core via `@axe-core/playwright`. Runs
+weekly (Saturday 04:00 UTC) and on-demand via
+`workflow_dispatch`.
+
+Added:
+
+- `tests/a11y/lib_a11y.cjs` — wrapper around AxeBuilder.
+  Tags WCAG 2.0 A/AA, WCAG 2.1 A/AA, plus axe
+  best-practice. Severity threshold: `serious` or
+  `critical` violations fail; `moderate` and `minor` are
+  reported but informational.
+- `tests/a11y/test_a11y_dashboards.cjs` — main script.
+  Logs in as `superadmin1` (max-coverage account so every
+  role-conditional UI subtree renders), navigates each
+  dashboard, waits for a known-good ready selector, runs
+  the audit, writes per-page JSON + summary report.
+  Exit codes: 0 pass, 1 a11y failures, 2 infra error.
+- `tests/a11y/baseline.json` — empty suppression list
+  with the JSON shape `{ "<rule_id>": ["<selector>", ...] }`.
+- `tests/a11y/README.md` — full audit contract,
+  maintenance rules for suppressions (every entry must
+  cite the rule, selectors, Splunk-specific reason, and
+  date), and a note about what axe-core can't catch
+  (keyboard navigation, screen-reader announcement
+  quality, reduced-motion).
+- `.github/workflows/a11y-audit.yml` — weekly + dispatch.
+  Reports uploaded as artifacts (30-day retention) on
+  every run, not just failures, so the artifact stream
+  forms a longitudinal record. 25-min timeout.
+- `npm run test:a11y` script in `package.json`.
+- New devDeps: `@axe-core/playwright` (^4.11.3) and
+  `axe-core` (^4.11.4).
+
+#### Why axe-core (not pa11y or Lighthouse)
+
+- **axe-core** — highest signal-to-noise of any open
+  a11y engine. Rules tightly aligned with WCAG criteria
+  and curated by Deque (an actual a11y consultancy).
+- **pa11y** — wraps axe-core, less direct control over
+  rule filtering. Equivalent quality, more layers.
+- **Lighthouse** — bundles a11y into a full perf audit.
+  We only want the a11y signal; the perf overhead
+  doesn't pay off.
+
+#### First-run flow
+
+baseline.json starts empty. The first run will
+produce violations, many of them in Splunk-bundled
+DOM (header chrome, app nav, footer) that we don't
+control. Triage:
+
+1. Trigger workflow_dispatch.
+2. Download `a11y-reports-<run_id>` artifact.
+3. For each violation:
+   - If rooted in `appserver/static/**` or our handler's
+     output → **fix it**, don't suppress.
+   - If rooted in Splunk-bundled DOM → add to
+     baseline.json with reason.
+   - Genuinely ambiguous → manual review.
+4. Update `tests/a11y/README.md` "Suppressed violations"
+   table for every new entry.
+
+#### Caveats (documented in README)
+
+axe-core is the automated floor, not the ceiling. It
+doesn't catch keyboard-only navigation, screen-reader
+announcement quality, or reduced-motion preferences.
+Those need periodic manual testing.
+
+---
+
 ## Unreleased — 2026-05-11 (Ring 5 Day 3: OWASP ZAP baseline scan)
 
 ### CI — passive security scan of the Splunk Web UI
