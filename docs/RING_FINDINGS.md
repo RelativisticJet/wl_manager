@@ -3019,3 +3019,90 @@ later. The existing `feedback_dual_source_of_truth.md`
 memo already captures the design intent; production
 behavior is verified by the divergence-detection logic
 in `wl_fim.py` itself.
+
+### Day 7 — Hypothesis state-machine model of approval queue
+
+A pure-Python Hypothesis state machine exercises the
+approval queue's invariant-preservation contract with
+random sequences of submit / resolve / expire /
+break-timestamp operations. Catches the bug class
+example-based tests miss: subtle state-transition
+edge cases discovered by exploring sequences rather
+than individual inputs.
+
+`tests/unit/test_approval_queue_state_machine.py` —
+1 state machine + 3 property tests, 4 tests total,
+running in ~4s with 500 sequence examples (≈25k
+state transitions explored per run).
+
+#### The schema-drift finding
+
+First Hypothesis run surfaced what looked like a bug:
+after adversarially mutating an entry to legacy
+format (only `submitted_at`, no `timestamp`),
+`_validate_queue_entry` rejected the entry but
+`expire_pending_approvals` accepted it. Two
+production-code functions disagree about the same
+data.
+
+Investigation showed this is INTENTIONAL:
+
+- `_validate_queue_entry` is the **submission gate**.
+  Only called from `_create_queue_entry`, on entries
+  the handler has just built. Strict by design:
+  every submission must have all five required fields
+  including `timestamp`. Catches schema drift at
+  write time.
+- `expire_pending_approvals` is the **read pruner**.
+  Called on every read of the queue. Lenient by
+  design: legacy entries that lack `timestamp` (the
+  build-645 dual-admin format) fall back to
+  `submitted_at`, so they don't get incorrectly
+  expired during the transition period after the
+  build-645 fix.
+
+Removing the leniency would re-introduce the build-645
+bug. Adding strictness to expire would break legacy
+entries still on the queue. The drift is the correct
+design.
+
+The test now pins BOTH contracts separately:
+
+- Inside the `submit` rule: every freshly-built entry
+  passes `_validate_queue_entry` (strict at write).
+- As an invariant: `expire_pending_approvals` never
+  crashes on entries lacking `timestamp` (lenient at
+  read).
+
+#### Other contracts pinned
+
+1. **Idempotence**: `expire(expire(q)) == expire(q)`
+   for any queue `q`. A regression that makes expire
+   non-idempotent would cause queue entries to
+   slowly disappear across reads.
+2. **request_id uniqueness**: no two entries share an
+   ID at any point during the random sequence.
+3. **Legal-status closure** (via property tests): the
+   validator accepts exactly the 5 documented statuses
+   and rejects any other string. Pins the
+   schema-evolution gate — adding a new status without
+   updating the validator's allow-list fails the test.
+4. **Required-field closure** (via property tests):
+   each of the 5 required fields, when missing,
+   produces a rejection with the field name in the
+   error message. Pins the validation error contract.
+
+#### Why state machines, not just property tests
+
+The build-614 dual-admin schema drift lived for months
+without coverage because the bug needed a SEQUENCE
+(dual-admin submit by analyst → admin approval →
+replay with timestamp-vs-submitted_at mismatch). An
+example-based property test would have caught one
+end of it but not the multi-step bug.
+
+State-machine testing generates random sequences and
+shrinks failing examples to minimal reproducers. The
+output of a failing run looks like a unit test you
+could paste into the codebase — exactly the kind of
+artifact a reviewer can act on without prior context.

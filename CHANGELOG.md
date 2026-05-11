@@ -64,6 +64,79 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-11 (Ring 4 Day 7: Hypothesis state-machine model)
+
+### Tests — property-based state-machine coverage for approval queue
+
+A pure-Python Hypothesis state machine that exercises
+the approval queue's pure functions
+(`_validate_queue_entry`, `expire_pending_approvals`)
+with random sequences of submit / resolve / expire /
+time-advance / break-timestamp operations. Catches the
+multi-step bug class that example-based tests miss
+— the same class that hid the build-614 dual-admin
+schema drift for months.
+
+Added:
+
+- `tests/unit/test_approval_queue_state_machine.py` —
+  1 state-machine test + 3 property tests, 500
+  example sequences per run (≈25k state transitions
+  explored), passes in ~4s.
+
+Contracts pinned:
+
+- **Submit-time strict validation** (inside the
+  `submit` rule): every freshly-built entry passes
+  `_validate_queue_entry`. Regression here is the
+  build-614 schema-drift class at write time.
+- **Read-time lenient handling** (invariant):
+  `expire_pending_approvals` never crashes on entries
+  lacking `timestamp`. Pins the build-645 fallback
+  contract — entries with only `submitted_at` are
+  treated as if `timestamp == submitted_at`.
+- **Idempotence**:
+  `expire(expire(q)) == expire(q)`. Regression would
+  cause queue entries to silently disappear across
+  reads.
+- **request_id uniqueness** across all entries.
+- **Legal-status closure** (property test): validator
+  accepts exactly the 5 documented statuses (`pending`,
+  `approved`, `rejected`, `expired`, `cancelled`),
+  rejects any other string.
+- **Required-field closure** (property test): each of
+  the 5 required fields produces a rejection with the
+  field name in the error message when missing.
+
+#### Schema-drift between two production functions (documented, not a bug)
+
+First Hypothesis run surfaced an apparent contradiction:
+`_validate_queue_entry` rejects entries missing
+`timestamp`, but `expire_pending_approvals` accepts
+them via the build-645 fallback. Investigation showed
+the two functions serve different stages and the
+drift is INTENTIONAL:
+
+- `_validate_queue_entry` is the **submission gate**
+  (strict at write).
+- `expire_pending_approvals` is the **read pruner**
+  (lenient at read) to handle legacy entries from
+  before the build-645 fix.
+
+Removing the leniency would re-introduce build-645.
+Adding strictness to expire would orphan legacy
+entries on the queue. The test now pins both
+contracts separately so any future change in either
+direction fails this test.
+
+See `docs/RING_FINDINGS.md` "Day 7 — Hypothesis
+state-machine model of approval queue" for the full
+investigation and why state machines (rather than
+example-based property tests) are the right tool for
+this contract.
+
+---
+
 ## Unreleased — 2026-05-11 (Ring 4 Day 6: approval queue + bootstrap chaos)
 
 ### Tests — two more chaos scenarios on the Day 4 fixture
