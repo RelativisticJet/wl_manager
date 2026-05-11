@@ -64,6 +64,63 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-11 (Ring 4 Day 4: chaos-test fixture)
+
+### Tests — SIGKILL-mid-operation infrastructure (smoke green)
+
+Builds the missing leg of the test pyramid that the
+`feedback_non_atomic_operations.md` memo has flagged for
+months: integration tests that exercise what happens when
+splunkd dies BETWEEN steps of a multi-step state mutation.
+Day 4 is fixture-only; Day 5-6 will exercise specific
+crash scenarios on top of it.
+
+Added:
+
+- `tests/integration/lib_chaos.py` (~270 lines) — chaos
+  primitives: `kill_splunkd()` (SIGKILL the supervisor via
+  `docker exec -u 0 sh -c "kill -9 <PID>"`),
+  `restart_and_wait()` (`docker restart` + poll
+  `/services/server/info` until 200),
+  `kill_after_delay(operation, kill_delay_ms=100)` (runs
+  the operation in a background thread, kills mid-flight,
+  captures `ChaosResult`), `splunkd_uptime_seconds()` for
+  post-restart freshness assertions.
+- `tests/integration/test_chaos_smoke.py` — two smoke
+  tests that prove the fixture works end-to-end. Both
+  pass in ~51s. Marked `@pytest.mark.slow` so they don't
+  run on every pytest invocation.
+
+Three platform quirks surfaced during fixture
+construction, now documented in `lib_chaos.py` so future
+contributors don't repeat the diagnostic work:
+
+1. `kill` is not a binary in `splunk/splunk:9.3.1` (only
+   a shell builtin) — must wrap in `sh -c`.
+2. Intra-UID signals to capability'd processes get blocked
+   by `kernel.yama.ptrace_scope` even when the sender and
+   target share a UID — need `docker exec -u 0` (root).
+3. SIGKILLing splunkd takes the container down (splunkd
+   is effectively PID 1 via the ansible-playbook
+   entrypoint). Recovery uses `docker restart`, not
+   `docker start` + `splunk start`, because the
+   post-SIGKILL index fsck can leave splunkd in a
+   crash-loop with `docker start` alone.
+
+Also: switched the "did a restart actually happen?"
+assertion from `pre_pid != post_pid` to
+`splunkd_uptime_seconds() < 60s`. `docker restart`
+produces deterministic process startup ordering, so
+splunkd often gets the same PID twice. Uptime is a
+monotonic physical signal — PID collisions don't fool
+it.
+
+See `docs/RING_FINDINGS.md` "Day 4 — Chaos-test fixture"
+for the full investigation notes and the list of multi-
+step mutation paths Day 5-6 will exercise.
+
+---
+
 ## Unreleased — 2026-05-11 (Ring 4 Day 2-3: JS unit coverage expansion)
 
 ### Tests — +41 JS unit tests across 3 new test files

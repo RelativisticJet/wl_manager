@@ -2705,3 +2705,139 @@ coverage:
 - **Schema drift defensive defaults** (extractApprovalReason):
   missing payload returns `""`, not `undefined.something`.
 
+### Day 4 — Chaos-test fixture (SIGKILL + recovery)
+
+The Ring 1-3 integration suites exercised happy-path
+multi-step state mutations thoroughly: approval submit-
+then-replay, version snapshot + manifest update, FIM
+dual-store write, KV cooldown counter update. What none
+of them tested is the question the
+`feedback_non_atomic_operations.md` memo specifically
+flagged: **what happens if splunkd dies BETWEEN those
+steps?**
+
+Day 4 builds the infrastructure to ask that question.
+Day 5-6 uses it.
+
+#### Design: timing-based mid-operation kill
+
+`tests/integration/lib_chaos.py` (~270 lines) provides
+`kill_after_delay(operation, kill_delay_ms=100)` — runs
+the operation in a background thread, sleeps for the
+configured delay (long enough for the request to start
+writing, short enough to land mid-op), SIGKILLs splunkd,
+restarts the container, and polls
+`/services/server/info` until 200.
+
+SIGKILL not SIGTERM: SIGTERM gives splunkd a chance to
+flush + clean up — the OPPOSITE of what we want to
+simulate. SIGKILL is kernel-level unavoidable terminate;
+no shutdown hook runs. This mirrors "power cord pulled,"
+"OOM kill," "host crash."
+
+Caveat (documented in the module docstring): 100ms timing
+doesn't *guarantee* the kill lands mid-op. Splunk may
+finish the request before the kill arrives, especially
+for read-only or cached endpoints. When that happens the
+chaos test degrades to a happy-path test — which is also
+useful (it confirms the restart+resume path works for
+non-disrupted operations). For deterministic mid-op
+chaos you'd need a debug-only sleep injection point in
+the handler, which is out of scope for Ring 4.
+
+#### Three platform quirks surfaced and documented
+
+The fixture's smoke tests required diagnosing three
+non-obvious container behaviors. Each is now documented
+in `lib_chaos.py` so future contributors don't repeat
+the investigation.
+
+**1. ``kill`` is not a binary in `splunk/splunk:9.3.1`.**
+It's only a shell builtin. Direct `docker exec
+wl_manager_test kill -9 <PID>` returns OCI exit 127
+("executable file not found in $PATH"). Wrap in
+`sh -c "kill -9 <PID>"`.
+
+**2. Intra-UID signals to capability'd processes get
+blocked by `kernel.yama.ptrace_scope`.** splunkd runs
+as the `splunk` user (UID 41812), the default
+`docker exec` shell ALSO runs as the splunk user — same
+UID. But splunkd holds Linux capabilities (it binds
+privileged ports), and Yama's default ptrace policy
+treats capability'd targets as protected even from
+same-UID signals. Fix: `docker exec -u 0` (root).
+
+**3. SIGKILLing splunkd takes the container down.**
+splunkd is effectively the container's PID 1 via the
+ansible-playbook entrypoint that waits on it. When
+splunkd dies, the playbook exits, the container exits.
+`docker exec splunk start` then fails with "container
+is not running". So `restart_and_wait()` uses
+`docker restart <container>` — stop+start uniform
+whether the container is Exited or "Up but unhealthy"
+(observed when post-SIGKILL index fsck crashed splunkd
+after re-boot).
+
+#### Assertion choice: process uptime, not PID
+
+Initial smoke test asserted `post_pid != pre_pid` to
+prove a restart happened. This failed on a re-run
+because `docker restart` produces deterministic process
+startup ordering — the new splunkd often gets the same
+PID as its predecessor. Replaced with
+`splunkd_uptime_seconds()` (reads `ps -o etimes=`):
+post-restart splunkd must be younger than 60s, AND
+younger than the pre-test splunkd (which has been
+running for minutes or hours). PID collisions don't
+fool this check.
+
+#### Tests
+
+`tests/integration/test_chaos_smoke.py`:
+
+- `test_chaos_fixture_smoke` — end-to-end smoke: issue a
+  read-only request, kill ~100ms later, recover, assert
+  the cycle completed cleanly (kill_succeeded, no
+  errors, recovery_seconds > 0, post-uptime < 60s).
+  Read-only operation chosen because we don't want to
+  leave half-written state for subsequent tests.
+- `test_kill_splunkd_then_restart` — lower-level: just
+  the kill + restart primitives, without an operation
+  in flight.
+
+Both marked `@pytest.mark.slow` and `@pytest.mark.docker`
+so they don't run on every pytest invocation. Run with
+`python -m pytest tests/integration/test_chaos_smoke.py
+-m slow`. Two passes in ~51s.
+
+#### What's testable in Day 5-6
+
+The fixture is now ready to exercise these multi-step
+mutation paths:
+
+- **Approval submit → replay**: kill between
+  `_submit_approval` writing the queue entry and the
+  approver's replay action. Assert: queue entry is
+  consistent on recovery, or cleanly absent (no half-
+  written orphan).
+- **Version snapshot + manifest update**: kill between
+  writing the CSV snapshot file and updating the JSON
+  manifest. Assert: manifest doesn't reference a
+  missing file, OR the snapshot file is silently
+  recoverable.
+- **FIM dual-store write**: kill between writing the
+  file baseline and the KV baseline. Assert: divergence
+  detection fires on next FIM cycle (rather than the
+  half-written state being treated as ground truth).
+- **KV cooldown counter update**: kill mid-write.
+  Assert: the HMAC stays valid, OR the next write
+  detects tamper and triggers the recovery path.
+- **Audit emit**: kill between handler returning success
+  and `_index_audit()` completing. Assert: the action
+  is visible in `wl_audit` OR the action is reversed
+  (NOT: success returned to user without audit trail).
+
+These are the categories `feedback_non_atomic_operations.md`
+called out. Day 5-6 will pick the 3-4 with the highest
+likelihood of finding a real bug.
+
