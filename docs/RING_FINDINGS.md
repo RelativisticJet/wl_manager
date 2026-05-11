@@ -3106,3 +3106,149 @@ shrinks failing examples to minimal reproducers. The
 output of a failing run looks like a unit test you
 could paste into the codebase — exactly the kind of
 artifact a reviewer can act on without prior context.
+
+### Day 8 — Ring 4 retrospective
+
+#### What landed
+
+| Day | Artifact | Tests | Commit |
+|-----|----------|-------|--------|
+| 1 | Vitest 3.x + AMD→CJS bridge, parseCSV | 5 JS | `4b5deca` |
+| 2-3 | csvEscape, validateImportedCSV, renderDiff, approval_ui | +41 JS | `759f933` |
+| 4 | Chaos fixture: SIGKILL + recovery | 2 smoke | `d1ac87a` |
+| 5 | CSV save chain chaos | 1 chaos | `19237d4` |
+| 6 | Approval queue + bootstrap chaos | 2 chaos | `7de955c` |
+| 7 | Hypothesis state machine + property tests | 4 | `8b91a88` |
+| 8 | This retro (docs only) | 0 | (this commit) |
+
+Totals at Ring 4 close:
+
+- **46 JS unit tests** (new layer — previously zero)
+- **5 integration chaos tests** (new layer)
+- **4 Hypothesis tests** (new property-based layer)
+- **609 Python unit tests passing** including the new 4
+- **330 fast integration tests passing** (1 pre-existing
+  teardown error unrelated to Ring 4)
+- Total Ring 4 net addition: **~55 new tests across 3 layers**
+
+#### Bugs / contracts surfaced
+
+Ring 4 was a test-strategy ring (not a feature ring), so
+the bug count is the wrong metric. What matters is what
+NEW classes of regressions can no longer slip through.
+
+1. **CSV formula-injection prevention** (Day 2-3):
+   `csvEscape()`'s leading-char prefix rule was untested.
+   Now pinned by 6 test cases.
+2. **Reserved `_` column prefix enforcement** (Day 2-3):
+   `validateImportedCSV()`'s rejection of user-supplied
+   `_`-prefix columns was untested. Now pinned.
+3. **Internal column exclusion from rendered diffs**
+   (Day 2-3): `renderDiff()`'s filter-out of admin-only
+   metadata was untested. Now pinned.
+4. **Counter-based duplicate-row matching** (Day 2-3):
+   `getPendingRowIndices()`'s use of counters (not
+   sets) to handle N duplicate keys was the specific
+   bug pattern listed in `MEMORY.md` as "sets lose
+   duplicate count info". Now pinned.
+5. **Approval queue + sig pair consistency under chaos**
+   (Day 6): the post-`os.replace` pre-`_write_queue_sig`
+   window is now documented as a known recovery gap
+   (test `pytest.skip()`s with a descriptive message
+   if chaos lands there). If the gap WIDENS, the skip
+   message changes shape and surfaces in CI.
+6. **Submit-time vs read-time validation contract**
+   (Day 7): `_validate_queue_entry` (strict) and
+   `expire_pending_approvals` (lenient) disagree
+   intentionally. Pinned by separating the two
+   contracts in the state machine. The drift was
+   completely undocumented before Day 7.
+
+#### Real engineering bugs caught
+
+Three issues caught DURING test construction (not in
+production code):
+
+- **subprocess.run(text=True) newline mangling on
+  Windows** (Day 5): SHA-256 hashes diverged between
+  test and server. Fix: read binary, decode
+  explicitly when needed.
+- **Two-file approval queue** (Day 6): the live queue
+  lives at `lookups/_approval_queue.json`, NOT under
+  `_versions/`. A stale legacy copy in `_versions/`
+  silently misled the initial test. Cleanup of the
+  legacy file deferred.
+- **Test-design schema drift** (Day 7): my
+  `advance_time` rule crashed on entries that
+  `break_timestamp_field` had mutated. Same bug class
+  the production code was hardened against in
+  build-645. A clean reminder that hardening rules
+  apply to tests too.
+
+#### What's deferred to Ring 5+
+
+1. **FIM dual-store chaos** — needs scripted-input
+   lifecycle, 2-3x more complex than existing chaos
+   tests. The design intent is already pinned by
+   `wl_fim.py`'s divergence detection.
+2. **E2E CI-gating decision** — flagged as a Decision
+   Log entry at the close of Ring 3, scheduled for
+   Ring 5 Day 4-5.
+3. **OWASP ZAP scan + accessibility audit** — Ring 5
+   scope.
+4. **JS unit suite CI integration** — currently
+   manual via `npm run test:js`. Wire into the
+   existing GH Actions workflow in Ring 5.
+5. **Legacy `lookups/_versions/_approval_queue.json`
+   cleanup** — dead file, harmless but confusing.
+   Trivial housekeeping pass.
+6. **Larger-payload chaos variants** — current chaos
+   tests usually land in the "operation committed +
+   restart succeeded" branch because the chaos
+   payloads are small. Adding 2000-row variants
+   or shorter kill delays would force more mid-write
+   hits without rewriting the framework.
+
+#### Process observations
+
+- The Day 4 fixture investigation (kill builtin missing,
+  ptrace restrictions, container-stops-on-PID1-death,
+  PID collisions after restart) took longer than the
+  Day 5-6 tests combined. Platform-discovery work is
+  invariably under-budgeted; future ring planning
+  should budget 0.5-1 day for "build the test
+  infrastructure" before the first scenario.
+- Hypothesis state machines are extraordinarily
+  high-signal per line of code. The Day 7 test is
+  ~270 lines and pinned 6 contracts; the equivalent
+  example-based test coverage would be 600+ lines.
+  Recommend keeping the state machine as a reference
+  pattern for any future contract-heavy module
+  (rate limits, FIM baseline, RBAC dispatch table).
+- The chaos-test fixture (Day 4) is reusable for
+  every multi-step mutation in the codebase. The
+  Day 5-6 scenarios are <100 lines each because the
+  fixture absorbs all the boilerplate.
+
+#### Suggested next rings (not committed)
+
+**Ring 5 (E2E + audit + JS-unit CI integration)** —
+covers the Ring 4 deferred items: ZAP scan, a11y
+audit, E2E CI-gating, JS unit CI integration. Maybe
+4-5 days.
+
+**Ring 6 (multi-instance / multi-org scenarios)** —
+the application supports multiple Splunk orgs (per
+`feedback_multi_org_capability_probes.md`); this
+hasn't been integration-tested under load with
+multiple concurrent admins. Larger scope, probably a
+follow-on after Ring 5.
+
+Ring 4 closes here. The chaos-test suite is the
+biggest single addition — for the first time the
+project has signal on "what happens if splunkd dies
+during a multi-step mutation?" instead of just
+"happy path works". The Hypothesis state machine is
+the second-biggest: it pins design contracts that
+nobody had written down before the test forced them
+into the open.

@@ -64,6 +64,47 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-11 (Ring 4 Day 8: retrospective + suite verification)
+
+### Docs — Ring 4 close
+
+Documents-only commit. Ring 4 was a test-strategy ring
+that added three new test layers: JS unit (Vitest), chaos
+(SIGKILL + recovery), and Hypothesis state-machine.
+Day 8 wraps up with a suite-wide re-verification and a
+retrospective entry in `docs/RING_FINDINGS.md`.
+
+Final Ring 4 numbers:
+
+- 46 JS unit tests (new layer; prior: 0 direct JS unit
+  coverage)
+- 5 integration chaos tests (new layer; prior: 0 fault
+  injection)
+- 4 Hypothesis tests (new layer; prior: 0 property-based)
+- 609 Python unit tests passing
+- 330 fast integration tests passing (1 pre-existing
+  teardown error unrelated to Ring 4)
+
+Deferred to Ring 5+:
+
+- FIM dual-store chaos (scripted-input lifecycle is
+  2-3x more complex than REST-call chaos)
+- E2E CI-gating decision (called out in Ring 3 close)
+- OWASP ZAP scan + accessibility audit
+- JS unit CI integration (currently manual via
+  `npm run test:js`)
+- Larger-payload chaos variants (current tests usually
+  land in the commit-branch because payloads are
+  small)
+- Cleanup of the legacy stale `_versions/_approval_queue.json`
+
+The full Ring 4 retrospective is in
+`docs/RING_FINDINGS.md` "Day 8 — Ring 4 retrospective",
+including process observations and suggested next-ring
+scopes.
+
+---
+
 ## Unreleased — 2026-05-11 (Ring 4 Day 7: Hypothesis state-machine model)
 
 ### Tests — property-based state-machine coverage for approval queue
