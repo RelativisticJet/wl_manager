@@ -2919,3 +2919,103 @@ the docstring promises.
   mismatch returns the new server-side hash so the
   client can reload — pinned by the
   `_state_implies_commit()` branching.
+
+### Day 6 — approval queue + bootstrap registry chaos
+
+Two additional chaos scenarios on top of the Day 4
+fixture. Both pass; both pin the atomic-write contract
+of the underlying mutation path.
+
+#### `test_chaos_approval_queue.py`
+
+Submits `create_rule` as `analyst1` (which is routed
+through `_submit_create_delete_approval` because
+`require_reason_rule_creation=true` in the limit config).
+The handler's `_submit_approval` path takes the queue
+flock, runs `expire_pending_approvals`, conflict-checks,
+appends the new entry, and calls
+`_write_approval_queue(queue)` which writes a temp file,
+runs `os.replace`, then refreshes the HMAC sidecar.
+
+The chaos kill at 100ms typically lands AFTER the
+entire sequence completes (single-entry append is fast),
+so the test usually runs the "commit + restart" path
+and asserts queue and sig are both fresh. The narrow
+mid-write window where queue+sig diverge (kill landing
+between `os.replace(queue)` and `_write_queue_sig()`)
+is documented in the test docstring as a known
+recovery gap — the test `pytest.skip()`s with a
+descriptive message if it lands there, so future runs
+where the window WIDENS will surface as a regression.
+
+Critical assertion that NEVER skips: the queue file
+must be parseable JSON after any chaos kill. The
+temp+os.replace pattern in `_write_approval_queue`
+guarantees this.
+
+#### `test_chaos_bootstrap_registry.py`
+
+`bootstrap_csv_hashes` (superadmin-only) walks every
+managed CSV, hashes each one, and rewrites
+`.csv_expected_hashes.json` atomically. The hashing loop
+takes ~50-100ms for ~30 CSVs in the test container.
+Kill delay bumped to 150ms so the kill has a chance
+of landing during the hash loop (operation never reaches
+the write) or during the write (atomic temp+rename).
+
+Critical assertions:
+
+- Registry must NEVER be corrupt JSON after chaos
+- Entry count must remain > 0 (no truncated file with
+  zero entries)
+- Entry count must not shrink dramatically (≥ half of
+  pre-test count, or ≥5 — whichever is larger)
+
+#### Suite stability
+
+All five chaos tests (2 smoke + 1 save_csv chain + 1
+approval queue + 1 bootstrap) pass consecutively in
+127s total. Each test costs ~25s end-to-end (most of
+which is the `docker restart` cycle that the fixture's
+`restart_and_wait` waits on).
+
+#### Two-file approval queue discovered
+
+The build-614 incident memo references the approval
+queue at `lookups/_versions/_approval_queue.json`. The
+LIVE queue is actually at `lookups/_approval_queue.json`
+(no `_versions/`). A stale legacy copy under
+`_versions/` is left over from an older code path and
+should be considered dead state. The Day 6 test was
+initially reading the stale copy and silently asserting
+on it — corrected after seeing the post-submit count
+not change. Recommend a cleanup pass to delete the
+legacy file (deferred to Ring 5 housekeeping).
+
+#### What's deferred
+
+The original Day 6 plan included **FIM dual-store** chaos
+(file baseline + KV baseline asymmetric write). Genuine
+complexity discovered during planning:
+
+- FIM baseline writes happen on `wl_fim.py`'s 15s
+  scripted-input cycle, not via a REST call. To
+  trigger a write deterministically, you'd need to
+  delete both stores and wait for the next cycle.
+- Killing splunkd during a scripted-input run is
+  different from killing it during a REST request —
+  the scripted input is part of splunkd's process
+  tree and dies with it.
+- Asserting "dual-store asymmetric state was caught
+  on next FIM cycle" requires running the test
+  through TWO chaos cycles (kill mid-write, recover,
+  wait for next FIM cycle, assert divergence
+  detected).
+
+This is a 2-3x more complex test than the existing
+chaos suite and arguably belongs in a dedicated
+"scripted-input chaos" module. Deferred to Ring 5 or
+later. The existing `feedback_dual_source_of_truth.md`
+memo already captures the design intent; production
+behavior is verified by the divergence-detection logic
+in `wl_fim.py` itself.

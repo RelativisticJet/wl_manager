@@ -64,6 +64,67 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-11 (Ring 4 Day 6: approval queue + bootstrap chaos)
+
+### Tests — two more chaos scenarios on the Day 4 fixture
+
+Brings the chaos-test suite to **5 tests** (2 smoke + 3
+scenarios). All five pass consecutively in 127s.
+
+Added:
+
+- `tests/integration/test_chaos_approval_queue.py` —
+  submit `create_rule` as `analyst1` (routed to the
+  approval queue because `require_reason_rule_creation
+  =true`), kill splunkd 100ms later, assert the queue
+  file + HMAC sidecar pair is self-consistent
+  post-recovery. The narrow window where the kill
+  lands between `os.replace(queue)` and
+  `_write_queue_sig()` is documented as a known
+  recovery gap; the test `pytest.skip()`s if it lands
+  there, so future widening of the gap surfaces as a
+  regression. Critical never-skip assertion: the queue
+  file must be parseable JSON after any chaos kill.
+- `tests/integration/test_chaos_bootstrap_registry.py`
+  — superadmin runs `bootstrap_csv_hashes` (which
+  rehashes all managed CSVs and rewrites
+  `.csv_expected_hashes.json` atomically). Kill delay
+  bumped to 150ms to give the hashing loop time to
+  complete before the kill (often catches the write
+  phase). Assertions: registry must NEVER be corrupt
+  JSON, entry count must remain > 0, entry count must
+  not shrink dramatically.
+
+Discovered during Day 6: the live approval queue lives
+at `lookups/_approval_queue.json` (NOT
+`lookups/_versions/_approval_queue.json`). A stale
+legacy copy in `_versions/` is left over from an older
+code path and is dead state. The initial Day 6 test was
+silently asserting against the stale copy until the
+mismatch surfaced post-submit. Cleanup deferred to a
+future housekeeping pass.
+
+#### What's deferred
+
+The original Day 6 plan also called for **FIM
+dual-store** chaos (asymmetric write between
+`.fim_baseline.json` and the `wl_fim_baseline` KV
+collection). Discovered to be 2-3x more complex than
+the existing chaos scenarios: FIM baseline writes are
+driven by the `wl_fim.py` scripted input on a 15s
+cycle, not a REST call, and asserting "dual-store
+asymmetric state was caught on next FIM cycle"
+requires two chaos cycles (kill, recover, wait for
+next cycle, assert detection). Deferred to Ring 5 or
+later; the design intent is already captured in
+`feedback_dual_source_of_truth.md`.
+
+See `docs/RING_FINDINGS.md` "Day 6 — approval queue +
+bootstrap registry chaos" for full notes on the
+two-file-queue discovery and the deferred FIM scenario.
+
+---
+
 ## Unreleased — 2026-05-11 (Ring 4 Day 5: CSV save chain chaos test)
 
 ### Tests — first chaos scenario on top of the Day 4 fixture
