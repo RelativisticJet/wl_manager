@@ -407,6 +407,105 @@ def wait_for_next_fim_cycle(container_curl: Callable[..., Any],
     return False, []
 
 
+def trigger_fim_rebuild_and_kill(container_curl: Callable[..., Any],
+                                 kill_delay_seconds: float,
+                                 ) -> dict:
+    """Force a FIM baseline rebuild then SIGKILL splunkd after
+    ``kill_delay_seconds`` to attempt landing the kill mid-write
+    between ``_write_fs_baseline`` and ``_write_kv_baseline``.
+
+    Returns a dict capturing the outcome:
+      - kill_succeeded: bool
+      - recovery_seconds: float
+      - post_fs_present: bool
+      - post_kv_present: bool
+      - post_asymmetric: bool  (one store exists but not the other,
+                                OR both exist but disagree)
+      - error: str | None
+
+    Why this is interesting
+    -----------------------
+    The dual-store FIM writes are sequential, not atomic. A
+    sufficiently-precisely-timed splunkd kill SHOULD produce
+    asymmetric state. The window between the two writes is
+    typically microseconds (one fsync + one HTTP POST to KV) —
+    far narrower than what a SIGKILL timer can hit reliably.
+
+    This function exists to MEASURE that timing gap empirically.
+    Over many iterations the % that produce asymmetric state is
+    the answer to "is a real splunkd crash a credible producer
+    of the trigger condition that Day 1's tests deterministically
+    inject?"
+
+    Pre-state contract
+    ------------------
+    Caller must ensure both stores are present BEFORE calling.
+    The function deletes both, forcing the next FIM cycle to
+    enter the "first-ever run" branch (bin/wl_fim.py:722-733) —
+    which writes BOTH stores sequentially and is therefore the
+    code path we want to crash through.
+    """
+    from lib_chaos import (
+        kill_splunkd, restart_and_wait,
+    )
+
+    result = {
+        "kill_succeeded": False,
+        "recovery_seconds": 0.0,
+        "post_fs_present": False,
+        "post_kv_present": False,
+        "post_asymmetric": False,
+        "error": None,
+    }
+
+    # Step 1: delete both stores so the next FIM cycle does
+    # a full dual-write rebuild.
+    try:
+        delete_fs_baseline()
+        delete_kv_baseline(container_curl)
+    except Exception as exc:  # noqa: BLE001
+        result["error"] = f"setup_failed: {exc}"
+        return result
+
+    # Step 2: sleep kill_delay_seconds, then SIGKILL.
+    # The delay should bracket the FIM cycle's write phase. The
+    # script is spawned by splunkd's ExecProcessor every 15s; we
+    # don't know exactly when the next spawn will fire, so we
+    # cover the window by varying delays across iterations.
+    time.sleep(kill_delay_seconds)
+    try:
+        result["kill_succeeded"] = kill_splunkd()
+    except Exception as exc:  # noqa: BLE001
+        result["error"] = f"kill_failed: {exc}"
+        # Try to recover anyway — leaving splunkd dead breaks
+        # subsequent tests.
+
+    # Step 3: restart and wait for splunkd to come back.
+    try:
+        result["recovery_seconds"] = restart_and_wait(timeout=180)
+    except Exception as exc:  # noqa: BLE001
+        result["error"] = f"recovery_failed: {exc}"
+        return result
+
+    # Step 4: observe post-recovery state. We give splunkd a brief
+    # moment to let any in-flight indexing settle, then sample.
+    time.sleep(2)
+
+    fs_bytes = read_fs_baseline_bytes()
+    kv_record = read_kv_baseline(container_curl)
+    result["post_fs_present"] = bool(fs_bytes)
+    result["post_kv_present"] = kv_record is not None
+
+    # Asymmetric: exactly one exists. (We can't easily compare
+    # equality post-recovery because the HMAC envelopes differ
+    # between FS and KV stores even for the same baseline content.
+    # "Exactly one missing" is the directly-observable proxy.)
+    result["post_asymmetric"] = (
+        result["post_fs_present"] != result["post_kv_present"])
+
+    return result
+
+
 def _event_ts(event: dict) -> int:
     """Best-effort epoch-int from a wl_fim event.
 

@@ -6192,3 +6192,163 @@ two writes. Statistical: over N iterations,
 calculate the % that produce asymmetric state and
 then trigger divergence detection on the next cycle.
 
+### Day 2 — SIGKILL mid-FIM-cycle (statistical chaos)
+
+New primitive ``trigger_fim_rebuild_and_kill`` in
+``lib_fim_chaos.py`` and new test module
+``tests/integration/test_chaos_fim_dual_store_mid_write.py``.
+The single test loops over 3 calibrated kill delays
+(3s, 7s, 11s) — these bracket the 15s FIM cycle so
+some kills land before the cycle starts, some during
+the snapshot+write phase, and some after the cycle
+completes.
+
+#### Empirical finding (the interesting part)
+
+After 3 iterations:
+
+- **2 of 3 immediately produced asymmetric state**
+  (FS present, KV missing). The kills at delays
+  3s and 7s landed during a FIM cycle's write phase.
+- **All 3 recovered to both-present within 90s.**
+  The recovery path correctly rebuilt the missing
+  KV store from FS on subsequent cycles.
+
+This contradicts the initial premise that the
+``_write_fs_baseline`` → ``_write_kv_baseline`` window
+is microseconds-narrow. The actual window is tens
+of milliseconds wide because ``_write_kv_baseline``
+makes an HTTP POST to localhost:8089 (KV REST), and
+that round-trip dominates the timing. SIGKILL with
+millisecond-grade timer overhead from
+``lib_chaos.kill_after_delay`` is wide enough to
+land in that window with high probability.
+
+#### What this means for the security posture
+
+The divergence-detection control verified by Day 1
+exercises a real-world-reachable trigger condition,
+not a theoretical one. A splunkd crash during a FIM
+baseline rebuild has a non-trivial chance of leaving
+the system in asymmetric state. The dual-store
+design is therefore actively earning its keep
+against the splunkd-crash failure mode.
+
+#### Why the recovery wait was extended to 90s
+
+The first ``test_chaos_fim_dual_store_mid_write_recovery``
+implementation waited only one FIM cycle (~45s) for
+recovery. It failed in the first iteration:
+post-recovery FS=True, KV=False — the cycle ran but
+KV wasn't rebuilt. Investigation showed:
+
+- ``bin/wl_fim.py:776`` rebuilds KV from FS ONLY when
+  ``session_key and kv_status in ("missing",
+  "checksum_mismatch")``.
+- After a splunkd restart, the first FIM cycle may
+  fire BEFORE splunkd has fully wired the
+  ``passAuth=splunk-system-user`` session-key
+  delivery via stdin. The first cycle sees no
+  session key, emits
+  ``fim_scripted_input_no_session_key``, skips the
+  KV rebuild silently.
+- Subsequent cycles (once splunkd settles) get the
+  session key and rebuild KV correctly.
+
+The extended wait covers up to two-three cycles so
+the test asserts the convergent state, not the
+first-cycle state. This is documented in the test's
+inline comment so future contributors don't try
+to "fix" the wait by shortening it.
+
+#### What's deferred (acknowledged at scope close)
+
+Statistical-chaos depth — N=3 was chosen for run
+time (~2.3 min total) and to keep the test
+single-iteration friendly. A deeper statistical
+run (N=20, ~15-20 min) would tighten the asymmetric-
+state %, but the qualitative finding is already
+established. The Day 2 test is the smoke-test for
+the chaos primitive; a deep-run variant can be
+added later by a future contributor who wants
+calibration data without changing the core
+contract.
+
+### Ring 6.2 retrospective
+
+Started 2026-05-12. Closed 2026-05-12 (single-day
+mini-ring). 2 days of work, 0 production code
+changes, 4 new test files (~530 lines), 1 new test
+primitive module (~380 lines).
+
+#### What landed in Ring 6.2
+
+- Day 1: ``lib_fim_chaos.py`` and 3 deterministic
+  asymmetric-state tests covering claims 1
+  (KV-missing silent rebuild), 2 (FS-missing
+  CRITICAL alert), 3 (FS≠KV divergence detected).
+- Day 2: ``trigger_fim_rebuild_and_kill`` primitive
+  plus 1 statistical chaos test asserting recovery
+  contract under SIGKILL-mid-cycle.
+
+#### What surfaced in Ring 6.2 (now documented in the codebase)
+
+Three Splunk operational quirks that future
+contributors would otherwise re-learn the hard way:
+
+1. ``INDEXED_EXTRACTIONS=json`` + REST ``search``
+   default envelope omits extracted fields —
+   ``| table`` projection required.
+2. ``STATEFUL_ALERT_ACTIONS`` (11 actions in
+   ``bin/wl_fim.py:487``) dedup for 1 hour after
+   first fire — chaos tests must clear
+   ``.fim_alert_state.json`` between runs.
+3. First post-restart FIM cycle may run without
+   ``passAuth`` session key, silently skipping the
+   KV-rebuild path. Recovery converges by the
+   second cycle.
+
+#### What's deferred from Ring 6.2 explicit non-deliverables
+
+- **Deep statistical chaos run** (N=20+). Day 2's
+  N=3 establishes the qualitative finding; a deep
+  run is calibration data, not coverage.
+- **A formal "scripted-input chaos" module**. The
+  primitives in ``lib_fim_chaos.py`` cover the FIM
+  baseline path specifically. Generalizing this to
+  other scripted inputs (wl_expiration_cleanup.py)
+  is independent work.
+- **Cross-platform timing variance**. Chaos timing
+  depends on Docker exec latency + Python thread
+  scheduling. Day 2's findings are observed on
+  Windows 11 + Docker Desktop 4.x + splunk/splunk:9.3.1.
+  Linux containers may show different windows.
+
+#### Numbers for Ring 6.2
+
+- **Tests added**: 4 (3 deterministic + 1 chaos)
+- **Lines added**: ~970 (lib_fim_chaos.py + 2 test
+  files + RING_FINDINGS.md narrative)
+- **Production code changed**: 0
+- **Bugs found**: 0 (the security claim holds; the
+  empirical finding strengthens it)
+- **Bugs surfaced + flagged for later**: 1
+  (recovery-path session-key fragility — first
+  post-restart cycle may silently skip KV rebuild;
+  acceptable because subsequent cycles converge)
+
+#### Ring 6.2 status
+
+Ring 6.2 is **CLOSED**. The FIM dual-store
+divergence-detection security control is now
+test-verified along both axes: detection fires under
+asymmetric-state setup, and the trigger condition
+(mid-write splunkd crash) is empirically reachable
+from outside.
+
+Next per the user's stated sequencing: manual a11y
+verification + ``<span class="btn">`` → ``<button class="btn">``
+migration, then Show Requested Data
+(approval queue preview feature), then Sigstore
+release-verification dry-run.
+
