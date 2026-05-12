@@ -4329,3 +4329,196 @@ R6-F5/F6 list above):
   guard in the test is the same predicate-based
   audit pattern: prove the gate fires SOMETIMES;
   if it never fires, that's a different bug.
+
+### R6-D5 — Concurrent presence + UI-watch surfaces R6-F8
+
+**Goal**: characterize behavior of the "Also
+viewing" presence indicator under multi-session
+load, and confirm that presence-pinging during an
+in-flight ``save_csv`` does not cause cross-feature
+interference. Day 5 picks up the original Ring 6
+Day 5 scope ("presence ping during in-flight save")
+and extends it with multi-worker visibility probes.
+
+**Test**:
+[tests/e2e/test_concurrent_presence.cjs](../tests/e2e/test_concurrent_presence.cjs).
+
+Four phases, all green:
+
+- **Phase A** (sequential reports, then single
+  read): each of 7 distinct users
+  (analyst1, analyst2, wladmin1, wladmin2,
+  superadmin1, superadmin2, admin) calls
+  ``report_presence`` strictly one at a time, then
+  one session reads via ``get_presence``. Result:
+  view contains all 7 users every time. Sequential
+  traffic from a single test driver appears to
+  stay on a single worker (HTTP keep-alive plus
+  Splunk's connection routing).
+- **Phase B** (7 sequential reads): each of the 7
+  sessions reads after Phase A. Histogram of view
+  sizes is uniformly ``{"7": 7}`` — every reader
+  sees every user when there is no concurrent
+  write.
+- **Phase C** (presence pings during in-flight
+  save): one session begins a ``save_csv`` with a
+  fresh ``expected_mtime`` + ``expected_content_hash``;
+  the other 6 sessions fire ``report_presence`` in
+  parallel. Save returns 200 (or a known R6-F7
+  race outcome), all 6 pings succeed. The two
+  features are cleanly independent — no shared
+  lock, no cross-feature wedge.
+- **Phase D** (post-race read): one session reads
+  ``get_presence`` after Phase C completes. View
+  collapses from 7 (Phase B) to **1** (Phase D).
+  Collapse ratio = 0.143 = 1/7. The single
+  remaining user is non-deterministic across runs
+  (admin, wladmin2, superadmin2, analyst1, analyst2
+  observed in 5/5 runs — different each time).
+
+The Phase D collapse is the headline finding.
+
+### R6-F8 — In-memory module-level state per Splunk worker process — DEFERRED to Ring 6.1
+
+**Severity**: MEDIUM-HIGH for presence (UX
+fidelity loss; "Also viewing" indicator
+unreliable). MEDIUM-HIGH for burst rate limiter
+(potential rate-limit bypass via worker spread,
+unproven live but structurally identical).
+Distinct root cause from R6-F5/F6/F7 — those are
+file-backed RMW races; R6-F8 is in-memory state
+that masquerades as global.
+
+**Class**: per-Python-process module-level state.
+Splunk's PersistentScriptHandler runs multiple
+worker processes by default. Anything declared at
+module scope (``_presence = {}``,
+``_rate_limits = {}``) lives in EACH worker's
+process memory, independently. Code that
+treats this state as "global to the app" produces
+inconsistent answers depending on which worker
+handled the request.
+
+**Day 5 evidence** (5 runs of 7-way scattered race):
+
+- Sequential traffic (Phase A+B): 100% consistent
+  views, all 7 users visible to all 7 readers.
+  No collapse because keep-alive routes everything
+  to one worker.
+- Concurrent burst (Phase C → Phase D): post-race
+  view drops to a single user. Collapse ratio
+  consistently 1/7 = 0.143.
+- Single-user remaining in Phase D rotated across
+  runs (admin, wladmin2, superadmin2, analyst1,
+  analyst2, analyst1 in 6 runs observed) —
+  confirming non-deterministic worker routing,
+  not a deterministic bug in any specific
+  username path.
+- No HTTP errors, no save+presence cross-wedge,
+  no presence-state corruption. The bug is purely
+  in WHICH state the reader sees, not in any
+  state being malformed.
+
+**User-facing impact (presence)**:
+
+A user opens a CSV that 4 other users are
+actively editing. Their ``report_presence`` ping
+lands on worker A; the other 4 users'
+``report_presence`` pings have been distributed
+across workers B, C, D, E. Worker A's
+``_presence`` dict for this CSV has only THIS
+user's entry. ``get_presence`` returns just this
+user. The UI renders no "Also viewing" indicator —
+the user believes they are editing alone, but
+they are not. Conflicting edits then surface only
+when ``save_csv`` returns a 409 (or, given
+R6-F7, when the user's edit silently disappears).
+
+**Known affected sites in this codebase**:
+
+1. [bin/wl_presence.py:19](../bin/wl_presence.py) —
+   ``_presence: Dict[str, Dict] = {}``. Tested
+   live in Day 5. R6-F8 collapse confirmed.
+2. [bin/wl_ratelimit.py:16](../bin/wl_ratelimit.py) —
+   ``_rate_limits: Dict[Tuple[str, str], List[float]] = {}``.
+   This is the burst-window rate limiter called
+   at [bin/wl_handler.py:1461](../bin/wl_handler.py)
+   on every request, separate from the daily-limit
+   counter (which IS file-backed and has its own
+   issues per R6-F6). Per-worker bypass not
+   live-tested in Day 5 (deferred to Ring 6.1)
+   but the code pattern is structurally identical
+   to the proven presence case. Hypothesized
+   impact: a user with N parallel sessions can
+   effectively bypass the burst limit by a factor
+   of up-to-worker-count when their requests
+   scatter. ``RATE_MAX_WRITES = 30/min``,
+   ``RATE_MAX_READS = 120/min`` — under multi-worker
+   spread these caps become per-worker, not
+   per-user.
+
+**Why not file-backed like the daily-limit
+counter?**
+
+The daily-limit counter (``_daily_limits.json``)
+is file-backed and gets the R6-F6 TOCTOU race
+because file RMW without cross-process locks is
+itself broken. The R6-F8 in-memory path skips the
+file entirely. The fix shape is different:
+
+- **Option A** — push to a KV store
+  (``wl_presence_kv``, ``wl_ratelimit_kv``). KV
+  store IS cross-process visible. Existing
+  precedent: ``wl_cooldowns`` KV collection.
+  Cost: per-request KV roundtrip, latency added.
+- **Option B** — push to a file with cross-process
+  lock (uses ``bin/wl_filelock.py``). Cheaper than
+  KV per request but inherits the R6-F5/F6/F7
+  locking hazards.
+- **Option C** — pin all presence + ratelimit
+  state to a single dedicated worker by routing
+  these endpoints through a single
+  PersistentScriptHandler instance (configurable
+  via ``persistentconnection`` settings in
+  ``restmap.conf``). Cost: that one worker is a
+  scaling bottleneck.
+- **Option D** — accept the trade-off and
+  document the multi-worker limitation. Effective
+  for an internal app with low worker count.
+
+**Why deferred (rather than fixed in this session)**:
+
+Same reasoning as R6-F5/F6/F7: the right fix is
+infrastructure-level. R6-F8 fits naturally into
+Ring 6.1 because (a) the KV-backed option (A)
+would be analyzed alongside the file-locking
+work as a sibling cross-process-state strategy,
+and (b) the burst rate-limiter site needs its
+own live test before committing to a fix shape.
+
+**Updated Ring 6.1 scope** (additive to the
+R6-F5/F6/F7 list above):
+
+- Day 6.1.8: live-test the
+  ``_rate_limits`` per-worker hypothesis. 7
+  sessions of the same user fire >120 reads in
+  burst; count successes. If close to 7×120,
+  R6-F8 applies to ratelimit too.
+- Day 6.1.9: prototype Option A (KV-backed
+  presence) and Option B (file-backed presence)
+  side by side; benchmark roundtrip cost and
+  decide.
+- Day 6.1.10: tighten ``test_concurrent_presence.cjs``
+  Phase D — when R6-F8 fix lands, the WARN
+  must become a hard-fail with
+  ``seen.length === PARALLELISM``.
+
+**Pairs with**:
+
+- ``feedback_per_worker_state.md`` — new memory
+  file capturing the class as a recurring hazard
+  distinct from file-race patterns. Same lesson
+  applies to any future "stateful module" added
+  to the codebase: module-level mutable state
+  is invisible across workers; design for
+  cross-worker visibility from the start.
