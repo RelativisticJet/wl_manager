@@ -4767,3 +4767,260 @@ Ring 6 is the final test-discovery ring.
 
 Ring 6 closes here. Ring 6.1 (fix vector for
 R6-F5/F6/F7/F8) is queued.
+
+---
+
+## Ring 6.1 — Cross-process state fixes (in progress)
+
+**Goal**: close the 4 deferred concurrency bugs
+(R6-F5/F6/F7/F8) by adopting uniform cross-process
+locking where files are shared across Splunk
+worker processes, and choosing a cross-worker
+visibility strategy for R6-F8's in-memory state.
+
+### R6.1-D1 — File-write audit (coverage matrix)
+
+**Goal**: enumerate every file write in `bin/`
+that touches state shared across Splunk worker
+processes, classify by current lock status, and
+prioritize the fix sites.
+
+**Why this matters before fixing anything**: site-
+by-site fixes have a discovery hazard — finding
+a NEW site halfway through means either
+re-opening "done" days or shipping half-fixes. An
+audit-first ordering is also re-application of
+Ring 6's process learning ("find one site, grep
+for the pattern").
+
+#### Locking patterns currently in the codebase
+
+Three styles coexist before Ring 6.1:
+
+1. **`file_lock` utility** from
+   [bin/wl_filelock.py](../bin/wl_filelock.py) —
+   the documented helper. Cross-process via
+   `fcntl.flock` on Unix, no-op on Windows.
+   Used at:
+   - [bin/wl_handler.py:335](../bin/wl_handler.py)
+     (`_approval_queue_lock`, locks
+     `<queue>.rmw.lock` sibling)
+   - [bin/wl_approval.py:315](../bin/wl_approval.py)
+     (`write_approval_queue`, locks the queue
+     file itself)
+2. **Inline `fcntl.flock` on the open file handle**
+   — locks the data file directly inside
+   `with open(...)`. Used at:
+   - [bin/wl_versions.py:147](../bin/wl_versions.py)
+     (manifest write)
+   - [bin/wl_limits.py:233](../bin/wl_limits.py)
+     (limit config write)
+   - [bin/wl_limits.py:294](../bin/wl_limits.py)
+     (daily counter write — the write IS atomic
+     but the check-execute-increment SEQUENCE is
+     not, which is R6-F6)
+   - [bin/wl_handler.py:494](../bin/wl_handler.py)
+     (notifications write — write atomic but
+     read+modify+write not locked)
+3. **Custom `_csv_file_lock` helper**
+   ([bin/wl_versions.py:166](../bin/wl_versions.py))
+   — direct fcntl wrapper for CSV snapshot
+   operations.
+
+These three styles lock DIFFERENT things:
+
+- Style 1 + `<file>.rmw.lock`: sibling file is
+  the lock domain; data file untouched by the
+  lock.
+- Style 1 + `<file>` directly: data file is the
+  lock domain; opens a separate FD for the lock.
+- Style 2: data file's own FD is the lock
+  domain.
+- Style 3: dedicated `<file>.lock` sibling.
+
+**Consistency hazard**: two sites that lock the
+SAME data file under DIFFERENT styles do NOT
+mutually exclude. Style 2 (locking the data FD)
+and Style 1-with-rmw.lock (locking a sibling)
+target different kernel-level lock objects.
+Ring 6.1 must pick ONE style and migrate
+existing sites to match.
+
+**Recommended uniform style** (Ring 6.1 default):
+`file_lock(<data_path> + ".rmw.lock", timeout=10)`
+wrapping the FULL read-modify-write cycle. Pros:
+data file's own FD stays available for readers
+who don't need the lock; lock semantics are
+explicit at the call site; matches the existing
+`_approval_queue_lock` pattern.
+
+#### Coverage matrix
+
+Audit covered all `open(..., "w" / "a" / "wb" /
+"ab")`, `os.replace`, and `os.rename` calls in
+`bin/*.py`. Sites are classified by:
+
+- **Scope**: SHARED (multi-worker visible),
+  PROCESS-LOCAL (caches, init markers),
+  APPEND-LOG (POSIX-atomic small appends).
+- **Lock**: NONE, FILE_LOCK (style 1), INLINE
+  (style 2), CUSTOM (style 3).
+- **Atomic write**: YES (temp+rename or atomic
+  append), NO (direct overwrite).
+- **Priority**: HIGH (proven bug, in test
+  suite), MEDIUM (same shape, not tested),
+  LOW (low-frequency or low-concurrency),
+  SAFE (already protected or scope-local).
+
+##### HIGH priority — proven bugs covered by Ring 6 tests
+
+| Site | Lock | Atomic | Finding |
+|------|------|--------|---------|
+| [wl_rules.py:82-91](../bin/wl_rules.py) `write_rules_registry` | threading.Lock only | YES (temp+rename) | **R6-F5** — `_detection_rules.json` RMW race |
+| [wl_rules.py:242-259](../bin/wl_rules.py) `_write_mapping_rows` | NONE | NO (direct overwrite) | **R6-F5 (worst)** — `rule_csv_map.csv` direct overwrite |
+| [wl_limits.py:233-238](../bin/wl_limits.py) `write_limit_config` write itself | INLINE fcntl | YES | atomic write fine; but check+exec+increment SEQUENCE around it is R6-F6 |
+| [wl_limits.py:294-298](../bin/wl_limits.py) `write_daily_limits` | INLINE fcntl | YES | same — write atomic; SEQUENCE racy. **R6-F6** |
+| [wl_csv.py:239-243](../bin/wl_csv.py) `write_csv` (called by `_save_csv`) | NONE | YES (temp+rename) | atomic write fine; **R6-F7** — the read-modify-write CYCLE upstream in `_save_csv` is unlocked |
+| [wl_handler.py:4153 `_save_csv`](../bin/wl_handler.py) | NONE | (delegates) | **R6-F7** root site — optimistic check + read + write all run without cross-process lock |
+
+##### MEDIUM priority — structurally identical, not yet tested
+
+| Site | Lock | Atomic | Risk |
+|------|------|--------|------|
+| [wl_handler.py:491-501](../bin/wl_handler.py) `_write_notifications` | INLINE fcntl on write | NO | RMW (read-merge-write) outer cycle unlocked; same shape as R6-F6 |
+| [wl_handler.py:575-579](../bin/wl_handler.py) `_write_lockdown_state` | NONE | NO | activate_lockdown ↔ deactivate_lockdown can race; low frequency but security-relevant |
+| [wl_handler.py:3300](../bin/wl_handler.py) trash retention config write | NONE | NO | superadmin-only, low frequency, but same RMW shape |
+| [wl_handler.py:3633](../bin/wl_handler.py) deploy_window write | NONE | NO | HMAC-signed; concurrent open_deploy_window from two superadmin sessions could clobber |
+| [wl_handler.py:4114](../bin/wl_handler.py) MAPPING_FILE update (trash restore path) | NONE | NO | same shape as R6-F5 — different code path, same race |
+| [wl_trash.py:146](../bin/wl_trash.py) trash config write | NONE | NO | same as wl_handler.py:3300 |
+| [wl_trash.py:453, 473, 598, 609](../bin/wl_trash.py) restore-flow mapping + rules updates | NONE | NO | R6-F5 class via the trash restore code path |
+| [wl_replay.py:462](../bin/wl_replay.py) MAPPING_FILE write in approval replay | NONE | NO | R6-F5 class via approval replay code path |
+
+##### LOW priority — low-frequency or low-concurrency
+
+| Site | Lock | Notes |
+|------|------|-------|
+| [wl_csv.py:730-740](../bin/wl_csv.py) `_save_col_widths` | NONE | per-user UX state; failure is silently swallowed by design (`pass`); not user-critical |
+| [wl_handler.py:807-816](../bin/wl_handler.py) `_set_tamper_flag` | NONE | written once on tamper detection; idempotent overwrite is fine |
+| [wl_handler.py:1040-1053](../bin/wl_handler.py) cooldown init marker | NONE | guarded by `os.path.isfile` check before write; idempotent |
+| [wl_handler.py:2462-2473](../bin/wl_handler.py) FIM queue prune | NONE | best-effort; has `except OSError: pass` retry-on-next-attempt semantics |
+
+##### SAFE — already protected or scope-local
+
+| Site | Protection |
+|------|-----------|
+| [wl_handler.py:335](../bin/wl_handler.py) `_approval_queue_lock` | uses `file_lock` (style 1) |
+| [wl_approval.py:177-179](../bin/wl_approval.py) signature write | inside `_approval_queue_lock` outer block; atomic temp+rename |
+| [wl_approval.py:315-319](../bin/wl_approval.py) `write_approval_queue` | uses `file_lock` (style 1) |
+| [wl_versions.py:147-155](../bin/wl_versions.py) manifest write | INLINE fcntl on data FD; atomic |
+| [wl_versions.py:166-203](../bin/wl_versions.py) `_csv_file_lock` | dedicated helper (style 3); used in `snapshot_version` |
+| [wl_versions.py:229](../bin/wl_versions.py) snapshot RMW | wrapped in `_csv_file_lock` |
+| [wl_fim.py:276](../bin/wl_fim.py) FIM baseline write | single-process scripted input — no cross-worker race possible |
+| [wl_fim.py:519](../bin/wl_fim.py) FIM alert state write | same — single-process scripted input |
+| [wl_hmac_key.py:157-159](../bin/wl_hmac_key.py) HMAC key temp+rename | write-once at install / recovery |
+| [wl_migrate_cooldowns.py:197](../bin/wl_migrate_cooldowns.py) RECOVERY_LOG append | one-shot tool; POSIX-atomic small append |
+| [wl_expiration_cleanup.py:150](../bin/wl_expiration_cleanup.py) RECOVERY_LOG append | scheduled scripted input; small append |
+| [wl_fim_common.py:153](../bin/wl_fim_common.py) FIM queue append | small append, atomic |
+| [wl_handler.py:3653, 3702](../bin/wl_handler.py) recovery_log appends | small atomic appends |
+| [wl_filelock.py:64](../bin/wl_filelock.py), [wl_versions.py:184](../bin/wl_versions.py) | lock-file opens, not data writes |
+
+#### Audit totals
+
+| Priority | Sites |
+|----------|-------|
+| HIGH (proven) | 6 |
+| MEDIUM (untested same-shape) | ~12 |
+| LOW | 4 |
+| SAFE | ~14 |
+| **Total RMW writes audited** | **~36 sites** |
+
+#### Fix shape per priority
+
+**HIGH priority** — wrap the proven RMW cycles
+in `file_lock(<data> + ".rmw.lock", timeout=10)`:
+
+- R6-F5 fix: wrap `read_registry → modify →
+  write_registry` AND `read_mapping → modify →
+  write_mapping` cycles in
+  `wl_rules.py`. Add temp+rename to
+  `_write_mapping_rows`.
+- R6-F6 fix: wrap `_check_admin_daily_limit
+  → execute pipeline → _increment_admin_daily_limit`
+  in a single `file_lock` so the SEQUENCE is
+  atomic. Note: this serializes admin actions
+  through one lock per user-action pair — needs
+  Day 6.1.4 benchmarking.
+- R6-F7 fix: wrap `_save_csv` from the
+  optimistic-check through `write_csv` in
+  `file_lock("<csv>.rmw.lock")`.
+
+**MEDIUM priority** — same wrapping pattern.
+Sequence-style locks (notifications,
+lockdown state, trash configs) wrap
+read+modify+write. Direct-write sites
+(mapping in trash + replay paths) wrap the
+full cycle that the call site is doing.
+
+**LOW priority** — defer or skip. UX-only
+features (column widths) and write-once
+patterns (tamper flag, init marker) do not
+benefit enough from locking to justify the
+overhead.
+
+**SAFE** — leave alone in Ring 6.1 to avoid
+churn. Consider a separate consolidation
+ring later if the codebase wants ONE uniform
+style instead of three.
+
+#### Style choice for Ring 6.1 fixes
+
+**Decision (provisional)**: use Style 1 (`file_lock`
+on `<data> + ".rmw.lock"` sibling) for all NEW
+locking. Migrating existing Style 2 (inline
+fcntl) and Style 3 (custom helper) sites to
+Style 1 is OUT of scope for Ring 6.1 — those
+sites already provide correct cross-process
+protection for what they wrap, and migration is
+churn-risk for zero functional gain.
+
+The one nuance: the R6-F6 fix on
+`_check_admin_daily_limit → ... →
+_increment_admin_daily_limit` sequence needs to
+share a lock domain with
+`wl_limits.py::write_daily_limits`'s inline
+fcntl on the data FD. Solutions:
+(a) sequence lock on `<counter>.rmw.lock`
+sibling; this DOES NOT exclude the inline-fcntl
+write — but the write is called only INSIDE the
+sequence, so the outer lock serves the purpose
+without conflict.
+(b) migrate `write_daily_limits` to use the
+sibling lock too. Cleaner but +churn.
+
+Decision: (a) for Ring 6.1; (b) deferred to a
+later consolidation ring.
+
+#### What didn't land in Day 6.1.1
+
+- **Live verification of the audit**. Some
+  MEDIUM sites may turn out to be SAFE under
+  closer inspection (e.g., if a higher-level
+  function already wraps them in a lock that
+  the audit missed). Each fix day should
+  re-verify its target site before patching.
+- **The R6-F8 in-memory state audit**. R6-F8
+  is a different class (per-Python-process
+  module-level state). Scope-distinct from
+  this file-write audit; covered by Day 6.1.8/9.
+
+#### Carries forward to subsequent days
+
+- Day 6.1.2: HIGH-priority R6-F5 + R6-F6 sites
+  (`wl_rules.py`, `wl_limits.py`). ~4 sites.
+- Day 6.1.5: R6-F7 `_save_csv` RMW. 1 site.
+- Day 6.1.7: MEDIUM-priority sites in batch.
+  ~12 sites — likely needs to split into
+  two sub-days, one for notifications +
+  lockdown + trash-configs (~5 sites), one
+  for mapping/registry sibling paths
+  (~7 sites).
