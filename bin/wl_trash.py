@@ -19,6 +19,7 @@ import csv
 import shutil
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -31,6 +32,7 @@ from wl_constants import (
     OWN_LOOKUPS, TRASH_DIR, TRASH_CONFIG_FILE,
     VERSIONS_DIR, DETECTION_RULES_FILE, MAPPING_FILE, DEFAULT_TRASH_RETENTION_DAYS
 )
+from wl_filelock import file_lock
 from wl_validation import sanitize_text, build_csv_path
 
 
@@ -44,6 +46,7 @@ __all__ = [
     'get_trash_dir',
     'read_trash_config',
     'write_trash_config',
+    'trash_config_rmw_lock',
     # Refactored sub-functions (may be useful for testing)
     'build_trash_metadata',
     'move_csv_to_trash',
@@ -145,6 +148,37 @@ def write_trash_config(config: Dict) -> None:
     path = os.path.join(versions_dir, TRASH_CONFIG_FILE)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(config, fh, indent=2)
+
+
+@contextmanager
+def trash_config_rmw_lock(timeout: float = 5):
+    """Cross-process RMW lock around the trash configuration file.
+
+    Ring 6.1 Day 6.1.7a: callers that perform
+    read_trash_config → modify → write_trash_config (e.g.
+    ``_action_set_trash_retention`` in wl_handler.py) must hold this
+    lock for the full cycle so two concurrent superadmins cannot
+    clobber each other's edits.
+
+    NOTE on path divergence (pre-existing, out of scope for 6.1.7a):
+    ``read_trash_config`` and ``write_trash_config`` use
+    ``OWN_LOOKUPS/VERSIONS_DIR/TRASH_CONFIG_FILE`` whereas
+    ``wl_handler.py::_action_set_trash_retention`` and
+    ``wl_handler.py::_action_get_trash_config`` use
+    ``OWN_LOOKUPS/TRASH_CONFIG_FILE`` (no versions_dir). The lock
+    used by the handler must therefore live alongside the
+    handler's actual file path, not the wl_trash.py internal one.
+    Caller passes the appropriate path; this helper just builds
+    the sibling .rmw.lock.
+    """
+    os.makedirs(OWN_LOOKUPS, exist_ok=True)
+    # Use the handler's flat-lookups path (where the live config
+    # actually lives) so the lock guards the production RMW. When
+    # the path divergence is fixed in a future ring, this lock and
+    # the writer paths can be reunified.
+    lock_path = os.path.join(OWN_LOOKUPS, TRASH_CONFIG_FILE) + ".rmw.lock"
+    with file_lock(lock_path, timeout=timeout):
+        yield
 
 
 def build_trash_metadata(

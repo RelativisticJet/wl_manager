@@ -143,7 +143,7 @@ from wl_rules import (read_rules_registry, write_rules_registry, read_csv_mappin
 # ---------------------------------------------------------------------------
 from wl_trash import (move_to_trash, list_trash, restore_from_trash,
                       restore_from_trash_pipeline, purge_trash_item, auto_cleanup_trash,
-                      get_trash_dir)
+                      get_trash_dir, trash_config_rmw_lock)
 
 # ---------------------------------------------------------------------------
 # Layer 3: Version Snapshots & Manifest (imported from wl_versions module)
@@ -525,6 +525,22 @@ def _get_notification_path():
     return os.path.join(versions_dir, NOTIFICATION_FILE)
 
 
+@contextmanager
+def _notifications_rmw_lock(timeout=5):
+    """Cross-process RMW lock around the notifications file.
+
+    Ring 6.1 Day 6.1.7a: ``_add_notification`` /
+    ``_action_mark_notifications_read`` / the FIM RMW path at line ~2575
+    all read-modify-write the same JSON file. The inline ``fcntl`` on
+    the write protects the single write, but not the outer RMW cycle —
+    two workers can read the same snapshot and the loser's writes are
+    silently lost. Wrap the outer cycle in a sibling lock file.
+    """
+    lock_path = _get_notification_path() + ".rmw.lock"
+    with file_lock(lock_path, timeout=timeout):
+        yield
+
+
 def _read_notifications():
     """Read per-user notifications dict."""
     path = _get_notification_path()
@@ -559,29 +575,34 @@ def _add_notification(for_user, notif_type, message,
 
     notif_type: 'new_request', 'approved', 'rejected', 'cancelled'
     """
-    data = _read_notifications()
-    user_notifs = data.get(for_user, [])
+    # Ring 6.1 R6-F5 class fix: wrap RMW so concurrent
+    # notifications (e.g., admin fan-out via _notify_admins or
+    # parallel approval submissions) do not clobber each other.
+    with _notifications_rmw_lock():
+        data = _read_notifications()
+        user_notifs = data.get(for_user, [])
 
-    notif = {
-        "id": "notif_{}_{}".format(int(time.time() * 1000000), for_user),
-        "type": notif_type,
-        "message": message,
-        "related_request_id": related_request_id,
-        "timestamp": int(time.time()),
-        "read": False,
-    }
-    if extra:
-        notif.update(extra)
+        notif = {
+            "id": "notif_{}_{}".format(int(time.time() * 1000000), for_user),
+            "type": notif_type,
+            "message": message,
+            "related_request_id": related_request_id,
+            "timestamp": int(time.time()),
+            "read": False,
+        }
+        if extra:
+            notif.update(extra)
 
-    user_notifs.insert(0, notif)  # newest first
+        user_notifs.insert(0, notif)  # newest first
 
-    # Cleanup: max per user, max age
-    cutoff = int(time.time()) - (NOTIFICATION_MAX_AGE_DAYS * 86400)
-    user_notifs = [n for n in user_notifs if n.get("timestamp", 0) >= cutoff]
-    user_notifs = user_notifs[:MAX_NOTIFICATIONS_PER_USER]
+        # Cleanup: max per user, max age
+        cutoff = int(time.time()) - (NOTIFICATION_MAX_AGE_DAYS * 86400)
+        user_notifs = [n for n in user_notifs
+                       if n.get("timestamp", 0) >= cutoff]
+        user_notifs = user_notifs[:MAX_NOTIFICATIONS_PER_USER]
 
-    data[for_user] = user_notifs
-    _write_notifications(data)
+        data[for_user] = user_notifs
+        _write_notifications(data)
 
 
 
@@ -607,6 +628,21 @@ def _get_lockdown_path():
     versions_dir = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
     os.makedirs(versions_dir, exist_ok=True)
     return os.path.join(versions_dir, _LOCKDOWN_FILE)
+
+
+@contextmanager
+def _lockdown_rmw_lock(timeout=5):
+    """Cross-process RMW lock around the lockdown state file.
+
+    Ring 6.1 Day 6.1.7a: ``_action_activate_lockdown`` and
+    ``_action_deactivate_lockdown`` each perform read → check →
+    write. Two concurrent superadmins could both pass the "is
+    locked?" check and both write conflicting state. Serialize the
+    cycle with a sibling lock file.
+    """
+    lock_path = _get_lockdown_path() + ".rmw.lock"
+    with file_lock(lock_path, timeout=timeout):
+        yield
 
 
 def _read_lockdown_state():
@@ -2521,65 +2557,69 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             except OSError:
                 pass  # Next prune attempt will retry
 
-        # Load existing notifications so we can dedupe by fim_id.
-        data = _read_notifications()
-        existing = data.get(user, [])
-        seen_ids = {n.get("fim_id") for n in existing if n.get("fim_id")}
+        # Ring 6.1 R6-F5 class fix: wrap RMW of notifications so a
+        # concurrent _add_notification / _action_mark_notifications_read
+        # cannot race with the FIM ingest path.
+        with _notifications_rmw_lock():
+            # Load existing notifications so we can dedupe by fim_id.
+            data = _read_notifications()
+            existing = data.get(user, [])
+            seen_ids = {n.get("fim_id") for n in existing if n.get("fim_id")}
 
-        added = False
-        for line in lines:
-            try:
-                ev = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            fim_id = ev.get("id")
-            if not fim_id or fim_id in seen_ids:
-                continue
-            # Skip entries older than our retention window even if they
-            # survived pruning.
-            if ev.get("timestamp", 0) < cutoff:
-                continue
+            added = False
+            for line in lines:
+                try:
+                    ev = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                fim_id = ev.get("id")
+                if not fim_id or fim_id in seen_ids:
+                    continue
+                # Skip entries older than our retention window even if they
+                # survived pruning.
+                if ev.get("timestamp", 0) < cutoff:
+                    continue
 
-            severity = ev.get("severity", "INFO")
-            action = ev.get("action", "unknown")
-            path = ev.get("path", "")
-            lockdown = ev.get("lockdown_active", False)
-            parts = [severity]
-            if lockdown:
-                parts.append("LOCKDOWN ACTIVE")
-            parts.append(action)
-            if path:
-                # Show only the basename for readability
-                parts.append(os.path.basename(path))
-            prefix = " | ".join(parts)
-            message = ("{}: {}. Review the Audit dashboard — File "
-                       "Integrity Monitor Alerts panel."
-                       .format(prefix, ev.get("details", "")[:200]))
+                severity = ev.get("severity", "INFO")
+                action = ev.get("action", "unknown")
+                path = ev.get("path", "")
+                lockdown = ev.get("lockdown_active", False)
+                parts = [severity]
+                if lockdown:
+                    parts.append("LOCKDOWN ACTIVE")
+                parts.append(action)
+                if path:
+                    # Show only the basename for readability
+                    parts.append(os.path.basename(path))
+                prefix = " | ".join(parts)
+                message = ("{}: {}. Review the Audit dashboard — File "
+                           "Integrity Monitor Alerts panel."
+                           .format(prefix, ev.get("details", "")[:200]))
 
-            notif = {
-                "id": "notif_fim_{}_{}".format(
-                    fim_id, int(time.time() * 1000000)),
-                "type": "fim_alert",
-                "message": message,
-                "related_request_id": None,
-                "timestamp": ev.get("timestamp", now),
-                "read": False,
-                "fim_id": fim_id,
-                "fim_severity": severity,
-                "fim_lockdown_active": lockdown,
-            }
-            existing.insert(0, notif)
-            seen_ids.add(fim_id)
-            added = True
+                notif = {
+                    "id": "notif_fim_{}_{}".format(
+                        fim_id, int(time.time() * 1000000)),
+                    "type": "fim_alert",
+                    "message": message,
+                    "related_request_id": None,
+                    "timestamp": ev.get("timestamp", now),
+                    "read": False,
+                    "fim_id": fim_id,
+                    "fim_severity": severity,
+                    "fim_lockdown_active": lockdown,
+                }
+                existing.insert(0, notif)
+                seen_ids.add(fim_id)
+                added = True
 
-        if added:
-            # Trim and persist using the same rules as _add_notification
-            cutoff_notif = now - (NOTIFICATION_MAX_AGE_DAYS * 86400)
-            existing = [n for n in existing
-                        if n.get("timestamp", 0) >= cutoff_notif]
-            existing = existing[:MAX_NOTIFICATIONS_PER_USER]
-            data[user] = existing
-            _write_notifications(data)
+            if added:
+                # Trim and persist using the same rules as _add_notification
+                cutoff_notif = now - (NOTIFICATION_MAX_AGE_DAYS * 86400)
+                existing = [n for n in existing
+                            if n.get("timestamp", 0) >= cutoff_notif]
+                existing = existing[:MAX_NOTIFICATIONS_PER_USER]
+                data[user] = existing
+                _write_notifications(data)
 
     def _action_get_trash_config(self, request, query, user, roles):
         """GET action wrapper for get_trash_config (admin-only)."""
@@ -3347,25 +3387,29 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _action_set_trash_retention(self, request, payload, user, roles):
         """POST action wrapper for set_trash_retention (admin-only)."""
-        path = os.path.join(OWN_LOOKUPS, TRASH_CONFIG_FILE)
-        config = {}
-        if os.path.isfile(path):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    config = json.load(f)
-            except (json.JSONDecodeError, OSError):
-                pass
-
-        retention_days = payload.get("retention_days", DEFAULT_TRASH_RETENTION_DAYS)
+        retention_days = payload.get(
+            "retention_days", DEFAULT_TRASH_RETENTION_DAYS)
         if retention_days < MIN_TRASH_RETENTION_DAYS:
             return self._resp(400, {
                 "error": f"Retention must be >= {MIN_TRASH_RETENTION_DAYS} days"
             })
 
-        config["retention_days"] = retention_days
-        os.makedirs(OWN_LOOKUPS, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2)
+        # Ring 6.1 R6-F5 class fix: serialize read → modify → write so
+        # two concurrent superadmins cannot clobber each other's
+        # retention-policy edits.
+        path = os.path.join(OWN_LOOKUPS, TRASH_CONFIG_FILE)
+        with trash_config_rmw_lock():
+            config = {}
+            if os.path.isfile(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        config = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    pass
+            config["retention_days"] = retention_days
+            os.makedirs(OWN_LOOKUPS, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2)
 
         return self._resp(200, {"success": True})
 
@@ -3493,22 +3537,27 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if ascii_err:
             return self._resp(400, {"error": ascii_err})
         reason = sanitize_text(raw_reason[:500])
-        state = _read_lockdown_state()
-        if state.get("locked"):
-            return self._resp(200, {
-                "error": "Lockdown is already active (activated by "
-                         "{})".format(state.get("locked_by", "unknown"))})
+        # Ring 6.1 R6-F5 class fix: serialize read → check → write so
+        # two concurrent activate calls can't both see "unlocked" and
+        # both clobber lockdown metadata.
+        with _lockdown_rmw_lock():
+            state = _read_lockdown_state()
+            if state.get("locked"):
+                return self._resp(200, {
+                    "error": "Lockdown is already active (activated by "
+                             "{})".format(
+                                 state.get("locked_by", "unknown"))})
 
-        now = int(time.time())
-        new_state = {
-            "locked": True,
-            "locked_by": user,
-            "locked_at": now,
-            "locked_at_human": datetime.now(timezone.utc).strftime(
-                "%Y-%m-%d %H:%M:%S UTC"),
-            "reason": reason,
-        }
-        _write_lockdown_state(new_state)
+            now = int(time.time())
+            new_state = {
+                "locked": True,
+                "locked_by": user,
+                "locked_at": now,
+                "locked_at_human": datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%d %H:%M:%S UTC"),
+                "reason": reason,
+            }
+            _write_lockdown_state(new_state)
 
         # Notify all admins
         sys_key = self._get_session_key(request)
@@ -3538,19 +3587,23 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         Must be a DIFFERENT superadmin than the one who activated.
         """
-        state = _read_lockdown_state()
-        if not state.get("locked"):
-            return self._resp(200, {
-                "error": "Lockdown is not active"})
+        # Ring 6.1 R6-F5 class fix: serialize read → check → write so
+        # two concurrent deactivate calls cannot race past the
+        # self-unlock check.
+        with _lockdown_rmw_lock():
+            state = _read_lockdown_state()
+            if not state.get("locked"):
+                return self._resp(200, {
+                    "error": "Lockdown is not active"})
 
-        # Self-unlock prevention: activator cannot deactivate
-        if state.get("locked_by") == user:
-            return self._resp(200, {
-                "error": "You activated this lockdown. A different "
-                         "super-admin must deactivate it."})
+            # Self-unlock prevention: activator cannot deactivate
+            if state.get("locked_by") == user:
+                return self._resp(200, {
+                    "error": "You activated this lockdown. A different "
+                             "super-admin must deactivate it."})
 
-        now = int(time.time())
-        _write_lockdown_state({})
+            now = int(time.time())
+            _write_lockdown_state({})
 
         # Notify all admins
         sys_key = self._get_session_key(request)
@@ -3577,10 +3630,15 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _action_mark_notifications_read(self, request, payload, user, roles):
         """POST action wrapper for mark_notifications_read."""
-        data = _read_notifications()
-        for notif in data.get(user, []):
-            notif["read"] = True
-        _write_notifications(data)
+        # Ring 6.1 R6-F5 class fix: read-modify-write must be
+        # serialized so a concurrent _add_notification cannot have its
+        # newly-appended notif clobbered when we write the read-state
+        # back.
+        with _notifications_rmw_lock():
+            data = _read_notifications()
+            for notif in data.get(user, []):
+                notif["read"] = True
+            _write_notifications(data)
         return self._resp(200, {"success": True})
 
     def _action_log_event(self, request, payload, user, roles):
@@ -3646,65 +3704,77 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         window_path = os.path.join(OWN_LOOKUPS, VERSIONS_DIR, "_fim_deploy_window.json")
         recovery_log = os.path.join(OWN_LOOKUPS, VERSIONS_DIR, "_recovery_log.jsonl")
-
-        # Atomic check-and-create: if the file already exists, verify
-        # whether the window is still active before allowing overwrite.
-        # This closes the TOCTOU between "is file present?" and "write".
         os.makedirs(os.path.dirname(window_path), exist_ok=True)
-        try:
-            fd = os.open(window_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                         0o600)
-            os.close(fd)
-            # File created exclusively — no active window. Proceed.
-        except OSError:
-            # File exists — check if window is still active.
-            try:
-                with open(window_path, "r", encoding="utf-8") as fh:
-                    existing = json.load(fh)
-                if int(existing.get("expires_at", 0)) > int(time.time()):
-                    return self._resp(200, {
-                        "error": "A deploy window is already active "
-                                 "(expires at {}). Close it first.".format(
-                                     existing.get("expires_at"))})
-            except (OSError, json.JSONDecodeError):
-                pass  # Stale/corrupt file — overwrite is safe
 
-        # Derive FIM HMAC key (same construction as wl_fim.py)
-        session_key = self._get_session_key(request)
-        guid = _fetch_server_guid(session_key)
-        if not guid:
-            # Clean up the empty sentinel file we may have created
+        # Ring 6.1 R6-F5 class fix: serialize the full
+        # check-active → write cycle. The prior O_CREAT|O_EXCL gives
+        # a partial guarantee (two activates against an absent file
+        # are serialized by the kernel), but when an inactive/stale
+        # window file is present both racing superadmins can pass
+        # the "is active?" check and then both write — clobbering
+        # each other's HMAC + reason. The sibling .rmw.lock closes
+        # this last gap.
+        with file_lock(window_path + ".rmw.lock", timeout=5):
+            # Atomic check-and-create: if the file already exists,
+            # verify whether the window is still active before
+            # allowing overwrite. This closes the TOCTOU between
+            # "is file present?" and "write".
             try:
-                os.remove(window_path)
+                fd = os.open(
+                    window_path,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                    0o600)
+                os.close(fd)
+                # File created exclusively — no active window. Proceed.
+            except OSError:
+                # File exists — check if window is still active.
+                try:
+                    with open(window_path, "r", encoding="utf-8") as fh:
+                        existing = json.load(fh)
+                    if int(existing.get("expires_at", 0)) > int(time.time()):
+                        return self._resp(200, {
+                            "error": "A deploy window is already active "
+                                     "(expires at {}). Close it first."
+                                     .format(existing.get("expires_at"))})
+                except (OSError, json.JSONDecodeError):
+                    pass  # Stale/corrupt file — overwrite is safe
+
+            # Derive FIM HMAC key (same construction as wl_fim.py)
+            session_key = self._get_session_key(request)
+            guid = _fetch_server_guid(session_key)
+            if not guid:
+                # Clean up the empty sentinel file we may have created
+                try:
+                    os.remove(window_path)
+                except OSError:
+                    pass
+                return self._resp(200, {
+                    "error": "Cannot derive FIM signing key — "
+                             "server GUID unavailable."})
+            fim_key = hashlib.sha256(
+                FIM_HMAC_SALT + guid.encode("utf-8")).digest()
+
+            started_at = int(time.time())
+            expires_at = started_at + duration * 60
+            body = {
+                "started_at": started_at,
+                "expires_at": expires_at,
+                "started_by": user,
+                "reason": reason,
+            }
+            payload_json = json.dumps(
+                {k: v for k, v in body.items() if k != "_checksum"},
+                sort_keys=True, default=str)
+            body["_checksum"] = hmac.new(
+                fim_key, payload_json.encode("utf-8"),
+                hashlib.sha256).hexdigest()
+
+            with open(window_path, "w", encoding="utf-8") as fh:
+                json.dump(body, fh, indent=2)
+            try:
+                os.chmod(window_path, 0o600)
             except OSError:
                 pass
-            return self._resp(200, {
-                "error": "Cannot derive FIM signing key — "
-                         "server GUID unavailable."})
-        fim_key = hashlib.sha256(
-            FIM_HMAC_SALT + guid.encode("utf-8")).digest()
-
-        started_at = int(time.time())
-        expires_at = started_at + duration * 60
-        body = {
-            "started_at": started_at,
-            "expires_at": expires_at,
-            "started_by": user,
-            "reason": reason,
-        }
-        payload_json = json.dumps(
-            {k: v for k, v in body.items() if k != "_checksum"},
-            sort_keys=True, default=str)
-        body["_checksum"] = hmac.new(
-            fim_key, payload_json.encode("utf-8"),
-            hashlib.sha256).hexdigest()
-
-        with open(window_path, "w", encoding="utf-8") as fh:
-            json.dump(body, fh, indent=2)
-        try:
-            os.chmod(window_path, 0o600)
-        except OSError:
-            pass
 
         # Append recovery-log audit record (host_user matches shell script convention)
         rec = {
@@ -3746,15 +3816,21 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         window_path = os.path.join(OWN_LOOKUPS, VERSIONS_DIR, "_fim_deploy_window.json")
         recovery_log = os.path.join(OWN_LOOKUPS, VERSIONS_DIR, "_recovery_log.jsonl")
 
-        if not os.path.isfile(window_path):
-            return self._resp(200, {"error": "No deploy window is active."})
+        # Ring 6.1 R6-F5 class fix: hold the same lock as
+        # ``_action_open_deploy_window`` so an open + close cannot
+        # interleave (open writes the file, close removes it; without
+        # the lock these can sequence as open → close → remove,
+        # leaving no window even though the open returned success).
+        with file_lock(window_path + ".rmw.lock", timeout=5):
+            if not os.path.isfile(window_path):
+                return self._resp(200, {"error": "No deploy window is active."})
 
-        try:
-            os.remove(window_path)
-        except OSError as exc:
-            return self._resp(200, {
-                "error": "Failed to remove deploy window file: {}".format(
-                    type(exc).__name__)})
+            try:
+                os.remove(window_path)
+            except OSError as exc:
+                return self._resp(200, {
+                    "error": "Failed to remove deploy window file: {}".format(
+                        type(exc).__name__)})
 
         # Append recovery-log audit record (host_user matches shell script convention)
         now = int(time.time())

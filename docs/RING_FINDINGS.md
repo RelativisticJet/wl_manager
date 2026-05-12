@@ -5146,9 +5146,9 @@ CI.
 ### R6.1-D4 — Lock overhead benchmark
 
 Measured wall-clock for 5 consecutive runs of
-each 7-way concurrent test, post-fix at
-build 653. Each test fires 7 admin REST calls
-simultaneously through one Splunk container.
+each 7-way concurrent test (originally captured at build 653,
+just after the R6-F7 fix landed). Each test fires 7 admin REST
+calls simultaneously through one Splunk container.
 
 | Test                                                  | Run 1   | Run 2   | Run 3   | Run 4   | Run 5   | Mean    |
 |-------------------------------------------------------|---------|---------|---------|---------|---------|---------|
@@ -5244,7 +5244,8 @@ is exactly the optimistic-locking domain.
   configs, mapping in trash + replay paths)
   plus the deferred `approval_count` site
   in `_process_approval_inner`. ~12-13
-  sites.
+  sites — split into 6.1.7a (~5 sites) and
+  6.1.7b (~7-8 sites).
 - Day 6.1.8: live-test the `_rate_limits`
   per-worker hypothesis (R6-F8 sibling at
   `bin/wl_ratelimit.py:16`).
@@ -5256,3 +5257,112 @@ is exactly the optimistic-locking domain.
   `test_concurrent_presence.cjs` Phase D
   collapse-tolerance once R6-F8 fix lands.
 - Ring 6.1 retro + close.
+
+### R6.1-D7a — MEDIUM sites batch 1 shipped at build 654
+
+Wrapped 5 MEDIUM-priority RMW sites in
+sibling `.rmw.lock` files using the
+established `wl_filelock.file_lock` pattern.
+Each site read state, modified it in
+process memory, and wrote back without
+cross-process serialization — same shape as
+R6-F5/F6 but lower observed contention so
+they hadn't tripped the Ring 6 test suite
+(yet).
+
+**Sites wrapped**:
+
+1. **Notifications RMW** (`bin/wl_handler.py`).
+   Added `_notifications_rmw_lock()` helper.
+   Wrapped `_add_notification`,
+   `_action_mark_notifications_read`, and
+   the FIM-ingest RMW inside
+   `_ingest_fim_alerts_for_user`. The
+   inline `fcntl.flock` on `_write_notifications`
+   already serialized the WRITE; the lock
+   added here serializes the OUTER RMW
+   cycle so two concurrent appenders cannot
+   each read the same snapshot and clobber
+   each other.
+2. **Lockdown state RMW** (`bin/wl_handler.py`).
+   Added `_lockdown_rmw_lock()` helper.
+   Wrapped `_action_activate_lockdown` and
+   `_action_deactivate_lockdown`. Closes
+   the race where two activate calls could
+   both see "unlocked" and both write
+   (loser's `reason` and `locked_by` get
+   silently clobbered).
+3. **Trash retention RMW** (`bin/wl_handler.py`
+   and `bin/wl_trash.py`). Added
+   `trash_config_rmw_lock` to wl_trash.py
+   and wrapped `_action_set_trash_retention`.
+   Surfaced a pre-existing path divergence:
+   the handler writes to
+   `OWN_LOOKUPS/TRASH_CONFIG_FILE` while
+   `read_trash_config` / `write_trash_config`
+   in wl_trash.py use
+   `OWN_LOOKUPS/VERSIONS_DIR/TRASH_CONFIG_FILE`.
+   The lock guards the handler's path
+   (where the UI-edited config actually
+   lives). Reconciling the two paths is a
+   separate cleanup ring.
+4. **FIM deploy window open/close**
+   (`bin/wl_handler.py`). Wrapped both
+   `_action_open_deploy_window` and
+   `_action_close_deploy_window` in a
+   shared sibling lock on
+   `_fim_deploy_window.json.rmw.lock`. The
+   prior `O_CREAT | O_EXCL` partial guard
+   only protected when the file was
+   absent; when a stale/inactive window
+   file was present two racing
+   superadmins could both pass the
+   "is active?" check and both write
+   (clobbering each other's HMAC + reason).
+   Sharing the lock with the close path
+   also prevents an open/close interleave
+   from sequencing as
+   `open → close → remove`.
+
+**Pre-existing TOCTOU guard preserved**: the
+deploy_window open still does its
+`O_CREAT | O_EXCL` exclusive create inside
+the new lock. Belt-and-suspenders — even
+if the lock were ever lifted, the kernel
+exclusive-create still catches the
+"no file present" case.
+
+**Verification post-deploy**:
+
+- `test_concurrent_save_csv.cjs` — 1 success,
+  6 conflicts (R6-F7 unchanged).
+- `test_concurrent_limit_other_counters.cjs` —
+  csv_creation 5/5, rule_deletion 2/2,
+  counters exact (R6-F5/F6 unchanged).
+- `test_trash_traversal.cjs` — 5/5 green
+  (trash CRUD flows unaffected by the
+  retention RMW lock).
+- `test_notification_payload.py` (integration,
+  7 tests) — green. Notification base
+  envelope + approval-extra fields + read
+  state all preserved. Confirms the RMW
+  wrap did not alter the payload shape
+  the bell renderer depends on.
+
+### Carries forward from R6.1-D7a
+
+- Day 6.1.7b: mapping in trash + replay
+  paths plus the deferred `approval_count`
+  site. ~7-8 sites. Targets:
+  `wl_handler.py:4114` (trash-restore
+  mapping update), `wl_trash.py:453/473/598/609`
+  (restore-flow mapping + rules updates),
+  `wl_replay.py:462` (approval-replay
+  mapping write), and the `approval_count`
+  check + increment in `_process_approval_inner`
+  (deferred from Day 6.1.2 because the
+  150-line gap between check and increment
+  makes a clean single-lock wrap
+  awkward — likely needs the
+  `wl_approval._approval_queue_lock` to be
+  re-used at the right scope).
