@@ -4220,6 +4220,52 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     # and delete_csv_pipeline in wl_rules.py (Plan 04-07)
 
     def _save_csv(self, request, payload, user, _from_approval=False):
+        """Save CSV — thin wrapper that acquires a cross-process file lock
+        around the read-modify-write cycle before delegating to the
+        original body (now ``_save_csv_locked``).
+
+        Ring 6.1 R6-F7 fix. Pre-fix the comment inside
+        ``_save_csv_locked`` promised a file-level lock but no actual
+        ``file_lock`` was acquired; the optimistic check + read + write
+        ran lockless and concurrent saves with the same expected
+        mtime/hash could all pass the check before any wrote, producing
+        silent data loss (HTTP 200 returned for clobbered writes).
+
+        The lock target is the CSV file itself (per-CSV granularity) so
+        saves on different CSVs don't serialize. We need ``path`` to
+        construct the lock target, so do a minimal path-resolve here.
+        If resolution fails, fall through to the inner method which
+        returns the canonical 404.
+        """
+        from wl_filelock import file_lock
+
+        csv_file = payload.get("csv_file", "")
+        app_context = payload.get("app_context", "")
+        # Only enough validation to resolve the path. Anything more
+        # (invalid app_context, malformed payload) is the inner
+        # method's job to reject with the canonical response shape.
+        if is_valid_app_context(app_context):
+            lock_target = resolve_csv_path(csv_file, app_context)
+            if lock_target is None:
+                fallback = os.path.join(OWN_LOOKUPS, csv_file)
+                if os.path.isfile(fallback) and safe_realpath(fallback, APPS_DIR):
+                    lock_target = safe_realpath(fallback, APPS_DIR)
+        else:
+            lock_target = None
+
+        if lock_target is None:
+            # Path can't be resolved — inner method will return the
+            # appropriate error (400 invalid app_context, or 404).
+            return self._save_csv_locked(
+                request, payload, user, _from_approval=_from_approval)
+
+        # Lock the per-CSV ".rmw.lock" sibling. Held through the entire
+        # optimistic check + diff + pipeline write.
+        with file_lock(lock_target + ".rmw.lock", timeout=10):
+            return self._save_csv_locked(
+                request, payload, user, _from_approval=_from_approval)
+
+    def _save_csv_locked(self, request, payload, user, _from_approval=False):
         csv_file = payload.get("csv_file", "")
         app_context = payload.get("app_context", "")
         if not is_valid_app_context(app_context):
