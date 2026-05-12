@@ -5628,7 +5628,7 @@ informational.
   `session_key=self._get_session_key(request)`
   to the wl_presence functions.
 
-**Verified at build 656**:
+**Verified post-deploy** (originally captured at build 656 immediately after 6.1.9a shipped):
 
 - `tests/unit/test_presence.py` (23
   tests) — green. In-memory fallback
@@ -5676,3 +5676,128 @@ docs/RING_FINDINGS.md follow-up.
   previously it was a soft-signal log).
   Tighten `test_ratelimit_per_worker.cjs`
   to FAIL if `successes !== 30`.
+
+### R6.1-D9b — Rate limiter migration to KV + lock shipped at build 657
+
+**Change**: applied the same KV-backed
+pattern to `bin/wl_ratelimit.py`. The
+sliding-window timestamps now live in a
+Splunk KV collection (`wl_ratelimit_state`)
+keyed by `"<user>::<action_type>"`.
+Production paths thread `session_key`
+through `check_rate_limit(...)`; unit tests
+keep the in-memory fallback.
+
+**Critical discovery during 6.1.9b**: KV
+alone is INSUFFICIENT for rate limiting.
+The first deploy at build 657 still showed
+60/60 successes in the burst test —
+because the read-modify-write sequence
+(read timestamps → check cap → append +
+write) is not atomic across workers. With
+60 parallel requests hitting a freshly
+empty bucket:
+
+1. All 60 read `[]`.
+2. All 60 see `0 < 30 = cap` → pass.
+3. All 60 write back `[now_i]` (last
+   write wins).
+4. Bucket ends up with 1 timestamp; cap
+   never bound.
+
+The fix is a per-`(user, action_type)`
+**cross-process file lock** wrapping the
+RMW. Lock granularity is critical:
+
+- Per-key (not global): two different
+  users / two different action_types don't
+  block each other.
+- Per-key (not per-user): a user's
+  read-write traffic doesn't serialize
+  against their write-write traffic;
+  separate buckets, separate locks.
+
+Lock files live in `tempfile.gettempdir()`
+because rate-limit state is ephemeral and
+doesn't need to survive container
+restarts — different policy from the
+Day 6.1.2/6.1.7 locks which sit next to
+their persistent data files.
+
+**Files**:
+
+- `bin/wl_ratelimit.py` — rewritten
+  (~245 lines). KV helpers
+  (`_kv_read_timestamps`,
+  `_kv_write_timestamps`, `_kv_list_all`,
+  `_kv_delete_key`); RMW protected by
+  `wl_filelock.file_lock` at sibling
+  lock path
+  `tempfile.gettempdir()/wl_ratelimit_<safe>.rmw.lock`.
+  Public functions
+  (`check_rate_limit`,
+  `reset_rate_limits`) accept optional
+  `session_key`.
+- `bin/wl_handler.py` — the single
+  `check_rate_limit(...)` call at
+  `handle()` now passes
+  `session_key=self._get_session_key(request)`.
+- `default/collections.conf` —
+  `[wl_ratelimit_state]` stanza added in
+  Day 6.1.9a's commit (single conf
+  reload covers both 9a and 9b).
+
+**Verified at build 657 with sliding
+window cleared**:
+
+- `tests/unit/test_ratelimit.py`
+  (11 tests) — green. In-memory path
+  preserved.
+- `tests/e2e/test_ratelimit_per_worker.cjs`
+  burst: parallelism=60, cap=30,
+  **successes=29, rate_rejects=31,
+  other_errors=0**. The 1-below-cap is
+  the warmup call accounting (warmup
+  consumed 1 of 30 budget, leaving 29
+  for the burst). Pre-fix value was
+  successes=60 / rate_rejects=0 — the
+  R6-F8 signature. The fix flipped it
+  by 31 rate-rejects.
+- `test_concurrent_presence.cjs` (with
+  sliding-window wait) — 7/7 green.
+- `test_concurrent_save_csv.cjs` — still
+  1/6 unchanged (R6-F7).
+- `test_concurrent_limit_other_counters.cjs`
+  — still 5/5 + 2/2 unchanged
+  (R6-F5/F6).
+
+**Side-effect observation (test
+infrastructure note)**: running multiple
+concurrency tests back-to-back can cascade
+into rate-limit-exceeded failures during
+setup, because the strict cross-worker
+enforcement no longer lets superadmin1
+fire setup writes faster than 30/60s.
+This is the CORRECT behavior of the fix
+— Day 6.1.10 should add a note to the
+test docs about staggering test runs (or
+add a fresh-bucket helper to `lib_helpers.cjs`).
+
+### Carries forward from R6.1-D9b
+
+- Day 6.1.10: tighten BOTH
+  `test_concurrent_presence.cjs` Phase D
+  AND `test_ratelimit_per_worker.cjs`.
+  For ratelimit: change the "AMBIGUOUS"
+  branch to a hard fail; change the
+  "successes === RATE_MAX_WRITES" branch
+  to accept `successes IN
+  {RATE_MAX_WRITES, RATE_MAX_WRITES - 1}`
+  (accounting for the warmup call), and
+  hard-fail otherwise.
+- Day 6.1.10 follow-up: document
+  test-run cadence guidance (rate-limit
+  cascade between back-to-back suites)
+  in `tests/e2e/` README or test-suite
+  docs.
+- Ring 6.1 retro + close.

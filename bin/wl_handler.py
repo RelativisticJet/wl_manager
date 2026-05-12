@@ -1542,8 +1542,15 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             user = get_user(request)
 
             # ── Rate limiting ────────────────────────────────────────
+            # Ring 6.1 Day 6.1.9b (R6-F8 fix): thread session_key so
+            # check_rate_limit uses the cross-worker KV-backed
+            # bucket. Without session_key, the in-memory per-worker
+            # dict is used (no longer the production path — used
+            # only by unit tests).
             action_type = "read" if method == "GET" else "write"
-            if not check_rate_limit(user, action_type):
+            if not check_rate_limit(
+                    user, action_type,
+                    session_key=self._get_session_key(request)):
                 return self._resp(429, {
                     "error": "Rate limit exceeded. Please wait before retrying."
                 })
