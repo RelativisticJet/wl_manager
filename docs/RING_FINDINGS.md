@@ -6352,3 +6352,183 @@ migration, then Show Requested Data
 (approval queue preview feature), then Sigstore
 release-verification dry-run.
 
+## Manual a11y verification — 2026-05-12 (build 659)
+
+User-requested manual a11y pass via Playwright, complementing
+the automated axe-core triage shipped at build 658. Where
+axe-core catches static contrast and missing-attribute issues,
+manual verification catches behavioral a11y — keyboard
+navigation, focus management, motion preferences, screen-
+reader role announcements.
+
+### What was tested
+
+Across all 3 dashboards (whitelist_manager, control_panel,
+audit) the following manual checks ran against the live
+container at `http://localhost:8000`:
+
+1. **Keyboard tab order**: every action button reachable via
+   Tab from a logical starting point.
+2. **Focus-visible ring**: the 2px solid #2196f3 outline
+   declared at `appserver/static/whitelist_manager.css:1349`
+   actually renders when buttons are focused.
+3. **Reduced-motion preference**: with
+   `prefers-reduced-motion: reduce` emulated, transitions
+   and animations honour the user's OS setting.
+4. **Modal focus management**: focus moves into the modal on
+   open, Tab cycles within it, Escape closes it, focus
+   returns to the opener afterward.
+5. **Element-tag audit**: every action button is a
+   `<button>` not a `<span>` (the build-633 migration
+   target).
+
+### Findings
+
+#### Whitelist Manager dashboard
+
+| Check | Result |
+| --- | --- |
+| Buttons via Tab | ✅ 21 action buttons all reachable |
+| Focus-visible ring | ✅ 2px #2196f3 outline renders |
+| Reduced-motion | ❌ FIXED build 659 (see below) |
+| Modal focus on open | ✅ focuses input in name-prompt modal |
+| Modal Tab cycle | ❌ Tab past Cancel escapes to `<body>` |
+| Modal Escape close | ⚠️ closes modal but focus stays on body |
+| Action button tag | ✅ 21 of 21 are `<button>` |
+| Action button type | ⚠️ all 21 use `type="submit"` (latent) |
+| Span clear-buttons | ⚠️ 3 `<span class="...-btn">` `tabIndex=-1` |
+
+#### Control Panel dashboard
+
+| Check | Result |
+| --- | --- |
+| Buttons via Tab | ✅ 4 buttons all reachable |
+| Action button tag | ✅ 4 of 4 are `<button>` |
+| Action button type | ✅ 4 of 4 use `type="button"` |
+| Span clear-buttons | ✅ 0 |
+
+#### Audit Trail dashboard
+
+| Check | Result |
+| --- | --- |
+| Buttons via Tab | ✅ 6 buttons all reachable |
+| Reduced-motion | ✅ transitions at 0.00001s |
+| Action button tag | ✅ 6 of 6 are `<button>` |
+| Action button type | ✅ 6 of 6 use `type="button"` |
+| Span clear-buttons | ✅ 0 |
+
+### What was fixed in this round (build 659)
+
+#### Reduced-motion preference
+
+`appserver/static/whitelist_manager.css` had 12 transitions
+and animations (notification slide-in, border colours,
+transforms, opacities) firing at full 0.15-0.2s duration
+even when the user had set
+`prefers-reduced-motion: reduce` at the OS level. This is a
+WCAG 2.1 Success Criterion 2.3.3 (Animation from
+Interactions) miss — users with vestibular disorders or
+photosensitivity rely on this preference.
+
+Fix: added a `@media (prefers-reduced-motion: reduce)` rule
+near the focus-visible block that collapses every animation
+and transition to 0.01ms. The 0.01ms (not 0) is deliberate
+— a zero-duration transition skips the `transitionend`
+event in some browsers, breaking JS that relies on the
+event firing. 0.01ms is imperceptible to humans but still
+fires the event.
+
+Verified live: with reduced-motion emulated, the
+`transitionDuration` computed on `#rule-search` and
+`#btn-save` collapses from `0.15-0.2s` to `1e-05s`.
+
+#### CLAUDE.md "Pending / Future Work" cleanup
+
+The "Pending / Future Work" list in CLAUDE.md still claimed
+the modal-action-button migration was pending. The migration
+was actually completed at build 633 — the CSS comment at
+line 1337-1342 documents the move from
+`<span class="btn">` to `<button type="button" class="btn">`.
+Every action button in the live app is now a `<button>` element
+(verified: 21+4+6 = 31 across all dashboards, 0 span action
+buttons). The Pending entry was rewritten to reflect this and
+note the 3 remaining `<span class="...-btn">` "×" clear-buttons
+as a lower-priority concern (they have keyboard alternatives).
+
+### Findings deferred (documented for later)
+
+#### Focus-trap escapes from modals (P2)
+
+When a modal is open and the user Tabs past the last
+focusable element, focus moves to `<body>` while the modal
+stays open. Users with screen readers or keyboard-only
+navigation can lose track of where they are. WCAG 2.4.3
+(Focus Order) violation.
+
+Fix shape: a single MutationObserver-driven module
+(`wl_a11y_modal.js`, ~80 lines) that detects
+`.wl-modal-overlay` add/remove and (a) wraps Tab from
+last→first and Shift+Tab from first→last, (b) records the
+opener before modal open and restores focus on close.
+Estimated 1-2 hours including test. Deferred because all 34
+modal call sites in `wl_modals.js` are inline-constructed —
+a refactor to a shared `showModal()` helper would carry it
+more cleanly but is larger scope.
+
+#### Focus restoration on modal close (P2)
+
+Escape closes the modal correctly but focus stays on
+`<body>` instead of returning to the trigger button
+(`#btn-add-col` etc). Same fix as above.
+
+#### Toolbar buttons use `type="submit"` (P3 / latent)
+
+21 whitelist-manager toolbar buttons declare
+`type="submit"`. They are NOT inside any `<form>` element
+currently, so the default browser behavior never fires.
+The CSS comment at line 1337 documents that the build-633
+migration target was `<button type="button">`; the actual
+HTML shipped with `type="submit"` instead — a missed
+detail. Latent bug only — no user-visible impact today,
+but if any code path ever wraps these in a `<form>`, every
+click would submit it.
+
+The control_panel and audit dashboards both correctly use
+`type="button"` for all their buttons, so this is
+whitelist_manager-specific.
+
+Fix shape: search-replace in the whitelist_manager HTML
+builder code (Module 4 `wl_table.js` + Module 6
+`wl_versions.js` + Module 8 `wl_csv_io.js`). Single-pass,
+low-risk. Estimated 30 minutes.
+
+#### `<span class="wl-search-clear-btn">` "×" buttons
+   (P2-P3, already documented in CLAUDE.md)
+
+Three "×" glyph clear-buttons (search-clear in toolbar,
+column-remove in table) are `<span>` elements with
+`tabIndex=-1` — not keyboard-reachable. Users have
+keyboard alternatives (clearing the input directly, picking
+a different dropdown option from the next focused element),
+so this is a P2-P3 nicety, not a blocker.
+
+Fix shape: convert each `<span class="wl-...-btn">` to
+`<button type="button" class="wl-...-btn" aria-label="Clear">`.
+Visually identical (CSS already styles `.wl-search-clear-btn`,
+`.wl-col-remove-btn` independent of element tag). Single-line
+HTML changes in 3 sites. Estimated 30 minutes including
+verification.
+
+### Build 659 — summary
+
+- **Files changed**: 3 (`whitelist_manager.css`,
+  `whitelist_manager.js`, `app.conf`).
+- **Production code changed**: yes (CSS — added the
+  reduced-motion media query block).
+- **Tests added**: 0 (manual verification only).
+- **Findings fixed**: 1 of 4 (reduced-motion). Other 3
+  documented as deferred.
+- **Verified live**: yes, with Playwright + emulated
+  `prefers-reduced-motion: reduce` at the browser level.
+
+

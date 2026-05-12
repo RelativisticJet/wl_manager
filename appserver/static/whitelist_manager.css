@@ -1351,6 +1351,30 @@ th.wl-pending-approval-header {
     outline-offset: 2px;
 }
 
+/* Respect the OS-level `prefers-reduced-motion: reduce` setting.
+ * Build 659 (2026-05-12) — manual a11y verification surfaced that
+ * the app's 12 transitions/animations (notification slide-in,
+ * border-color, transform, opacity) ran at full duration even when
+ * the user had set the OS preference for reduced motion. Users
+ * with vestibular disorders or photosensitivity rely on this
+ * preference to avoid motion sickness; the WCAG 2.1 success
+ * criterion 2.3.3 (Animation from Interactions, Level AAA) and
+ * the Web Almanac data agree this is a P2 baseline.
+ *
+ * The pattern is a global `*` override capped at 0.01ms — short
+ * enough to be imperceptible, non-zero so any code that does
+ * `transitionend` listeners still fires (a zero-duration
+ * transition skips the event in some browsers).
+ */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
 /* ── Audit Trail "Expiring Soon" height cap ────────────────────────────
  * Splunk SimpleXML <option name="height"> is ignored on table panels,
  * so we cap the panel via CSS instead. Without the cap the table
