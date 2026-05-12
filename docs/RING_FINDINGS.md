@@ -4141,3 +4141,191 @@ Until Ring 6.1 ships, the tolerances baked into
 soft regression alarm — a hard fail there would
 indicate a NEW gate-shape regression (R6-F4 class)
 rather than the known R6-F5/F6 leak.
+
+### R6-D4 — Concurrent ``save_csv`` race surfaces R6-F7
+
+**Goal**: characterize the optimistic-lock race
+under barrier-synchronized 7-way concurrency. A
+prior round-4 characterization test
+([tests/e2e/test_concurrent_save_race.cjs](../tests/e2e/test_concurrent_save_race.cjs))
+already documented that two concurrent
+``save_csv`` calls with the same
+``expected_content_hash`` could both succeed,
+exhibiting last-writer-wins. Day 4 extends that
+test in three ways:
+
+1. **7 independent browser sessions** instead of
+   2 promises on one page. Splunk's
+   PersistentScriptHandler runs multiple worker
+   processes; the previous test routed both
+   promises through one socket and rarely hit
+   cross-process timing. With 7 sessions we
+   exercise the same multi-worker surface that
+   produced R6-F5 + R6-F6.
+2. **Barrier rendezvous** via
+   ``lib_multi_session.createBarrier`` rather than
+   raw ``Promise.all``. All 7 reach the POST call
+   site before any fire; the 7th releases all in
+   the same microtask tick. Removes event-loop
+   jitter between ``.then()`` callbacks.
+3. **On-disk content verification**. The previous
+   test stopped at classifying response statuses
+   ("both 200" vs "one 409"). Day 4 re-reads the
+   CSV from the container after the race and
+   asserts the persisted state against the
+   classified response count.
+
+**Test**:
+[tests/e2e/test_concurrent_save_csv.cjs](../tests/e2e/test_concurrent_save_csv.cjs).
+Test ships green under the known-leak tolerance;
+hard-fails only on ``successes == PARALLELISM``
+(every racer bypassed every gate — that signature
+would indicate an R6-F4-class regression on the
+optimistic check itself, distinct from the
+R6-F7 TOCTOU window).
+
+### R6-F7 — ``save_csv`` returns HTTP 200 for clobbered writes (silent data loss with false acknowledgment) — DEFERRED to Ring 6.1
+
+**Severity**: HIGH — silent data loss with a
+false-success response. Worse than R6-F5/F6 in
+the user-visible sense: the API explicitly tells
+the client "your save persisted" when in fact the
+new row was atomically overwritten by another
+concurrent writer. The user has no signal that
+their change was lost.
+
+**Class**: same root cause as R6-F5/F6
+(no cross-process file lock around a file-backed
+read-modify-write critical section). Different
+file (``lookups/<csv>.csv`` instead of the
+registry/mapping/counter files), different
+optimistic-check mechanism (mtime + SHA-256
+content hash), but the TOCTOU pattern is identical.
+
+**Mechanism**:
+
+[bin/wl_handler.py:4153](../bin/wl_handler.py) — ``_save_csv``
+runs:
+
+```
+1. (no lock)
+2. Check expected_mtime vs current_mtime (line 4416)
+3. Check expected_content_hash vs current hash (line 4445)
+4. Read CSV from disk (line 4459)
+5. Compute diff, build new content
+6. write_csv() — tempfile + os.replace (atomic rename)
+7. Return HTTP 200
+```
+
+The comment at line 4396 says *"Acquire file-level
+lock for the read-modify-write cycle (On Windows,
+falls through to optimistic-lock-only mode)"* —
+but the actual ``file_lock`` call is missing.
+``file_lock`` is only used by ``_approval_queue_lock``
+at line 335. ``_save_csv`` operates in
+optimistic-lock-only mode on every platform.
+
+The TOCTOU window is between step 3 (last check)
+and step 6 (the rename). Multiple workers can
+all pass step 3 against the same baseline before
+any worker reaches step 6. Each then completes
+step 6 with their own payload; ``os.replace`` is
+atomic, so there is no byte-level corruption —
+each write completely overwrites the previous.
+The LAST ``os.replace`` to land wins on disk.
+Every worker that passed step 3 returns HTTP 200,
+including the ones whose ``os.replace`` was
+immediately overwritten.
+
+**Day 4 evidence** (7 runs of 7-way race, baseline
+build = 651):
+
+| successes | conflicts | unknown | runs | silent-loss writes |
+|-----------|-----------|---------|------|--------------------|
+| 1         | 6         | 0       | 1/7  | 0 (proper lock)    |
+| 2         | 5         | 0       | 2/7  | 1                  |
+| 2         | 3         | 2       | 1/7  | 1 (+ 2 OSErrors)   |
+| 3         | 4         | 0       | 2/7  | 2                  |
+| 4         | 3         | 0       | 1/7  | 3                  |
+| 5         | 2         | 0       | 1/7  | 4                  |
+
+Across 7 runs: ~85% of races leak at least one
+silent-loss write. Worst case observed: 4 of 7
+racers told "saved" but their row was clobbered
+on the next ``os.replace``.
+
+The 2 "unknown" errors in run #5 are a *tertiary*
+race outcome: the
+[bin/wl_csv.py:1130](../bin/wl_csv.py) ``OSError``
+catch returns
+``"Failed to save CSV. Check server logs for
+details."``. This is the race surfacing as a
+visible error rather than a silent loss —
+arguably better than the false HTTP 200, but
+still indicates the same uncoordinated RMW
+pattern.
+
+**Why R6-F7 is worse than R6-F5/F6 from the
+user's perspective**:
+
+- R6-F5 (registry RMW) shows up as a delete that
+  "didn't take" — the rule reappears on next page
+  load. User can re-attempt. Visible.
+- R6-F6 (counter TOCTOU) shows up as a small cap
+  overrun (1-3 extra actions allowed past the
+  daily cap). The actions all succeed and are
+  audited. Tracked by the soft-fail tolerance.
+- R6-F7 (save TOCTOU) returns HTTP 200 with an
+  audit event emitted for the FALSE save. The
+  user's data is gone, the audit trail records
+  the save as if it happened, and there is no
+  visible signal that anything went wrong unless
+  the user reloads the page and notices their row
+  is missing.
+
+**Why deferred (rather than fixed in this session)**:
+
+Same reasoning as R6-F5/F6: the fix is
+``wl_filelock.py`` adoption around the entire
+read-modify-write critical section. That's
+infrastructure work that affects every file-backed
+write in the codebase. A piecemeal save_csv-only
+fix could ship in 30 minutes, but would not
+benefit from the perf benchmarking, retry-semantics
+analysis, and uniform coverage that the Ring 6.1
+deliverable is scoped to do. Doing them all
+together is also a cleaner closure of the
+cross-process-race class as a whole.
+
+**Updated Ring 6.1 scope** (additive to the
+R6-F5/F6 list above):
+
+- Day 6.1.5: ``_save_csv`` read-modify-write
+  must be wrapped in
+  ``file_lock(path + ".rmw.lock", timeout=N)``
+  *around steps 2-6*. The lock must be released
+  BEFORE the HTTP response is built so the
+  filesystem state is committed when the client
+  sees 200.
+- Day 6.1.6: Tighten
+  ``test_concurrent_save_csv.cjs`` to hard-fail
+  on ``successes != on-disk racer rows`` (i.e.
+  zero silent-loss tolerance). The current test
+  WARNs on this — Ring 6.1 should ship with the
+  WARN promoted to ERROR.
+- Day 6.1.7: Audit every other RMW write that
+  emits an HTTP 200 success response for the
+  same shape (``_revert_csv``,
+  ``_save_col_widths``, version snapshot writes
+  in ``lookups/_versions/``).
+
+**Pairs with**:
+
+- ``feedback_cross_process_file_races.md`` —
+  extended to include ``save_csv`` as a third
+  confirmed instance of the class.
+- ``feedback_shape_mismatch_gate_bypass.md`` —
+  the LEAK_HARDFAIL_THRESHOLD = PARALLELISM
+  guard in the test is the same predicate-based
+  audit pattern: prove the gate fires SOMETIMES;
+  if it never fires, that's a different bug.
