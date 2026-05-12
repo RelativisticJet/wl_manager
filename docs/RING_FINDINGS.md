@@ -5429,7 +5429,7 @@ ring.
    wrappers landed in Day 6.1.2 (no
    cycle risk).
 
-**Verification post-deploy at build 655**:
+**Verification post-deploy** (originally captured at build 655 immediately after the fix shipped):
 
 - `test_concurrent_save_csv.cjs` — 1 success,
   6 conflicts (R6-F7 unchanged).
@@ -5572,3 +5572,107 @@ other_errors === PARALLELISM`).
   AND `test_ratelimit_per_worker.cjs`
   burst assertion (`successes === 30`
   exactly) once the fix lands.
+
+### R6.1-D9a — Presence migration to KV-backed state shipped at build 656
+
+**Change**: replaced the module-level
+`_presence: Dict` in `bin/wl_presence.py`
+with a Splunk KV collection
+`wl_presence_state`. Every
+`report_presence` / `get_presence` /
+`cleanup_presence` call now reads from and
+writes to the KV layer via
+`splunk.rest.simpleRequest` when a
+`session_key` is provided.
+
+**Dual-mode design** (intentional): when
+`session_key=None` the functions fall back
+to the module-level `_presence` dict.
+Production paths always pass `session_key`
+(threaded from the handler request);
+unit tests don't pass it and continue to
+exercise the in-memory math without
+needing a live Splunk container. This
+keeps 23 existing pytest unit tests
+green while closing R6-F8 in production.
+
+**Fail-open on KV unreachable**: every
+KV helper returns empty / None on
+transient errors. The UI-watch indicator
+degrades gracefully (no presence shown)
+rather than failing the request — same
+trade-off as the cooldown helpers. Not a
+security gap because presence is
+informational.
+
+**Files**:
+
+- `bin/wl_presence.py` — rewritten (~280
+  lines). Added `_kv_url`,
+  `_kv_read_csv`, `_kv_write_csv`,
+  `_kv_delete_csv`, `_kv_list_all`
+  helpers. All four public functions
+  (`report_presence`, `get_presence`,
+  `cleanup_presence`, `reset_presence`)
+  accept optional `session_key` and
+  route through KV when set.
+- `default/collections.conf` — added
+  `[wl_presence_state]` stanza with
+  `_key`, `payload`, `updated_at` fields.
+  Also added `[wl_ratelimit_state]` for
+  Day 6.1.9b in the same commit (single
+  conf reload).
+- `bin/wl_handler.py` —
+  `_action_report_presence` and
+  `_action_get_presence` now pass
+  `session_key=self._get_session_key(request)`
+  to the wl_presence functions.
+
+**Verified at build 656**:
+
+- `tests/unit/test_presence.py` (23
+  tests) — green. In-memory fallback
+  path is preserved.
+- `tests/e2e/test_concurrent_presence.cjs`
+  (7 tests) — green. Phase A view:
+  all 7 readers see all 7 users
+  (consistent global view); Phase D
+  collapse ratio = **1.000** (previously
+  this ratio dropped below 1.0 under
+  multi-worker routing — the R6-F8
+  signature). KV-backed state restored
+  cross-worker coherence exactly as
+  predicted.
+- `test_concurrent_save_csv.cjs` — 1/6
+  unchanged; R6-F7 still closed.
+- `test_concurrent_limit_other_counters.cjs`
+  — 5/5 + 2/2 unchanged; R6-F5/F6
+  unchanged.
+
+**Latency note**: KV REST per call is
+~5-20ms inside the container. Presence
+pings fire every few seconds per active
+session, so this is the right
+performance budget (the original Day 6.1.9
+trade-off discussion explicitly accepted
+this for low-frequency operations). For
+the rate-limit hot path (Day 6.1.9b), the
+same approach is being applied — see
+docs/RING_FINDINGS.md follow-up.
+
+### Carries forward from R6.1-D9a
+
+- Day 6.1.9b: apply the same KV migration
+  pattern to `bin/wl_ratelimit.py`
+  (R6-F8 sibling instance confirmed in
+  Day 6.1.8). Keyed by
+  `"<user>::<action_type>"`; payload is
+  a JSON list of recent request
+  timestamps; window-prune happens on
+  every read.
+- Day 6.1.10: tighten
+  `test_concurrent_presence.cjs` Phase D
+  to FAIL if collapse-ratio < 1.0 (
+  previously it was a soft-signal log).
+  Tighten `test_ratelimit_per_worker.cjs`
+  to FAIL if `successes !== 30`.

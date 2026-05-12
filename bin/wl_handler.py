@@ -2384,7 +2384,14 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         except (ValueError, TypeError):
             last_activity = None
 
-        data, error = report_presence(csv_file, user, last_activity)
+        # Ring 6.1 Day 6.1.9a (R6-F8 fix): pass session_key so
+        # presence reads/writes go through the KV-backed code
+        # path. Without this, the module-level dict in
+        # wl_presence.py is per-worker and the UI-watch indicator
+        # is unreliable across workers.
+        data, error = report_presence(
+            csv_file, user, last_activity,
+            session_key=self._get_session_key(request))
         if error:
             return self._resp(400, {"error": error})
         return self._resp(200, {"csv_file": csv_file, **data})
@@ -2395,7 +2402,11 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         if not csv_file:
             return self._resp(400, {"error": "csv_file required"})
 
-        data, error = get_presence(csv_file)
+        # Ring 6.1 Day 6.1.9a (R6-F8 fix): pass session_key so
+        # the read hits the cross-worker KV store, not this
+        # worker's module-level snapshot.
+        data, error = get_presence(
+            csv_file, session_key=self._get_session_key(request))
         if error:
             return self._resp(400, {"error": error})
         return self._resp(200, {"csv_file": csv_file, **data})
