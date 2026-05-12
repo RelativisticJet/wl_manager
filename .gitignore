@@ -129,6 +129,11 @@ backups/
 # committed.
 tests/e2e/visual_artifacts/
 
+# Playwright MCP output (interactive ad-hoc browser drives). Stores
+# session-local screenshots, snapshots, and console logs from
+# mcp__playwright-iso__* tool calls. Local-only by design.
+.playwright-mcp/
+
 # Mutation-testing cache (Ring 3 Day 2). Local-only; the harness
 # (`scripts/mutmut.sh`) recreates it on each `run` invocation
 # inside the wl_manager_mutmut container.

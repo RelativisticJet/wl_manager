@@ -3791,3 +3791,109 @@ class-level lesson is more valuable than the
 individual fixes. The audit took ~15 minutes and
 yielded a second HIGH severity bug — high
 ROI per audit-minute.
+
+### R6-D3 — Rule-creation rate-limit gate IS race-safe (positive finding)
+
+**Severity**: N/A — negative result, but a meaningful
+one because the test was IMPOSSIBLE to write
+meaningfully before R6-F2 was fixed.
+
+**Found**: Day 3 (2026-05-12) deliberately tried to
+exploit a Time-of-Check-Time-of-Use window in the
+admin `rule_creation` daily-rate-limit gate at
+[wl_handler.py:2695-2715](../bin/wl_handler.py#L2695-L2715).
+The gate's sequence is:
+
+```
+1. read counter
+2. check (counter + 1 <= max)
+3. execute _execute_create_rule
+4. read response status
+5. increment counter if status==200 and no error
+```
+
+Steps 1 and 5 are non-adjacent. Multiple parallel
+workers could each read counter=N, all pass the
+check (N+1<=5), all execute, all increment to N+1,
+N+2, ... bypassing the cap. This is the canonical
+TOCTOU race against a rate-limit counter.
+
+**Test**:
+[tests/e2e/test_concurrent_limit.cjs](../tests/e2e/test_concurrent_limit.cjs) opens 7
+parallel `wladmin1` browser sessions, hits a
+barrier(7) for tight rendezvous, then every
+session POSTs `create_rule` with a unique rule
+name. The race target is the gate at the handler;
+the cap is the default 5/day for admin
+`rule_creation`.
+
+**Result (run twice for stability)**:
+
+- Run 1: 5 succeeded (rules 2,3,4,5,7), 2 limit-rejected (1,6). Counter went 0→5.
+- Run 2: 5 succeeded (rules 1,2,3,6,7), 2 limit-rejected (4,5). Counter went 0→5.
+- Different winners each run (OS scheduling jitter) but the cap math was identical.
+- Counter delta exactly matched success count both runs.
+- Limit-reject envelope carried complete `limit_type=admin_rule_creation`, `current`, `maximum` fields.
+
+**Conclusion**: the rule_creation gate is atomic
+enough under 7-way parallel load. No race bypass,
+no counter-write race losing increments, no
+double-charge. Splunk's file locking around
+`read_daily_limits` + `write_daily_limits` (in
+`bin/wl_limits.py`) provides sufficient
+serialization across the worker processes that
+serve parallel REST requests. The race window
+between check and increment is short enough in
+practice that 7 simultaneous requests still
+serialize correctly.
+
+**Why this test was impossible pre-R6-F2**: before
+the R6-F2 fix shipped at build 649, the admin `approval_count` and
+`rule_creation` counters either never incremented
+(the R6-F2 bug class) or the file didn't exist at
+all in the container. Racing against a gate that
+never charges produces 7 successes regardless of
+parallelism — the test would have looked like a
+bypass but actually proved nothing. Fixing R6-F2
+turned the gate from "permissive no-op" into
+"actual control surface", which made Day 3's
+race-safety test meaningful.
+
+**Companion finding (API consistency)**:
+
+- `create_rule` takes parameter `detection_rule`.
+- `remove_rule` takes parameter `rule_name`.
+- Same entity (a detection-rule name), two parameter
+  names across actions. Caught by the Day 3 cleanup
+  helper which used `detection_rule` and got
+  "rule_name is required" for every cleanup attempt.
+  Not a security bug; a UX/API consistency issue
+  worth noting. Documented in
+  `tests/e2e/test_concurrent_limit.cjs` comment so
+  future test authors don't repeat the mistake.
+
+**Lessons for the broader test strategy**:
+
+1. **Negative findings are findings too.** A successful
+   TOCTOU race test that produces no bugs is data:
+   it tells us the gate's atomicity holds up under
+   the highest realistic concurrency we can produce
+   with browser-driven requests. Going forward, any
+   change to `read_daily_limits` / `write_daily_limits`
+   internals should re-run this test to verify the
+   property still holds.
+2. **Test viability depends on the bugs we already
+   fixed.** Day 3 was a meaningless test pre-R6-F2.
+   This is a reminder that test pyramids are not
+   stationary — fixing a bug at one layer often
+   unlocks meaningful testing at another. Worth
+   reviewing the test backlog after every security
+   fix to see what new tests just became possible.
+3. **Tight rendezvous via `lib_multi_session.cjs`
+   barrier matters.** Raw `Promise.all` would have
+   spread the 7 requests over tens of milliseconds
+   thanks to event-loop scheduling; the barrier
+   collapses release to a single microtask tick, so
+   the TCP-stack-level inter-arrival jitter (3-10ms)
+   becomes the only remaining spread. That's the
+   actual race window we're testing.
