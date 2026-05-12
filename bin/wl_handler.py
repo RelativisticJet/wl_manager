@@ -185,6 +185,11 @@ from wl_limits import (
     check_admin_permission as _check_admin_permission,
     increment_admin_daily_limit as _increment_admin_daily_limit,
     increment_daily_limit as _increment_daily_limit,
+    # Ring 6.1 R6-F6 fix: cross-process sequence lock for the
+    # check-execute-increment TOCTOU. Wraps each admin-gated action
+    # wrapper so two workers can't pass the cap check at the same
+    # counter value.
+    admin_daily_limit_lock,
 )
 from wl_filelock import file_lock
 
@@ -219,13 +224,57 @@ _logger = get_audit_logger()
 # NOTE: read_rules_registry, write_rules_registry imported from wl_rules
 
 
-_detection_rules_lock = threading.Lock()
+# Ring 6.1 R6-F5 fix: the previous threading.Lock here provided zero
+# cross-process protection (Splunk worker processes each had their own
+# instance). Now delegates to wl_rules.rules_rmw_lock(), which uses a
+# file_lock on MAPPING_FILE + ".rmw.lock" so all rule-registry RMW in
+# wl_rules.py AND in this module share one cross-process lock domain.
 
 
 @contextmanager
 def _detection_rules_modify():
-    """Lock for atomic read-modify-write on detection rules registry."""
-    with _detection_rules_lock:
+    """Lock for atomic read-modify-write on detection rules registry.
+
+    Cross-process via wl_rules.rules_rmw_lock() (file_lock on sibling
+    .rmw.lock). Hold around any sequence that reads then writes
+    DETECTION_RULES_FILE or MAPPING_FILE.
+    """
+    from wl_rules import rules_rmw_lock
+    with rules_rmw_lock():
+        yield
+
+
+@contextmanager
+def _maybe_admin_limit_lock(user, roles):
+    """Acquire the admin daily-limit RMW lock IFF the caller is a
+    non-superadmin admin (the only role tier that gets counter-gated).
+
+    Ring 6.1 R6-F6 fix. Use to wrap any function body that runs the
+    ``_check_admin_daily_limit → execute → _increment_admin_daily_limit``
+    sequence so two Splunk workers can't both pass the check at the
+    same counter value. Pass-through for superadmins (cap-exempt) and
+    non-admins (no admin counter applies).
+
+    Pattern at the call site::
+
+        def _action_X(self, request, payload, user, roles):
+            ...input validation, may return 400...
+            with _maybe_admin_limit_lock(user, roles):
+                if is_admin(roles) and not is_superadmin(roles):
+                    allowed, current, maximum = _check_admin_daily_limit(
+                        user, "X")
+                    if not allowed:
+                        return self._resp(429, {...})
+                result = self._X(...)
+                if (success-check):
+                    if is_admin(roles) and not is_superadmin(roles):
+                        _increment_admin_daily_limit(user, "X")
+                return result
+    """
+    if is_admin(roles) and not is_superadmin(roles):
+        with admin_daily_limit_lock(user):
+            yield
+    else:
         yield
 
 
@@ -2560,32 +2609,36 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _action_save_csv(self, request, payload, user, roles):
         """POST action wrapper for save_csv."""
-        # Admin daily limit for CSV saves (superadmins exempt + logged)
+        # Admin daily limit for CSV saves (superadmins exempt + logged).
+        # Ring 6.1 R6-F6 fix: check + execute + increment now run under
+        # one per-user cross-process lock so two workers can't both
+        # pass the cap at the same counter value.
         if is_admin(roles) and is_superadmin(roles):
             _log_superadmin_exemption(
                 user, "csv_save",
                 payload.get("csv_file", ""))
-        elif is_admin(roles):
-            allowed, current, maximum = _check_admin_daily_limit(
-                user, "csv_save")
-            if not allowed:
-                return self._resp(200, {
-                    "error": _daily_limit_error_msg(
-                        "csv_save", 1, current, maximum,
-                        contact="your super-admin"),
-                    "limit_type": "admin_csv_save",
-                    "current": current, "maximum": maximum,
-                    "disabled": maximum == 0,
-                })
-        result = self._save_csv(request, payload, user)
-        # Increment counter on success
-        if (is_admin(roles) and not is_superadmin(roles)
-                and isinstance(result, dict)
-                and result.get("status") == 200):
-            body = json.loads(result.get("payload", "{}"))
-            if not body.get("error"):
-                _increment_admin_daily_limit(user, "csv_save")
-        return result
+        with _maybe_admin_limit_lock(user, roles):
+            if is_admin(roles) and not is_superadmin(roles):
+                allowed, current, maximum = _check_admin_daily_limit(
+                    user, "csv_save")
+                if not allowed:
+                    return self._resp(200, {
+                        "error": _daily_limit_error_msg(
+                            "csv_save", 1, current, maximum,
+                            contact="your super-admin"),
+                        "limit_type": "admin_csv_save",
+                        "current": current, "maximum": maximum,
+                        "disabled": maximum == 0,
+                    })
+            result = self._save_csv(request, payload, user)
+            # Increment counter on success
+            if (is_admin(roles) and not is_superadmin(roles)
+                    and isinstance(result, dict)
+                    and result.get("status") == 200):
+                body = json.loads(result.get("payload", "{}"))
+                if not body.get("error"):
+                    _increment_admin_daily_limit(user, "csv_save")
+            return result
 
     def _action_add_row(self, request, payload, user, roles):
         """POST action wrapper for add_row (delegates to save_csv pipeline)."""
@@ -2597,31 +2650,33 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _action_revert_csv(self, request, payload, user, roles):
         """POST action wrapper for revert_csv."""
-        # Admin daily limit for CSV reverts (superadmins exempt + logged)
+        # Admin daily limit for CSV reverts (superadmins exempt + logged).
+        # Ring 6.1 R6-F6 fix: check + execute + increment under one lock.
         if is_admin(roles) and is_superadmin(roles):
             _log_superadmin_exemption(
                 user, "csv_revert",
                 payload.get("csv_file", ""))
-        elif is_admin(roles):
-            allowed, current, maximum = _check_admin_daily_limit(
-                user, "csv_revert")
-            if not allowed:
-                return self._resp(200, {
-                    "error": _daily_limit_error_msg(
-                        "csv_revert", 1, current, maximum,
-                        contact="your super-admin"),
-                    "limit_type": "admin_csv_revert",
-                    "current": current, "maximum": maximum,
-                    "disabled": maximum == 0,
-                })
-        result = self._revert_csv(request, payload, user, roles=roles)
-        if (is_admin(roles) and not is_superadmin(roles)
-                and isinstance(result, dict)
-                and result.get("status") == 200):
-            body = json.loads(result.get("payload", "{}"))
-            if not body.get("error"):
-                _increment_admin_daily_limit(user, "csv_revert")
-        return result
+        with _maybe_admin_limit_lock(user, roles):
+            if is_admin(roles) and not is_superadmin(roles):
+                allowed, current, maximum = _check_admin_daily_limit(
+                    user, "csv_revert")
+                if not allowed:
+                    return self._resp(200, {
+                        "error": _daily_limit_error_msg(
+                            "csv_revert", 1, current, maximum,
+                            contact="your super-admin"),
+                        "limit_type": "admin_csv_revert",
+                        "current": current, "maximum": maximum,
+                        "disabled": maximum == 0,
+                    })
+            result = self._revert_csv(request, payload, user, roles=roles)
+            if (is_admin(roles) and not is_superadmin(roles)
+                    and isinstance(result, dict)
+                    and result.get("status") == 200):
+                body = json.loads(result.get("payload", "{}"))
+                if not body.get("error"):
+                    _increment_admin_daily_limit(user, "csv_revert")
+            return result
 
     def _action_save_col_widths(self, request, payload, user, roles):
         """POST action wrapper for save_col_widths."""
@@ -2629,28 +2684,30 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _action_create_csv(self, request, payload, user, roles):
         """POST action wrapper for create_csv."""
-        # Admins execute directly (never gated) but check daily limit
+        # Admins execute directly (never gated) but check daily limit.
+        # Ring 6.1 R6-F6 fix: check + execute + increment under one lock.
         if is_admin(roles):
-            if not is_superadmin(roles):
-                allowed, current, maximum = _check_admin_daily_limit(
-                    user, "csv_creation")
-                if not allowed:
-                    return self._resp(200, {
-                        "error": _daily_limit_error_msg(
-                            "csv_creation", 1, current, maximum,
-                            contact="your super-admin"),
-                        "limit_type": "admin_csv_creation",
-                        "current": current, "maximum": maximum,
-                        "disabled": maximum == 0,
-                    })
-            result = self._create_csv(request, payload, user)
-            if (not is_superadmin(roles)
-                    and isinstance(result, dict)
-                    and result.get("status") == 200):
-                body = json.loads(result.get("payload", "{}"))
-                if not body.get("error"):
-                    _increment_admin_daily_limit(user, "csv_creation")
-            return result
+            with _maybe_admin_limit_lock(user, roles):
+                if not is_superadmin(roles):
+                    allowed, current, maximum = _check_admin_daily_limit(
+                        user, "csv_creation")
+                    if not allowed:
+                        return self._resp(200, {
+                            "error": _daily_limit_error_msg(
+                                "csv_creation", 1, current, maximum,
+                                contact="your super-admin"),
+                            "limit_type": "admin_csv_creation",
+                            "current": current, "maximum": maximum,
+                            "disabled": maximum == 0,
+                        })
+                result = self._create_csv(request, payload, user)
+                if (not is_superadmin(roles)
+                        and isinstance(result, dict)
+                        and result.get("status") == 200):
+                    body = json.loads(result.get("payload", "{}"))
+                    if not body.get("error"):
+                        _increment_admin_daily_limit(user, "csv_creation")
+                return result
         # Analyst permission check
         cfg = _read_limit_config()
         if not cfg.get("allow_analyst_create_csv", False):
@@ -2691,28 +2748,30 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                          "ASCII letters (A-Z, a-z), numbers, "
                          "underscores, hyphens, dots, and spaces"
             })
-        # Admins execute directly (never gated) but check daily limit
+        # Admins execute directly (never gated) but check daily limit.
+        # Ring 6.1 R6-F6 fix: check + execute + increment under one lock.
         if is_admin(roles):
-            if not is_superadmin(roles):
-                allowed, current, maximum = _check_admin_daily_limit(
-                    user, "rule_creation")
-                if not allowed:
-                    return self._resp(200, {
-                        "error": _daily_limit_error_msg(
-                            "rule_creation", 1, current, maximum,
-                            contact="your super-admin"),
-                        "limit_type": "admin_rule_creation",
-                        "current": current, "maximum": maximum,
-                        "disabled": maximum == 0,
-                    })
-            result = self._execute_create_rule(request, detection_rule, user)
-            if (not is_superadmin(roles)
-                    and isinstance(result, dict)
-                    and result.get("status") == 200):
-                body = json.loads(result.get("payload", "{}"))
-                if not body.get("error"):
-                    _increment_admin_daily_limit(user, "rule_creation")
-            return result
+            with _maybe_admin_limit_lock(user, roles):
+                if not is_superadmin(roles):
+                    allowed, current, maximum = _check_admin_daily_limit(
+                        user, "rule_creation")
+                    if not allowed:
+                        return self._resp(200, {
+                            "error": _daily_limit_error_msg(
+                                "rule_creation", 1, current, maximum,
+                                contact="your super-admin"),
+                            "limit_type": "admin_rule_creation",
+                            "current": current, "maximum": maximum,
+                            "disabled": maximum == 0,
+                        })
+                result = self._execute_create_rule(request, detection_rule, user)
+                if (not is_superadmin(roles)
+                        and isinstance(result, dict)
+                        and result.get("status") == 200):
+                    body = json.loads(result.get("payload", "{}"))
+                    if not body.get("error"):
+                        _increment_admin_daily_limit(user, "rule_creation")
+                return result
         # Analyst permission check
         cfg = _read_limit_config()
         if not cfg.get("allow_analyst_create_rules", False):
@@ -2777,78 +2836,82 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     request, payload, user, "remove_csv",
                     "Remove CSV '{}'".format(csv_file))
 
-        # Admin daily limit for CSV deletion (soft delete)
-        if removal_type == "permanent":
-            if is_admin(roles) and not is_superadmin(roles):
-                allowed, current, maximum = _check_admin_daily_limit(
-                    user, "csv_deletion")
-                if not allowed:
-                    return self._resp(429, {
-                        "error": _daily_limit_error_msg(
-                            "csv_deletion", 1, current, maximum,
-                            contact="your super-admin"),
-                        "limit_type": "admin_csv_deletion",
-                        "current": current,
-                        "maximum": maximum,
-                        "disabled": maximum == 0,
-                    })
+        # Admin daily limit for CSV deletion (soft delete).
+        # Ring 6.1 R6-F6 fix: cap check + pipeline + increment under
+        # one per-user cross-process lock — closes the TOCTOU where
+        # two concurrent workers could both pass the cap at counter=N.
+        with _maybe_admin_limit_lock(user, roles):
+            if removal_type == "permanent":
+                if is_admin(roles) and not is_superadmin(roles):
+                    allowed, current, maximum = _check_admin_daily_limit(
+                        user, "csv_deletion")
+                    if not allowed:
+                        return self._resp(429, {
+                            "error": _daily_limit_error_msg(
+                                "csv_deletion", 1, current, maximum,
+                                contact="your super-admin"),
+                            "limit_type": "admin_csv_deletion",
+                            "current": current,
+                            "maximum": maximum,
+                            "disabled": maximum == 0,
+                        })
 
-        # Call pipeline
-        result = delete_csv_pipeline(
-            csv_file, removal_type, comment, user,
-            self._get_session_key(request), rule_name=rule_name)
+            # Call pipeline
+            result = delete_csv_pipeline(
+                csv_file, removal_type, comment, user,
+                self._get_session_key(request), rule_name=rule_name)
 
-        if not result.get("success"):
-            return self._resp(404, {"error": result.get("error", "Delete failed")})
+            if not result.get("success"):
+                return self._resp(404, {"error": result.get("error", "Delete failed")})
 
-        data = result.get("data", {})
-        resolved_rule = data.get("rule_name", rule_name)
+            data = result.get("data", {})
+            resolved_rule = data.get("rule_name", rule_name)
 
-        # Auto-cancel pending approval requests
-        with _approval_queue_lock():
-            queue = _read_approval_queue()
-            if data.get("rule_also_removed"):
-                _cancel_conflicting_requests(
-                    queue, resolved_rule, "", "remove_rule", "",
-                    lambda evt: self._index_audit(request, evt))
-            else:
-                _cancel_conflicting_requests(
-                    queue, resolved_rule, csv_file, "remove_csv", "",
-                    lambda evt: self._index_audit(request, evt))
+            # Auto-cancel pending approval requests
+            with _approval_queue_lock():
+                queue = _read_approval_queue()
+                if data.get("rule_also_removed"):
+                    _cancel_conflicting_requests(
+                        queue, resolved_rule, "", "remove_rule", "",
+                        lambda evt: self._index_audit(request, evt))
+                else:
+                    _cancel_conflicting_requests(
+                        queue, resolved_rule, csv_file, "remove_csv", "",
+                        lambda evt: self._index_audit(request, evt))
 
-        # Increment admin daily limit counter.
-        #
-        # R6-F4 fix (build 651, 2026-05-12): previously gated on
-        # data.get("trashed"). But the pipeline's "trashed" flag is
-        # only True when move_to_trash succeeds — if the move_to_trash
-        # call raised (line 505-512 in wl_rules.py), the CSV is still
-        # deleted via direct os.remove but trashed stays False, so
-        # the counter never incremented even though the destructive
-        # action completed. Same class as R6-F2/F3: gate condition
-        # checks a flag that isn't True on every success path.
-        #
-        # Symmetric with the cap-check at line 2781 which fires for
-        # `removal_type == "permanent"`. Use the same condition here.
-        if removal_type == "permanent":
-            if is_admin(roles) and not is_superadmin(roles):
-                _increment_admin_daily_limit(user, "csv_deletion")
+            # Increment admin daily limit counter.
+            #
+            # R6-F4 fix (build 651, 2026-05-12): previously gated on
+            # data.get("trashed"). But the pipeline's "trashed" flag is
+            # only True when move_to_trash succeeds — if the move_to_trash
+            # call raised (line 505-512 in wl_rules.py), the CSV is still
+            # deleted via direct os.remove but trashed stays False, so
+            # the counter never incremented even though the destructive
+            # action completed. Same class as R6-F2/F3: gate condition
+            # checks a flag that isn't True on every success path.
+            #
+            # Symmetric with the cap-check above which fires for
+            # `removal_type == "permanent"`. Use the same condition here.
+            if removal_type == "permanent":
+                if is_admin(roles) and not is_superadmin(roles):
+                    _increment_admin_daily_limit(user, "csv_deletion")
 
-        # Remove from CSV expected-hash registry (FIM watcher)
-        try:
-            app_context = data.get("app_context", "")
-            csv_path = resolve_csv_path(csv_file, app_context)
-            if csv_path:
-                remove_csv_expected_hash(csv_path)
-        except Exception:
-            pass  # Best-effort
+            # Remove from CSV expected-hash registry (FIM watcher)
+            try:
+                app_context = data.get("app_context", "")
+                csv_path = resolve_csv_path(csv_file, app_context)
+                if csv_path:
+                    remove_csv_expected_hash(csv_path)
+            except Exception:
+                pass  # Best-effort
 
-        return self._resp(200, {
-            "success": True,
-            "message": result.get("message", ""),
-            "rule_also_removed": data.get("rule_also_removed", False),
-            "trashed": data.get("trashed", False),
-            "trash_id": data.get("trash_id", ""),
-        })
+            return self._resp(200, {
+                "success": True,
+                "message": result.get("message", ""),
+                "rule_also_removed": data.get("rule_also_removed", False),
+                "trashed": data.get("trashed", False),
+                "trash_id": data.get("trash_id", ""),
+            })
 
     def _action_remove_rule(self, request, payload, user, roles):
         """POST action wrapper for remove_rule — delegates to delete_rule_pipeline."""
@@ -2885,100 +2948,102 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     request, payload, user, "remove_rule",
                     "Remove rule '{}'".format(rule_name))
 
-        # Admin daily limit for rule deletion
-        if removal_type == "permanent":
-            if is_admin(roles) and not is_superadmin(roles):
-                allowed, current, maximum = _check_admin_daily_limit(
-                    user, "rule_deletion")
-                if not allowed:
-                    return self._resp(429, {
-                        "error": _daily_limit_error_msg(
-                            "rule_deletion", 1, current, maximum,
-                            contact="your super-admin"),
-                        "limit_type": "admin_rule_deletion",
-                        "current": current,
-                        "maximum": maximum,
-                        "disabled": maximum == 0,
+        # Admin daily limit for rule deletion.
+        # Ring 6.1 R6-F6 fix: cap check + dual-admin check + pipeline +
+        # increment all under one per-user cross-process lock. Closes
+        # the TOCTOU where two workers could both pass the cap at
+        # counter=N (Day 3 bonus saw 6 of 7 land against cap=2 pre-R6-F4;
+        # 3-4 of 7 post-R6-F4 due to remaining TOCTOU).
+        with _maybe_admin_limit_lock(user, roles):
+            if removal_type == "permanent":
+                if is_admin(roles) and not is_superadmin(roles):
+                    allowed, current, maximum = _check_admin_daily_limit(
+                        user, "rule_deletion")
+                    if not allowed:
+                        return self._resp(429, {
+                            "error": _daily_limit_error_msg(
+                                "rule_deletion", 1, current, maximum,
+                                contact="your super-admin"),
+                            "limit_type": "admin_rule_deletion",
+                            "current": current,
+                            "maximum": maximum,
+                            "disabled": maximum == 0,
+                        })
+
+            # Dual-admin check for rules with 3+ CSVs.
+            #
+            # Previously read `_from_dual_approval` from `payload` to allow
+            # the dual-approval replay path to skip this check. That was a
+            # CRITICAL bypass — `payload` is user-controlled, so any attacker
+            # could send `_from_dual_approval: true` and skip the gate. The
+            # legitimate dual-approval replay (in _process_approval_inner)
+            # calls `delete_rule_pipeline()` DIRECTLY, NOT through this
+            # action wrapper, so the bypass flag had no legitimate use here
+            # and is now removed. The wrapper always enforces dual-admin
+            # for non-superadmin callers.
+            if removal_type == "permanent":
+                _is_superadmin = bool(roles.intersection(SUPERADMIN_ROLES))
+                mapping = self._read_mapping()
+                affected_csvs = [e["csv_file"] for e in mapping
+                                 if e.get("rule_name") == rule_name]
+                csv_count = len(affected_csvs)
+                if csv_count >= 3 and not _is_superadmin:
+                    return self._resp(403, {
+                        "error": "Deleting rule '{}' with {} CSV files "
+                                 "requires a second admin's approval. "
+                                 "Please submit via the dual-approval "
+                                 "workflow.".format(rule_name, csv_count),
+                        "requires_dual_approval": True,
+                        "csv_count": csv_count,
                     })
 
-        # Dual-admin check for rules with 3+ CSVs.
-        #
-        # Previously read `_from_dual_approval` from `payload` to allow
-        # the dual-approval replay path to skip this check. That was a
-        # CRITICAL bypass — `payload` is user-controlled, so any attacker
-        # could send `_from_dual_approval: true` and skip the gate. The
-        # legitimate dual-approval replay (in _process_approval_inner)
-        # calls `delete_rule_pipeline()` DIRECTLY, NOT through this
-        # action wrapper, so the bypass flag had no legitimate use here
-        # and is now removed. The wrapper always enforces dual-admin
-        # for non-superadmin callers.
-        if removal_type == "permanent":
-            _is_superadmin = bool(roles.intersection(SUPERADMIN_ROLES))
-            mapping = self._read_mapping()
-            affected_csvs = [e["csv_file"] for e in mapping
-                             if e.get("rule_name") == rule_name]
-            csv_count = len(affected_csvs)
-            if csv_count >= 3 and not _is_superadmin:
-                return self._resp(403, {
-                    "error": "Deleting rule '{}' with {} CSV files "
-                             "requires a second admin's approval. "
-                             "Please submit via the dual-approval "
-                             "workflow.".format(rule_name, csv_count),
-                    "requires_dual_approval": True,
-                    "csv_count": csv_count,
-                })
+            # Call pipeline
+            try:
+                result = delete_rule_pipeline(
+                    rule_name, removal_type, comment, user,
+                    self._get_session_key(request))
+            except Exception as exc:
+                _logger.error("delete_rule_pipeline failed: %s", exc,
+                              exc_info=True)
+                return self._resp(500, {
+                    "error": "Rule deletion failed. Check server logs for details."})
 
-        # Call pipeline
-        try:
-            result = delete_rule_pipeline(
-                rule_name, removal_type, comment, user,
-                self._get_session_key(request))
-        except Exception as exc:
-            _logger.error("delete_rule_pipeline failed: %s", exc,
-                          exc_info=True)
-            return self._resp(500, {
-                "error": "Rule deletion failed. Check server logs for details."})
+            if not result.get("success"):
+                return self._resp(404, {"error": result.get("error", "Delete failed")})
 
-        if not result.get("success"):
-            return self._resp(404, {"error": result.get("error", "Delete failed")})
+            data = result.get("data", {})
 
-        data = result.get("data", {})
+            # Auto-cancel pending approval requests
+            with _approval_queue_lock():
+                queue = _read_approval_queue()
+                _cancel_conflicting_requests(
+                    queue, rule_name, "", "remove_rule", "",
+                    lambda evt: self._index_audit(request, evt))
 
-        # Auto-cancel pending approval requests
-        with _approval_queue_lock():
-            queue = _read_approval_queue()
-            _cancel_conflicting_requests(
-                queue, rule_name, "", "remove_rule", "",
-                lambda evt: self._index_audit(request, evt))
+            # Increment admin daily limit counter.
+            #
+            # R6-F4 fix (build 651, 2026-05-12): previously gated on
+            # data.get("trashed"). But the pipeline's "trashed" flag is
+            # only True when the rule has CSVs AND move_to_trash
+            # succeeds (delete_rule_pipeline line 351-372). For rules
+            # with NO CSVs — a common case for analyst-created rule
+            # cleanup — the pipeline returns trashed=False even on
+            # successful permanent delete, so the counter never
+            # incremented.
+            #
+            # Symmetric with the cap-check above which fires for
+            # `removal_type == "permanent"`. Use the same condition here.
+            if removal_type == "permanent":
+                if is_admin(roles) and not is_superadmin(roles):
+                    _increment_admin_daily_limit(user, "rule_deletion")
 
-        # Increment admin daily limit counter.
-        #
-        # R6-F4 fix (build 651, 2026-05-12): previously gated on
-        # data.get("trashed"). But the pipeline's "trashed" flag is
-        # only True when the rule has CSVs AND move_to_trash
-        # succeeds (delete_rule_pipeline line 351-372). For rules
-        # with NO CSVs — a common case for analyst-created rule
-        # cleanup — the pipeline returns trashed=False even on
-        # successful permanent delete, so the counter never
-        # incremented. The cap-check at line 2877 fires correctly,
-        # but counter staying at 0 forever meant the cap was
-        # silently unenforced for empty-CSV permanent deletes.
-        # Verified with Day 3 bonus race: 6 of 7 concurrent
-        # rule_deletes landed against a cap of 2.
-        #
-        # Symmetric with the cap-check at line 2877 which fires for
-        # `removal_type == "permanent"`. Use the same condition here.
-        if removal_type == "permanent":
-            if is_admin(roles) and not is_superadmin(roles):
-                _increment_admin_daily_limit(user, "rule_deletion")
-
-        return self._resp(200, {
-            "success": True,
-            "message": result.get("message", ""),
-            "affected_csvs": data.get("affected_csvs", []),
-            "trashed": data.get("trashed", False),
-            "trash_id": data.get("trash_id", ""),
-        })
+            return self._resp(200, {
+                "success": True,
+                "message": result.get("message", ""),
+                "affected_csvs": data.get("affected_csvs", []),
+                "trashed": data.get("trashed", False),
+                "trash_id": data.get("trash_id", ""),
+            })
 
     def _action_submit_approval(self, request, payload, user, roles):
         """POST action wrapper for submit_approval."""
@@ -3227,40 +3292,42 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                                        "Reset all analyst daily usage"),
             }, user)
 
-        # Individual reset — permission toggle check (admins only)
-        if not is_superadmin(roles):
-            if not _check_admin_permission("allow_admin_reset_usage"):
-                return self._resp(200, {
-                    "error": "Usage reset has been disabled by your "
-                             "super-admin. This action is not permitted."})
-            # Admin daily limit
-            allowed, current, maximum = _check_admin_daily_limit(
-                user, "usage_reset")
-            if not allowed:
-                return self._resp(200, {
-                    "error": _daily_limit_error_msg(
-                        "usage_reset", 1, current, maximum,
-                        contact="your super-admin"),
-                    "limit_type": "admin_usage_reset",
-                    "current": current, "maximum": maximum,
-                    "disabled": maximum == 0,
-                })
-        result = self._reset_daily_usage_action(payload, user)
-        # R6-F3 fix (build 650, 2026-05-11): same shape mismatch as
-        # R6-F2 — the gate was checking ``body.get("success")``, but
-        # _reset_daily_usage_action returns ``{"message": "..."}`` on
-        # success (no ``success`` field) and ``{"error": "..."}`` on
-        # self-reset-block or other failures. The gate never fired,
-        # so the admin ``usage_reset`` daily rate-limit was silently
-        # unenforced. Aligned with the canonical gate pattern: status
-        # 200 + no top-level error field.
-        if (not is_superadmin(roles)
-                and isinstance(result, dict)
-                and result.get("status") == 200):
-            body = json.loads(result.get("payload", "{}"))
-            if not body.get("error"):
-                _increment_admin_daily_limit(user, "usage_reset")
-        return result
+        # Individual reset — permission toggle check (admins only).
+        # Ring 6.1 R6-F6 fix: check + execute + increment under one lock.
+        with _maybe_admin_limit_lock(user, roles):
+            if not is_superadmin(roles):
+                if not _check_admin_permission("allow_admin_reset_usage"):
+                    return self._resp(200, {
+                        "error": "Usage reset has been disabled by your "
+                                 "super-admin. This action is not permitted."})
+                # Admin daily limit
+                allowed, current, maximum = _check_admin_daily_limit(
+                    user, "usage_reset")
+                if not allowed:
+                    return self._resp(200, {
+                        "error": _daily_limit_error_msg(
+                            "usage_reset", 1, current, maximum,
+                            contact="your super-admin"),
+                        "limit_type": "admin_usage_reset",
+                        "current": current, "maximum": maximum,
+                        "disabled": maximum == 0,
+                    })
+            result = self._reset_daily_usage_action(payload, user)
+            # R6-F3 fix (build 650, 2026-05-11): same shape mismatch as
+            # R6-F2 — the gate was checking ``body.get("success")``, but
+            # _reset_daily_usage_action returns ``{"message": "..."}`` on
+            # success (no ``success`` field) and ``{"error": "..."}`` on
+            # self-reset-block or other failures. The gate never fired,
+            # so the admin ``usage_reset`` daily rate-limit was silently
+            # unenforced. Aligned with the canonical gate pattern: status
+            # 200 + no top-level error field.
+            if (not is_superadmin(roles)
+                    and isinstance(result, dict)
+                    and result.get("status") == 200):
+                body = json.loads(result.get("payload", "{}"))
+                if not body.get("error"):
+                    _increment_admin_daily_limit(user, "usage_reset")
+            return result
 
     def _action_save_as_default(self, request, payload, user, roles):
         """POST action wrapper for save_as_default (superadmin-only)."""
@@ -3362,48 +3429,50 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
     def _action_restore_from_trash(self, request, payload, user, roles):
         """POST action wrapper for restore_from_trash — delegates to pipeline."""
-        # Admin daily limit for trash restore
-        if is_admin(roles) and not is_superadmin(roles):
-            allowed, current, maximum = _check_admin_daily_limit(
-                user, "trash_restore")
-            if not allowed:
-                return self._resp(200, {
-                    "error": _daily_limit_error_msg(
-                        "trash_restore", 1, current, maximum,
-                        contact="your super-admin"),
-                    "limit_type": "admin_trash_restore",
-                    "current": current, "maximum": maximum,
-                    "disabled": maximum == 0,
-                })
-        item_id = payload.get("item_id", "")
-        raw_comment = payload.get("comment", "")
-        ascii_err = validate_ascii_text(raw_comment)
-        if ascii_err:
-            return self._resp(400, {"error": ascii_err})
-        comment = raw_comment
-        result = restore_from_trash_pipeline(
-            item_id, user, self._get_session_key(request), comment=comment)
-        if not result.get("success"):
-            return self._resp(400, {"error": result.get("error", "Restore failed")})
-        if is_admin(roles) and not is_superadmin(roles):
-            _increment_admin_daily_limit(user, "trash_restore")
+        # Admin daily limit for trash restore.
+        # Ring 6.1 R6-F6 fix: check + pipeline + increment under one lock.
+        with _maybe_admin_limit_lock(user, roles):
+            if is_admin(roles) and not is_superadmin(roles):
+                allowed, current, maximum = _check_admin_daily_limit(
+                    user, "trash_restore")
+                if not allowed:
+                    return self._resp(200, {
+                        "error": _daily_limit_error_msg(
+                            "trash_restore", 1, current, maximum,
+                            contact="your super-admin"),
+                        "limit_type": "admin_trash_restore",
+                        "current": current, "maximum": maximum,
+                        "disabled": maximum == 0,
+                    })
+            item_id = payload.get("item_id", "")
+            raw_comment = payload.get("comment", "")
+            ascii_err = validate_ascii_text(raw_comment)
+            if ascii_err:
+                return self._resp(400, {"error": ascii_err})
+            comment = raw_comment
+            result = restore_from_trash_pipeline(
+                item_id, user, self._get_session_key(request), comment=comment)
+            if not result.get("success"):
+                return self._resp(400, {"error": result.get("error", "Restore failed")})
+            if is_admin(roles) and not is_superadmin(roles):
+                _increment_admin_daily_limit(user, "trash_restore")
 
-        # Update CSV expected-hash registry for the restored file
-        try:
-            restored = result.get("data", {})
-            csv_file = restored.get("csv_file", "")
-            app_ctx = restored.get("app_context", "")
-            if csv_file:
-                csv_path = resolve_csv_path(csv_file, app_ctx)
-                if csv_path and os.path.isfile(csv_path):
-                    update_csv_expected_hash(csv_path)
-        except Exception:
-            pass  # Best-effort
+            # Update CSV expected-hash registry for the restored file
+            try:
+                restored = result.get("data", {})
+                csv_file = restored.get("csv_file", "")
+                app_ctx = restored.get("app_context", "")
+                if csv_file:
+                    csv_path = resolve_csv_path(csv_file, app_ctx)
+                    if csv_path and os.path.isfile(csv_path):
+                        update_csv_expected_hash(csv_path)
+            except Exception:
+                pass  # Best-effort
 
-        return self._resp(200, {
-            "success": True,
-            "data": result.get("data", {}),
-        })
+            return self._resp(200, {
+                "success": True,
+                "data": result.get("data", {}),
+            })
 
     # ==================================================================
     # Emergency Lockdown

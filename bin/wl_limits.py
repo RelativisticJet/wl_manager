@@ -111,6 +111,8 @@ __all__ = [
     # Helpers
     "set_limit_config",
     "get_limit_error_msg",
+    # Sequence locks (Ring 6.1 R6-F6 fix)
+    "admin_daily_limit_lock",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -161,6 +163,74 @@ def _get_daily_limits_path() -> str:
     versions_dir = os.path.join(OWN_LOOKUPS, VERSIONS_DIR)
     os.makedirs(versions_dir, exist_ok=True)
     return os.path.join(versions_dir, DAILY_LIMITS_FILE)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Ring 6.1 R6-F6 fix: cross-process sequence lock for daily-counter
+# check-execute-increment.
+#
+# Holding only the inline fcntl.flock on write_daily_limits keeps each
+# individual write atomic, but it does NOT prevent the TOCTOU between
+# `check_admin_daily_limit` (reads counter), execute the action (slow),
+# and `increment_admin_daily_limit` (writes counter+1). Two Splunk
+# workers can both pass the check at the same counter value, both
+# execute, both increment — leaking the cap by N.
+#
+# Per-user lock granularity: admin A's csv_save shouldn't block admin
+# B's rule_creation. The lock path encodes the user so concurrent
+# distinct users don't serialize through one global lock.
+# ═══════════════════════════════════════════════════════════════════════
+
+from contextlib import contextmanager  # noqa: E402 — used by admin_daily_limit_lock
+from wl_filelock import file_lock  # noqa: E402
+
+
+def _sanitize_lock_username(user: str) -> str:
+    """Sanitize a username for use in a lock-file path.
+
+    Filenames on disk must avoid path separators and shell-metas. Splunk
+    usernames are typically restricted to a safe charset already but
+    we conservatively strip anything outside ``[A-Za-z0-9_.-]``. Empty
+    or fully-stripped names fall back to "_anon" so we still have a
+    deterministic lock path (a malformed name shouldn't crash the
+    handler).
+    """
+    if not user:
+        return "_anon"
+    safe = "".join(c if (c.isalnum() or c in "_.-") else "_" for c in user)
+    return safe or "_anon"
+
+
+@contextmanager
+def admin_daily_limit_lock(user: str, timeout: float = 10):
+    """
+    Exclusive cross-process lock for the admin daily-limit RMW sequence.
+
+    Hold this around the entire
+    ``check_admin_daily_limit → execute action → increment_admin_daily_limit``
+    sequence so two Splunk worker processes can't both pass the check
+    at the same counter value (R6-F6 TOCTOU).
+
+    Per-user lock: distinct users use distinct lock files so the
+    common case (one admin per real-world cap) doesn't serialize
+    actions across all admins. The lock file is a sibling of
+    ``_daily_limits.json`` named ``_daily_limits.<user>.rmw.lock``.
+
+    Usage::
+
+        with admin_daily_limit_lock(user):
+            allowed, current, maximum = _check_admin_daily_limit(user, "X")
+            if not allowed:
+                return self._resp(429, {...})
+            result = self._<action>(...)
+            if success:
+                _increment_admin_daily_limit(user, "X")
+    """
+    daily_path = _get_daily_limits_path()
+    lock_path = "{}.{}.rmw.lock".format(
+        daily_path, _sanitize_lock_username(user))
+    with file_lock(lock_path, timeout=timeout):
+        yield
 
 
 # ═══════════════════════════════════════════════════════════════════════

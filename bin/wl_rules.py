@@ -15,7 +15,7 @@ import json
 import os
 import csv
 import logging
-from threading import Lock
+from contextlib import contextmanager
 from typing import List, Dict, Optional, Tuple, Any
 
 # Import sys.path setup from wl_handler pattern
@@ -27,11 +27,42 @@ from wl_constants import (
     DEFAULT_TRASH_RETENTION_DAYS,
 )
 from wl_csv import update_csv_expected_hash
+from wl_filelock import file_lock
 from wl_validation import is_ascii_name
 
 
 _logger = logging.getLogger("wl_rules")
-_detection_rules_lock = Lock()
+
+# Cross-process lock for any read-modify-write on the rules registry
+# (DETECTION_RULES_FILE) OR the rule-to-CSV mapping (MAPPING_FILE).
+# Both files are mutated together by create/delete pipelines and must
+# be serialized across Splunk worker processes. Pre-Ring-6.1 this was
+# a threading.Lock(), which provided zero cross-process protection
+# (R6-F5: deleted rules silently reverted under concurrent admin
+# activity). The sibling .rmw.lock file is the kernel-level lock
+# domain; data files stay touched only by the read/write themselves.
+_RULES_RMW_LOCK_PATH = MAPPING_FILE + ".rmw.lock"
+
+
+@contextmanager
+def rules_rmw_lock(timeout: float = 10):
+    """
+    Exclusive cross-process lock for rules-registry + mapping RMW.
+
+    Hold this context manager around any sequence that reads either
+    DETECTION_RULES_FILE or MAPPING_FILE and writes one or both. Use
+    `timeout=10` by default — sufficient for any single legitimate
+    operation, will raise TimeoutError if another worker holds the
+    lock longer (indicates a stuck process worth investigating).
+
+    Callers in `wl_rules.py` use this internally; `wl_handler.py`
+    callers should ALSO use this when modifying rules state, so the
+    two modules share one lock domain (not two threading.Locks that
+    don't synchronize).
+    """
+    with file_lock(_RULES_RMW_LOCK_PATH, timeout=timeout):
+        yield
+
 
 __all__ = [
     'read_rules_registry',
@@ -42,6 +73,7 @@ __all__ = [
     'create_rule_pipeline',
     'delete_rule_pipeline',
     'delete_csv_pipeline',
+    'rules_rmw_lock',
 ]
 
 
@@ -200,13 +232,18 @@ def create_rule_pipeline(detection_rule: str) -> Dict:
             "Detection rule name must contain at least one letter or number"
         )
 
-    # Check mapping (rule_csv_map.csv)
-    mapping = read_csv_mapping()
-    if detection_rule in mapping:
-        raise ValueError("Rule '{}' already exists in CSV mapping".format(detection_rule))
+    # Single cross-process RMW lock covers BOTH the mapping check and
+    # the registry RMW. Pre-Ring-6.1 the mapping check was lockless
+    # AND the registry used a per-process threading.Lock — so two
+    # workers could both see "rule not present in mapping", both pass
+    # the registry uniqueness check, both append, and write_rules_registry
+    # would race on the file. The single file_lock here serializes
+    # all rule-create attempts across workers.
+    with rules_rmw_lock():
+        mapping = read_csv_mapping()
+        if detection_rule in mapping:
+            raise ValueError("Rule '{}' already exists in CSV mapping".format(detection_rule))
 
-    # Check registry under lock
-    with _detection_rules_lock:
         registered = read_rules_registry()
         if detection_rule in registered:
             raise ValueError("Rule '{}' is already registered".format(detection_rule))
@@ -240,18 +277,33 @@ def _read_mapping_rows() -> List[Dict]:
 
 
 def _write_mapping_rows(rows: List[Dict]) -> None:
-    """Write rule_csv_map.csv atomically.
+    """Write rule_csv_map.csv atomically (temp+rename).
+
+    Pre-Ring-6.1 this did a direct overwrite (`open("w") → writerows`),
+    which created a window where readers could observe an empty or
+    partially-written file. Now writes to a temp file and renames
+    on completion — atomic on POSIX, prevents torn reads.
 
     After writing, updates the expected-hash registry so the FIM
     watcher can distinguish this legitimate write from external
     modifications (SPL outputlookup, filesystem edits).
     """
-    with open(MAPPING_FILE, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(
-            fh, fieldnames=["rule_name", "csv_file", "app_context"],
-            extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(rows)
+    temp_path = MAPPING_FILE + ".tmp"
+    try:
+        with open(temp_path, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(
+                fh, fieldnames=["rule_name", "csv_file", "app_context"],
+                extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        os.replace(temp_path, MAPPING_FILE)
+    except OSError:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        raise
     # Update expected hash — best effort (don't block mapping write on hash failure)
     try:
         update_csv_expected_hash(MAPPING_FILE)
@@ -301,13 +353,22 @@ def delete_rule_pipeline(
     from wl_trash import move_to_trash, read_trash_config
     from wl_validation import build_csv_path
 
-    mapping = _read_mapping_rows()
-    affected_entries = [e for e in mapping if e.get("rule_name") == rule_name]
-    affected_csvs = [e["csv_file"] for e in affected_entries]
+    # Single cross-process RMW lock covers the entire pipeline:
+    # mapping read → mapping write → registry RMW. Pre-Ring-6.1 the
+    # mapping RMW was lockless, the registry RMW used a per-process
+    # threading.Lock, and the two cycles were not synchronized with
+    # each other even within one worker. R6-F5 manifested as deleted
+    # rules silently reappearing because two workers each took a
+    # stale snapshot of the registry; the later writer overwrote the
+    # earlier writer's deletion. Holding one file_lock for the whole
+    # body closes that window.
+    with rules_rmw_lock():
+        mapping = _read_mapping_rows()
+        affected_entries = [e for e in mapping if e.get("rule_name") == rule_name]
+        affected_csvs = [e["csv_file"] for e in affected_entries]
 
-    # Case 1: Rule has no CSVs — just remove from registry
-    if not affected_csvs:
-        with _detection_rules_lock:
+        # Case 1: Rule has no CSVs — just remove from registry
+        if not affected_csvs:
             registered = read_rules_registry()
             if rule_name not in registered:
                 return {
@@ -319,30 +380,29 @@ def delete_rule_pipeline(
             registered.remove(rule_name)
             write_rules_registry(registered)
 
-        evt = build_audit_event(
-            action="dr_removed",
-            analyst=analyst,
-            detection_rule=rule_name,
-            csv_file="",
-            comment=comment,
-            removal_type=removal_type,
-            csv_count=0,
-            csv_files="",
-        )
-        post_audit_event(session_key, evt)
+            evt = build_audit_event(
+                action="dr_removed",
+                analyst=analyst,
+                detection_rule=rule_name,
+                csv_file="",
+                comment=comment,
+                removal_type=removal_type,
+                csv_count=0,
+                csv_files="",
+            )
+            post_audit_event(session_key, evt)
 
-        return {
-            "success": True,
-            "message": "Rule '{}' removed (had no CSV files)".format(rule_name),
-            "error": "",
-            "data": {"affected_csvs": [], "trashed": False, "trash_id": ""},
-        }
+            return {
+                "success": True,
+                "message": "Rule '{}' removed (had no CSV files)".format(rule_name),
+                "error": "",
+                "data": {"affected_csvs": [], "trashed": False, "trash_id": ""},
+            }
 
-    # Case 2: Rule has CSVs — remove from mapping and registry
-    new_mapping = [e for e in mapping if e.get("rule_name") != rule_name]
-    _write_mapping_rows(new_mapping)
+        # Case 2: Rule has CSVs — remove from mapping and registry
+        new_mapping = [e for e in mapping if e.get("rule_name") != rule_name]
+        _write_mapping_rows(new_mapping)
 
-    with _detection_rules_lock:
         registered = read_rules_registry()
         if rule_name in registered:
             registered.remove(rule_name)
@@ -454,41 +514,45 @@ def delete_csv_pipeline(
     from wl_trash import move_to_trash, read_trash_config
     from wl_validation import build_csv_path
 
-    mapping = _read_mapping_rows()
+    # Single cross-process RMW lock covers the mapping RMW and
+    # (conditionally) the registry RMW. Matches the structure of
+    # delete_rule_pipeline — R6-F5 affected this pipeline too because
+    # the two RMW cycles were independently lockless across workers.
+    with rules_rmw_lock():
+        mapping = _read_mapping_rows()
 
-    # Find the specific entry
-    found_entry = None
-    for e in mapping:
-        if e.get("csv_file") == csv_file:
-            if not rule_name:
-                rule_name = e.get("rule_name", "")
-            found_entry = e
-            break
+        # Find the specific entry
+        found_entry = None
+        for e in mapping:
+            if e.get("csv_file") == csv_file:
+                if not rule_name:
+                    rule_name = e.get("rule_name", "")
+                found_entry = e
+                break
 
-    if not found_entry:
-        return {
-            "success": False,
-            "message": "",
-            "error": "CSV '{}' not found in mapping".format(csv_file),
-            "data": {},
-        }
+        if not found_entry:
+            return {
+                "success": False,
+                "message": "",
+                "error": "CSV '{}' not found in mapping".format(csv_file),
+                "data": {},
+            }
 
-    app_context = found_entry.get("app_context", "")
+        app_context = found_entry.get("app_context", "")
 
-    # Check if this is the last CSV for the rule
-    rule_csvs = [e["csv_file"] for e in mapping
-                 if e.get("rule_name") == rule_name]
-    rule_also_removed = (len(rule_csvs) == 1)
+        # Check if this is the last CSV for the rule
+        rule_csvs = [e["csv_file"] for e in mapping
+                     if e.get("rule_name") == rule_name]
+        rule_also_removed = (len(rule_csvs) == 1)
 
-    # Remove the CSV entry from mapping
-    new_mapping = [e for e in mapping
-                   if not (e.get("csv_file") == csv_file
-                           and e.get("rule_name") == rule_name)]
-    _write_mapping_rows(new_mapping)
+        # Remove the CSV entry from mapping
+        new_mapping = [e for e in mapping
+                       if not (e.get("csv_file") == csv_file
+                               and e.get("rule_name") == rule_name)]
+        _write_mapping_rows(new_mapping)
 
-    # If last CSV for rule, also remove rule from registry
-    if rule_also_removed:
-        with _detection_rules_lock:
+        # If last CSV for rule, also remove rule from registry
+        if rule_also_removed:
             registered = read_rules_registry()
             if rule_name in registered:
                 registered.remove(rule_name)
