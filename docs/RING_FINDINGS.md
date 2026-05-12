@@ -4522,3 +4522,248 @@ R6-F5/F6/F7 list above):
   to the codebase: module-level mutable state
   is invisible across workers; design for
   cross-worker visibility from the start.
+
+## Ring 6 retrospective
+
+Ring 6 closes here. The test-coverage track that
+started at Ring 0 (2026-05-07) is complete; the
+Ring 6.1 fix track (driven by what Ring 6
+surfaced) is planned but not yet started.
+
+### Days delivered
+
+| Day | Outcome | Commit |
+|-----|---------|--------|
+| 1 | Multi-session driver (lib_multi_session.cjs) + smoke test + 7-session login orchestration | `51f7012` |
+| 2 | R6-F2 found + fixed (admin approval_count gate silently unenforced for 30+ days; shape-mismatch gate bypass on body.get("success")) | `bdb36fe` |
+| 2-bonus | R6-F3 found + fixed (admin usage_reset same shape-mismatch bug) | `e981267` |
+| 3 | R6-D3 negative finding (rule_creation cap=5 gate IS race-safe under 7-way pressure) | `a57c63a` |
+| 3-bonus | R6-F4 found + fixed (rule_deletion + csv_deletion gates: same shape-mismatch class but a DIFFERENT field — data.get("trashed") from pipeline). R6-F5/F6 deferred (cross-process file races). | `9670f9f` |
+| 4 | R6-F7 found, deferred (save_csv TOCTOU silent loss with false HTTP 200 ack; same root cause as R6-F5/F6 but at a different file path) | `98aad19` |
+| 5 | R6-F8 found, deferred (per-Python-process module-level state in wl_presence + wl_ratelimit; "Also viewing" indicator collapses under concurrent activity) | `26952ef` |
+| 6 | This retro (docs only) | (this commit) |
+
+### Findings tally
+
+**FIXED IN RING 6 (3 HIGH-severity gate bypasses)**:
+
+- **R6-F2** — admin approval_count daily limit
+  silently unenforced for ~30 days; fix shipped at build 649 (commit `bdb36fe`).
+- **R6-F3** — admin usage_reset daily limit
+  silently unenforced. Same shape-mismatch class
+  as R6-F2, surfaced via the audit-the-class
+  follow-up. Fix shipped at build 650 (commit `e981267`).
+- **R6-F4** — rule_deletion + csv_deletion counters
+  silently unenforced for empty-CSV / failed-trash
+  paths. Same class as R6-F2/F3 but a DIFFERENT
+  field name (``data.get("trashed")`` from
+  pipeline result), proving the audit pattern
+  must be predicate-based, not field-name-based.
+  Fix shipped at build 651 (commit `9670f9f`).
+
+**DEFERRED TO RING 6.1 (4 known issues, all related to cross-process state coherence)**:
+
+- **R6-F5** — read-modify-write race on
+  ``_detection_rules.json`` and ``rule_csv_map.csv``.
+  ``threading.Lock`` provides zero cross-process
+  protection. Causes deleted rules to "come back
+  from the dead" under concurrent admin activity.
+- **R6-F6** — counter TOCTOU on
+  ``_daily_limits.json``. Check-execute-increment
+  is non-atomic across worker processes; tight
+  caps (cap=2) see 1-2 over-shoot under 7-way
+  pressure.
+- **R6-F7** — ``_save_csv`` returns HTTP 200 for
+  clobbered writes. The most user-dangerous of
+  the class: every successful response carries an
+  audit event for a save that was immediately
+  overwritten by another concurrent writer. The
+  user has no signal their row was lost.
+- **R6-F8** — per-Python-process module-level
+  state. ``_presence`` (wl_presence.py) and
+  ``_rate_limits`` (wl_ratelimit.py) live per
+  worker, not globally. Presence indicator
+  collapses under concurrent activity; burst
+  rate-limit structurally bypassable via worker
+  spread (live test deferred to 6.1).
+
+**POSITIVE FINDINGS (no fix needed)**:
+
+- **R6-D3** — rule_creation rate-limit gate IS
+  race-safe. With cap=5 against 7 racers, exactly
+  5 land and the counter increments correctly to
+  match. The R6-F2 fix shape (canonical
+  ``status==200 AND not body.get("error")``)
+  generalizes correctly. (This was the primary
+  Day 3 deliverable; R6-F4 surfaced only on the
+  Day 3 bonus when cap=2 made the leak visible.)
+- **Day 5 Phase C** — save_csv and presence are
+  CLEANLY independent. Pings during in-flight
+  saves don't deadlock, don't share locks, don't
+  cross-corrupt state. The R6-F7 (save) and R6-F8
+  (presence) bugs are SEPARATE classes that
+  happen to coexist; fixing one does not affect
+  the other.
+
+### Patterns and process learnings
+
+- **Predicate-based audits beat field-name-based
+  audits.** R6-F2 → R6-F3 jump took 15 minutes
+  via grep for ``body.get("success")``. R6-F4
+  took longer because it was the SAME bug class
+  (gate on a flag only set on some success paths)
+  but a DIFFERENT field name
+  (``data.get("trashed")``). Lesson re-formed for
+  this ring's memory:
+  ``feedback_shape_mismatch_gate_bypass.md`` now
+  reflects predicate-based ("does this gate fire
+  on every success path?") rather than literal
+  pattern matching.
+- **Barrier-synchronized 7-way races vs raw
+  Promise.all.** Day 4 vs the pre-existing
+  ``test_concurrent_save_race.cjs`` (round 4)
+  demonstrated this concretely. The round-4 test
+  used 2 promises on one page session; it
+  documented R6-F7 as "characterization only,
+  acceptable" because it rarely reproduced the
+  TOCTOU window. Day 4's 7 independent browser
+  sessions + barrier showed silent-loss leaks in
+  ~85% of runs. **The test infrastructure choice
+  changes what bugs are visible.**
+- **Sequential control phase + concurrent burst
+  phase is the right race-test shape.** Phase A
+  (sequential) + Phase B (sequential reads)
+  gives a clean baseline that proves the function
+  itself works. Phase C/D (concurrent) measures
+  what HTTP routing does under load. Without the
+  control phase you can't distinguish "function
+  is broken" from "concurrency model is broken".
+- **Find one site, grep for the pattern,
+  immediately.** This took R6-F2 to R6-F3 in 15
+  min, then R6-F8 from one site (wl_presence) to
+  two known sites (+wl_ratelimit) in 12 min.
+  Doing this AT discovery time is cheap; doing
+  it 6 months later in cleanup mode is expensive
+  because the original mental model is gone.
+- **Soft regression alarms work.** Day 3 bonus
+  test (R6-F5/F6) and Day 4 test (R6-F7) both
+  ship green under known-leak tolerances. They
+  hard-fail only on signatures that would
+  indicate a NEW regression (R6-F4-class
+  gate-shape regression). This means the known
+  leak is tracked indefinitely without
+  re-blocking the suite each run, AND if a NEW
+  bug of the same class appears, the test
+  catches it.
+
+### What didn't land in Ring 6 — explicit non-deliverables
+
+This was a discovery ring. None of these were
+in scope:
+
+- **Fixes for R6-F5/F6/F7/F8.** All deferred to
+  Ring 6.1 because the right fix shape is
+  infrastructure-level (uniform adoption of
+  ``bin/wl_filelock.py`` and a cross-process
+  state strategy for R6-F8), not site-by-site
+  patching.
+- **Audit of all other potential bug sites.**
+  R6-F8 grep found 2 module-level dicts; an
+  exhaustive R6-F5/F6/F7 class audit (every
+  ``threading.Lock`` next to a file write) was
+  not done — flagged as Day 6.1.1 in the
+  follow-on ring.
+- **Live test of the burst rate-limiter
+  hypothesis (R6-F8 sibling).** The structural
+  evidence is strong (same code pattern as
+  proven presence case) but the live 7-session
+  burst test was not run. Flagged as Day 6.1.8.
+
+### Ring 6 totals
+
+- **Days**: 6 (Days 1-5 + Day 6 retro). Plus
+  2 bonus rounds (Day 2 + Day 3).
+- **Tests added**: 4 new E2E test files
+  (test_multi_session_smoke.cjs,
+  test_concurrent_limit.cjs,
+  test_concurrent_limit_other_counters.cjs,
+  test_concurrent_save_csv.cjs,
+  test_concurrent_presence.cjs).
+- **Integration tests added**: 2 (gate-shape
+  pinning for R6-F2/F3 and R6-F4).
+- **Bugs fixed**: 3 HIGH-severity gate bypasses
+  (R6-F2/F3/F4).
+- **Bugs documented + deferred**: 4 (R6-F5/F6/F7/F8).
+- **Memory files created**: 2
+  (``feedback_cross_process_file_races.md``,
+  ``feedback_per_worker_state.md``).
+- **Memory files updated**: 1
+  (``feedback_shape_mismatch_gate_bypass.md``
+  — extended for R6-F4's predicate-based-audit
+  lesson).
+- **Build bumps**: 2 (649 for R6-F2, 650 for
+  R6-F3, 651 for R6-F4). Days 4-6 ship no code
+  changes.
+
+### Ring 6.1 scope summary
+
+The follow-on ring is queued at 10 deliverables
+across two distinct fix vectors:
+
+**Vector 1 — Cross-process file locking (R6-F5/F6/F7)**:
+
+- 6.1.1: Audit every file write in the codebase
+  for locking + atomicity + retry semantics.
+  Coverage matrix.
+- 6.1.2: Uniform adoption of
+  ``bin/wl_filelock.py`` across critical-section
+  writes.
+- 6.1.3: Tighten the Day 3 bonus + Day 4 tests
+  to zero-tolerance assertions once fix lands.
+- 6.1.4: Benchmark before/after for perf
+  regression.
+- 6.1.5: ``_save_csv`` RMW wrap with
+  ``file_lock``.
+- 6.1.6: Tighten ``test_concurrent_save_csv.cjs``
+  Phase D — WARN → ERROR on silent-loss.
+- 6.1.7: Audit ``_revert_csv``,
+  ``_save_col_widths``, version snapshot writes
+  for the same shape.
+
+**Vector 2 — Cross-process state visibility (R6-F8)**:
+
+- 6.1.8: Live-test ``_rate_limits`` per-worker
+  hypothesis with 7 sessions of one user.
+- 6.1.9: Prototype Option A (KV-backed presence)
+  vs Option B (file-locked presence); benchmark.
+- 6.1.10: Tighten
+  ``test_concurrent_presence.cjs`` Phase D
+  collapse-tolerance to zero once fix lands.
+
+Both vectors converge on the same architectural
+property — cross-process state coherence —
+but the right fix shape differs per vector:
+file locks for vector 1, shared-storage backing
+for vector 2.
+
+### Suggested next work (not committed)
+
+The user explicitly asked these two be surfaced
+AFTER all rings close (recorded in
+``memory/project_post_rings_reminders.md``):
+
+1. **"Show Requested Data" feature** in the
+   approval queue UI (next feature on the
+   post-hardening backlog, per CLAUDE.md
+   "Pending / Future Work").
+2. **Sigstore release-verification dry-run**
+   (release-blocking per CLAUDE.md; runbook in
+   ``docs/RELEASE_CHECKLIST.md`` section 8).
+
+Both are user-visible work, distinct from the
+test-coverage and fix-ring infrastructure tracks.
+Surfaced at this ring-close transition because
+Ring 6 is the final test-discovery ring.
+
+Ring 6 closes here. Ring 6.1 (fix vector for
+R6-F5/F6/F7/F8) is queued.
