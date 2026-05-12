@@ -136,30 +136,24 @@ async function raceAction({
 
     const expectedSuccesses = cap - before;
     const bypassMagnitude = successes - expectedSuccesses;
+
+    // Ring 6.1 R6-F6 fix landed at build 652 — admin daily-counter
+    // check+execute+increment now runs under a per-user cross-process
+    // lock, so the cap is enforced EXACTLY. Pre-Ring-6.1 this assertion
+    // tolerated a "<3" leak as a known R6-F6 TOCTOU signature; post-fix
+    // the leak must be ZERO. Any over-shoot here is a regression —
+    // either the lock isn't holding (R6-F6 reopened) or the gate isn't
+    // firing (R6-F4-class). Hard-fail in either case.
     if (bypassMagnitude > 0) {
-        // Two race classes can over-shoot here:
-        //   - R6-F4 (gate-shape): counter never increments at all, so
-        //     bypass is roughly PARALLELISM - expected. Pre-build-651
-        //     rule_deletion showed bypass = 5 (6 landed, cap allowed 1).
-        //   - R6-F6 (counter TOCTOU): increment DOES fire, but the
-        //     check-execute-increment window allows a small leak.
-        //     Post-build-651 rule_deletion shows bypass = 1 (3 landed,
-        //     cap allowed 2).
-        // The Day 3 bonus accepts the smaller leak as a known
-        // R6-F6 signal, hard-fails only on the bigger R6-F4-class
-        // bypass.
-        if (bypassMagnitude >= 3) {
-            throw new Error(
-                "[" + label + "] LARGE RACE BYPASS (suggests gate-shape "
-                + "regression): " + successes + " landed but cap allowed "
-                + "only " + expectedSuccesses + " (bypass=" + bypassMagnitude
-                + ", threshold=3). See R6-F4 in RING_FINDINGS."
-            );
-        }
-        console.log("    [" + label + "] WARN: small race bypass "
-            + "(bypass=" + bypassMagnitude
-            + ") — known R6-F6 (counter TOCTOU). "
-            + "Deferred to Ring 6.1 file-locking work.");
+        throw new Error(
+            "[" + label + "] RACE BYPASS: " + successes
+            + " landed but cap allowed only " + expectedSuccesses
+            + " (bypass=" + bypassMagnitude + "). "
+            + "Post-Ring-6.1 the cap is enforced exactly — any "
+            + "over-shoot indicates a regression on R6-F6 (lock not "
+            + "held across check+exec+increment) or R6-F4 (gate not "
+            + "firing). Investigate."
+        );
     }
     if (successes + limit_rejects !== PARALLELISM) {
         throw new Error(
@@ -175,22 +169,15 @@ async function raceAction({
     console.log("    [" + label + "] counter before: " + before
         + "  after: " + after + "  delta: " + delta);
 
+    // Post-Ring-6.1: the counter delta must match successes EXACTLY.
+    // Pre-fix this tolerated drift<3 as part of the R6-F6 signature.
     if (delta !== successes) {
-        // Tolerate a small mismatch as part of R6-F6 race signature —
-        // a lost or double-applied increment under the TOCTOU window.
-        // Flag if the mismatch is large enough to suggest a different
-        // bug class (e.g. gate not firing at all).
-        const driftMagnitude = Math.abs(delta - successes);
-        if (driftMagnitude >= 3) {
-            throw new Error(
-                "[" + label + "] LARGE counter drift: delta=" + delta
-                + " successes=" + successes
-                + ". Suggests R6-F4-class gate-shape regression."
-            );
-        }
-        console.log("    [" + label + "] WARN: counter delta != successes "
-            + "(drift=" + driftMagnitude + ") — known R6-F6 (counter "
-            + "TOCTOU). Deferred to Ring 6.1.");
+        throw new Error(
+            "[" + label + "] COUNTER DRIFT: delta=" + delta
+            + " successes=" + successes
+            + ". Post-Ring-6.1 increment is inside the sequence lock — "
+            + "delta must equal successes. Investigate."
+        );
     }
     return { successes, limit_rejects, classified };
 }

@@ -60,15 +60,14 @@ const PARALLELISM = 7;
 const RULE = "DR_" + TAG;
 const CSV = RULE + ".csv";
 
-// Tolerance: the TOCTOU window on save_csv can produce 1-N successes
-// depending on how tightly the racers' check-before-write phases
-// overlap. The known R6-F7 leak signature is `successes > 1` AND
-// `on-disk rows == 1` (silent data loss with false ack). The only
-// signature that proves the lock is COMPLETELY no-op (R6-F4-class
-// gate-shape regression on the optimistic check) is `successes ==
-// PARALLELISM` — every request bypassed every gate. Hard-fail
-// only on that, treat anything else as the known leak.
-const LEAK_HARDFAIL_THRESHOLD = PARALLELISM;
+// Ring 6.1 R6-F7 fix landed at build 653 — _save_csv RMW now runs
+// under a per-CSV cross-process file_lock. Post-fix, exactly ONE of
+// PARALLELISM racers should land (proper optimistic lock); all
+// others must receive 409 conflict. The pre-Ring-6.1 tolerance for
+// "successes > 1 with on-disk rows == 1" (silent loss) is now a
+// hard fail — any such signature indicates the lock isn't holding
+// across the check + read + write critical section.
+const ALLOWED_MAX_SUCCESSES = 1;
 
 function readCsvFromContainer(csvFile) {
     // Live container is the source of truth for "what actually
@@ -315,45 +314,36 @@ function parseCsvRows(csvText) {
                     + "investigate write_csv() atomicity.");
             }
 
-            // Classify by gap between API successes and persisted rows.
+            // Post-Ring-6.1: lostWrites MUST be 0. Any silent-loss
+            // signature is a regression on R6-F7.
             const lostWrites = successes - racerRows.length;
             if (lostWrites === 0) {
                 console.log("    OUTCOME: PROPER OPTIMISTIC LOCK");
             } else {
-                // R6-F7 signature: optimistic check is a TOCTOU
-                // race (not a real lock). N racers all pass the
-                // check before any write completes, N writes all
-                // succeed at the API level, but only the last
-                // os.replace wins on disk. The earlier "successes"
-                // returned HTTP 200 with no row persisted — silent
-                // data loss with false acknowledgment. Same root
-                // cause as R6-F5/F6 (no cross-process file lock
-                // around the read-modify-write critical section).
-                // Deferred to Ring 6.1.
-                console.log("    OUTCOME: R6-F7 SILENT-LOSS LEAK — "
+                throw new Error("R6-F7 REGRESSION: "
                     + successes + " of " + PARALLELISM
                     + " HTTP 200 successes but only "
                     + racerRows.length + " row(s) actually persisted. "
                     + lostWrites + " user(s) told 'saved' but their "
-                    + "change was clobbered. Known R6-F5/F6 class "
-                    + "(no cross-process file lock around save_csv "
-                    + "read-modify-write). Deferred to Ring 6.1.");
+                    + "change was clobbered. The file_lock in "
+                    + "_save_csv isn't holding across the RMW "
+                    + "critical section. Investigate.");
             }
         });
 
         // ──────── BYPASS-MAGNITUDE GATE ────────
 
-        await H.test("Bypass magnitude under hardfail threshold (lock not completely no-op)", async () => {
-            // Only fail if EVERY racer bypassed the optimistic check.
-            // That would indicate an R6-F4-class regression (lock
-            // condition never fires), distinct from R6-F7 (tight
-            // TOCTOU window where some racers pass and some don't).
-            if (successes >= LEAK_HARDFAIL_THRESHOLD) {
-                throw new Error("TOTAL BYPASS: " + successes + " of "
-                    + PARALLELISM + " races landed (threshold="
-                    + LEAK_HARDFAIL_THRESHOLD + "). Optimistic lock "
-                    + "is no-op — R6-F4-class gate-shape regression "
-                    + "on save_csv. Investigate before deferring.");
+        await H.test("Exactly one success (R6-F7 closed; proper lock)", async () => {
+            // Post-Ring-6.1: only ONE racer must land. Any larger
+            // success count means the file_lock isn't holding across
+            // the entire RMW critical section.
+            if (successes > ALLOWED_MAX_SUCCESSES) {
+                throw new Error("R6-F7 REGRESSION: " + successes
+                    + " of " + PARALLELISM + " races landed (allowed "
+                    + ALLOWED_MAX_SUCCESSES + "). The file_lock in "
+                    + "_save_csv isn't serializing concurrent saves. "
+                    + "Pre-Ring-6.1 this test accepted 1-5 successes; "
+                    + "post-fix it must be exactly 1.");
             }
         });
 
