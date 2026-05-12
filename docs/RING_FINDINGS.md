@@ -5488,3 +5488,87 @@ scope):
   `test_concurrent_presence.cjs` Phase D
   collapse-tolerance after R6-F8 fix lands.
 - Ring 6.1 retro + close.
+
+### R6.1-D8 — R6-F8 sibling instance CONFIRMED in rate limiter
+
+**Finding**: `bin/wl_ratelimit.py:16` stores
+`_rate_limits` as a module-level dict. Each
+Splunk PersistentScriptHandler worker has
+its OWN copy. Cap (`RATE_MAX_WRITES=30 / 60s`)
+is enforced INDEPENDENTLY per worker — the
+effective cap for one user is roughly
+`30 * N` writes/60s where N is the
+persistconn pool size.
+
+**Evidence**: new test
+`tests/e2e/test_ratelimit_per_worker.cjs`
+fires 60 parallel POSTs to `log_event`
+from ONE `wladmin1` session after waiting
+for the prior 60s sliding window to age
+out. Reproducible result:
+
+| Run                | Parallelism | Cap | Successes | Rate-rejects |
+|--------------------|------------:|----:|----------:|-------------:|
+| With prior traffic |          60 |  30 |        20 |           40 |
+| Clean window       |          60 |  30 |    **60** |        **0** |
+
+The clean-window run is the diagnostic
+signal: 60 of 60 succeeded, 0 hit the gate,
+implying TWO worker processes each
+allowing 30/30. The contaminated-window
+run confirms the gate works WITHIN a
+worker (some writes were rejected because
+prior tests had filled some workers'
+buckets) — it just doesn't share state
+across workers.
+
+**Production impact**: dev container has
+2 workers (60/30 ratio). Typical
+production Splunk persistconn pool is
+4–8 workers, so production effective cap
+is 120–240 writes/60s for one user
+instead of the documented 30. That's a
+4–8x silent over-allowance on the
+defense-in-depth API-abuse control.
+
+**Test status**: INFORMATIONAL. The hard
+assertion is deferred to Day 6.1.10
+after the fix lands. The current test
+documents the verdict in chat output
+(`VERDICT: cap enforced PER-WORKER —
+R6-F8 hypothesis CONFIRMED`) and asserts
+only that the classification math is
+sound (`successes + rate_rejects +
+other_errors === PARALLELISM`).
+
+**Pairs with**:
+
+- `feedback_per_worker_state.md` — the
+  global lesson written when R6-F8 was
+  first surfaced on presence.
+- `bin/wl_presence.py` — the original
+  R6-F8 instance; the rate limiter is a
+  sibling.
+- `~/.claude/knowledge/security/concurrency-race-conditions.md`
+  — module-level mutable state under
+  multi-process workers is a recurring
+  class.
+
+### Carries forward from R6.1-D8
+
+- Day 6.1.9 (NOW DUAL-SCOPE): prototype
+  the fix for BOTH known R6-F8 instances —
+  presence (`bin/wl_presence.py`) and
+  rate limiter (`bin/wl_ratelimit.py`).
+  Same fix shape candidate (KV-backed
+  state vs file-locked state) likely
+  applies to both; if so, ONE migration
+  pattern closes both instances and
+  the rule-of-three for a wider sweep
+  is met (this audit identified two
+  named instances + the recurring class).
+- Day 6.1.10: tighten BOTH
+  `test_concurrent_presence.cjs` Phase D
+  AND `test_ratelimit_per_worker.cjs`
+  burst assertion (`successes === 30`
+  exactly) once the fix lands.
