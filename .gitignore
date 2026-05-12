@@ -145,3 +145,14 @@ tests/e2e/visual_artifacts/
 # want to commit a reference baseline override the ignore for
 # specific files (e.g. `bench_results/!cold_start_baseline.json`).
 bench_results/*.json
+
+# ZAP baseline-scan local triage reports (Ring 5 Day 3 follow-up).
+# The CI workflow uploads its own report artifacts; locally-run
+# reports under tests/zap-reports/ are scratch for one-shot
+# triage rounds. Keep .gitignore'd so we don't commit point-in-time
+# HTML/JSON dumps (which are large + drift on every Splunk update).
+tests/zap-reports/
+
+# Same shape for a11y reports — JSON per-page output is scratch.
+# The baseline.json contract is committed; the raw reports are not.
+tests/a11y/reports/

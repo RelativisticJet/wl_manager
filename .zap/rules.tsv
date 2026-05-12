@@ -17,41 +17,42 @@
 # the date it was added. Don't suppress a finding just because it's
 # noisy — explain WHY it's acceptable for this app.
 #
-# First-run note: this file is intentionally minimal at Ring 5 Day 3
-# inception. The first nightly run will produce a baseline of ~20-30
-# WARN-level findings (mostly Splunk Web UI defaults: X-Frame-Options
-# value, missing CSP, anti-CSRF tokens on Splunk's own forms, etc.).
-# Triage that run's report (artifact: zap-baseline-report.html),
-# then either suppress here (IGNORE) or fix upstream. Update the
-# CHANGELOG with the triage outcome.
+# ──────────────────────────────────────────────────────────────────
+# First-run triage outcome (2026-05-12)
+# ──────────────────────────────────────────────────────────────────
+#
+# First scan ran locally against http://host.docker.internal:8000/en-US/account/login.
+# Summary: FAIL-NEW=0, WARN-NEW=9 (unique rule IDs: 14 across all severities).
+# Triage outcome: ALL findings are on Splunk's pre-auth surface
+# (login page, error pages, robots.txt, sitemap.xml, bundled static
+# assets). None touch our app code at /custom/wl_manager/. All 14
+# are suppressed below with documented Splunk-specific rationale.
+#
+# IMPORTANT GAP — authenticated scanning:
+# The baseline scan targets the login page and never authenticates,
+# so it covers only Splunk's pre-auth surface and not our app code.
+# To audit our handler + dashboards, ZAP needs an auth script
+# (zap-baseline.py -U context.context auth). Adding that requires:
+#   1. A ZAP context file (.zap/context.xml) describing the login form
+#   2. A test user credential pair injected via env vars
+#   3. Updating the workflow to pass -U <context> -n <context.xml>
+# Out of scope for this triage round — flagged as future work.
+#
+# ──────────────────────────────────────────────────────────────────
+# Suppressions
+# ──────────────────────────────────────────────────────────────────
 
-# ── Suppressions (start empty; populate after first run triage) ───
-
-# Example entry format (commented out so it doesn't take effect):
-# 10020	IGNORE	X-Frame-Options not set — Splunk's own Web UI emits
-#		ALLOWFROM by default; acceptable for our app context
-#		(2026-05-11)
-
-# ── Notes for triage ──────────────────────────────────────────────
-#
-# Likely first-run findings (predicted; verify against actual report):
-#
-# 10020 — Missing Anti-clickjacking Header (X-Frame-Options)
-#   Splunk sets X-Frame-Options ALLOWFROM on its own pages, which
-#   modern browsers treat as missing. Splunk's design assumes
-#   trusted intranet deployment. ACTION: likely IGNORE with a
-#   pointer to Splunk's design rationale.
-#
-# 10038 — Content Security Policy (CSP) Header Not Set
-#   Splunk doesn't ship a CSP. Setting one is a Splunk-bundle
-#   change, not a wl_manager change. ACTION: IGNORE with note.
-#
-# 10049 — Storable but Non-Cacheable Content
-#   Informational. ACTION: WARN (no action needed).
-#
-# 10063 — Permissions Policy Header Not Set
-#   Splunk default. ACTION: IGNORE with note.
-#
-# 10096 — Timestamp Disclosure
-#   Splunk dashboards include timestamps as part of the UX.
-#   ACTION: IGNORE with note.
+10010	IGNORE	Cookie No HttpOnly Flag — Splunk's session cookies (cval, splunkweb_csrf_token_8000). Splunk's bundled session manager controls these; setting HttpOnly is a Splunk web.conf change, not a wl_manager change. The CSRF token cookie is intentionally JS-readable so the frontend can include it as a header. (2026-05-12)
+10038	IGNORE	Content Security Policy (CSP) Header Not Set — Splunk doesn't ship a CSP on its login page or default response. Adding a CSP is a Splunk web.conf customization (http_header_X-Content-Security-Policy) that affects the entire Splunk instance, not just our app. Out of scope for an app-level baseline. (2026-05-12)
+10044	IGNORE	Big Redirect Detected — Splunk's 303 redirects on /sitemap.xml, root, and search routes embed long return URLs with internal request IDs. Splunk-bundled redirect behavior; the "sensitive info" is internal Splunk request tracking, not application data. (2026-05-12)
+10049	IGNORE	Non-Storable Content — Splunk emits Cache-Control: no-store on login responses. Informational only; correct behavior for an auth page. (2026-05-12)
+10054	IGNORE	Cookie without SameSite Attribute — Splunk's session cookies don't set SameSite. Same root cause as 10010 — Splunk's bundled session manager. The CSRF cookie reaching same-origin handlers is intentional. (2026-05-12)
+10063	IGNORE	Permissions Policy Header Not Set — Splunk default response headers don't include Permissions-Policy. Could be added via web.conf if we want to lock down camera/microphone/geolocation, but those are already unused by Splunk Web. Low payoff. (2026-05-12)
+10094	IGNORE	Base64 Disclosure — Splunk's login page inlines bookmark/favicon images as base64 data URLs. Not sensitive content; standard SPA optimization. (2026-05-12)
+10096	IGNORE	Timestamp Disclosure - Unix — Splunk's login page emits its build timestamp in inline JS for cache-busting. Same value is in /en-US/static/@HASH/ static-asset URLs; trivial to discover by inspection. Not a real leak. (2026-05-12)
+10109	IGNORE	Modern Web Application — Pure informational; ZAP just notes that the target uses modern JS (SPA navigation). No action. (2026-05-12)
+10110	IGNORE	Dangerous JS Functions — Splunk's bundled JS uses eval/Function for templating. Owned by Splunk's vendor bundle. Replacing it is an upstream Splunk change. (2026-05-12)
+10112	IGNORE	Session Management Response Identified — ZAP notes session cookies appear in responses. Standard for any authenticated app. Informational. (2026-05-12)
+90004	IGNORE	Cross-Origin-Embedder/Opener/Resource Policy Missing — Splunk's default response headers don't set COEP/COOP/CORP. Configurable via web.conf for cross-origin isolation, but Splunk Web doesn't currently use cross-origin features that require these. Low payoff. (2026-05-12)
+90005	IGNORE	Sec-Fetch-* Headers Missing — These are REQUEST headers the browser should send, not response headers Splunk should set. ZAP flags servers that don't reject requests missing them, but most browsers always send them now. Informational. (2026-05-12)
+110009	IGNORE	Full Path Disclosure — Splunk's 404 error pages leak /opt/splunk/share/splunk/search_mrsparkle paths. This is Splunk's bundled error template; not configurable from app metadata. (2026-05-12)
