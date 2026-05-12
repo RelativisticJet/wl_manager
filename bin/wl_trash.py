@@ -33,6 +33,7 @@ from wl_constants import (
     VERSIONS_DIR, DETECTION_RULES_FILE, MAPPING_FILE, DEFAULT_TRASH_RETENTION_DAYS
 )
 from wl_filelock import file_lock
+from wl_rules import rules_rmw_lock
 from wl_validation import sanitize_text, build_csv_path
 
 
@@ -680,19 +681,32 @@ def restore_from_trash(trash_id: str) -> Tuple[Dict, str]:
 
         item_type = meta.get("item_type", "")
 
-        # Dispatch to type-specific handler
-        if item_type == "csv":
-            result, error = restore_csv_from_trash(trash_id, item_dir, meta)
-        elif item_type == "rule":
-            result, error = restore_rule_from_trash(trash_id, item_dir, meta)
-        else:
-            return {}, "Unknown item type"
+        # Ring 6.1 R6-F5 class fix (Day 6.1.7b): wrap the
+        # type-specific restore in the SAME lock the canonical
+        # wl_rules pipelines hold. Both restore paths read +
+        # modify + write MAPPING_FILE (and the registry, for
+        # rule-restore) — without this wrap a concurrent
+        # create_rule / delete_rule / delete_csv could read a
+        # stale snapshot and clobber the restore's writes. The
+        # lock spans the shutil.move operations too, which is
+        # correct: restore must be atomic relative to other
+        # pipeline ops on the same mapping/registry.
+        with rules_rmw_lock():
+            # Dispatch to type-specific handler
+            if item_type == "csv":
+                result, error = restore_csv_from_trash(
+                    trash_id, item_dir, meta)
+            elif item_type == "rule":
+                result, error = restore_rule_from_trash(
+                    trash_id, item_dir, meta)
+            else:
+                return {}, "Unknown item type"
 
-        if error:
-            return result, error
+            if error:
+                return result, error
 
-        # Clean up the trash entry directory
-        shutil.rmtree(item_dir, ignore_errors=True)
+            # Clean up the trash entry directory
+            shutil.rmtree(item_dir, ignore_errors=True)
 
         return meta, ""  # Success
 

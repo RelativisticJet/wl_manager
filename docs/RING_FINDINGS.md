@@ -5366,3 +5366,125 @@ exclusive-create still catches the
   awkward — likely needs the
   `wl_approval._approval_queue_lock` to be
   re-used at the right scope).
+
+### R6.1-D7b — mapping/replay/approval batch shipped at build 655
+
+Three more sites wrapped using the surgical
+"each off-pipeline writer acquires the
+canonical lock" pattern. Chose surgical over
+refactoring trash/replay writes to route
+through `wl_rules` pipeline functions —
+smaller diff, matches the Day 6.1.2 idiom,
+preserves call-site clarity. The trade-off
+is 3 sites to keep in sync with the lock
+contract; flagged for a later consolidation
+ring.
+
+**Sites wrapped**:
+
+1. **Trash restore dispatch** (`bin/wl_trash.py`).
+   Imported `rules_rmw_lock` from
+   `wl_rules` and wrapped the
+   `restore_csv_from_trash` /
+   `restore_rule_from_trash` dispatch inside
+   `restore_from_trash`. The lock spans the
+   `shutil.move` operations — intentional,
+   restore must be atomic relative to other
+   pipeline ops on the same mapping/registry.
+   This covers `_restore_mapping_for_csv`
+   (called from the CSV path) and
+   `restore_rule_from_trash` (called from
+   the rule path).
+2. **Approval-replay create_csv mapping**
+   (`bin/wl_replay.py`).
+   `_execute_replay_create_csv` had its own
+   inline RMW on `MAPPING_FILE` outside any
+   lock (a known parallel implementation of
+   `wl_rules.create_csv_pipeline`'s mapping
+   update). Imported `rules_rmw_lock` and
+   wrapped just the RMW block. The other
+   replay functions
+   (`_execute_replay_create_rule`,
+   `_execute_replay_delete_rule`,
+   `_execute_replay_delete_csv`) already
+   delegate to `wl_rules` pipelines and are
+   covered by Day 6.1.2's
+   `rules_rmw_lock()` inside the pipelines.
+3. **Deferred R6-F6 approval_count site**
+   (`bin/wl_handler.py`). Wrapped the entire
+   body of `_process_approval` in
+   `_maybe_admin_limit_lock(admin_user, roles)`.
+   Previously the
+   `_check_admin_daily_limit("approval_count")`
+   ran inside `_approval_queue_lock` (line
+   ~6282) while the
+   `_increment_admin_daily_limit(...)` ran
+   OUTSIDE the queue lock (line ~6139), in
+   a DIFFERENT lock domain. Two admins
+   racing on different requests could both
+   pass the cap check at counter=N and both
+   land — exactly the R6-F6 signature.
+   Lock order is now admin_limit → queue,
+   matching the order used by the 8
+   wrappers landed in Day 6.1.2 (no
+   cycle risk).
+
+**Verification post-deploy at build 655**:
+
+- `test_concurrent_save_csv.cjs` — 1 success,
+  6 conflicts (R6-F7 unchanged).
+- `test_concurrent_limit_other_counters.cjs` —
+  csv_creation 5/5, rule_deletion 2/2,
+  counters exact (R6-F5/F6 unchanged).
+- `test_concurrent_approval.cjs` — 9/9
+  green. The dual-admin race on the same
+  request still correctly debits exactly
+  the winner's `approval_count` counter
+  (winner +1, loser +0), and only one
+  `request_approved` audit + one
+  `approved` notification is emitted.
+- `test_trash_traversal.cjs` — 5/5 green
+  (restore-from-trash path locks added,
+  trash CRUD flow preserved).
+- `test_notification_payload.py` (7
+  integration tests) — green.
+
+**What didn't land** (deliberately out of
+scope):
+
+- Refactoring the trash restore +
+  approval-replay mapping writes to route
+  through `wl_rules` pipeline functions.
+  Discussed and explicitly chosen against
+  on Day 6.1.7b. Note: per MEMORY.md
+  "Replay functions must delegate to
+  pipeline functions" — this is the
+  established preference, but the
+  signature changes ripple through 4
+  callers, so the surgical fix lands now
+  and the refactor is queued for a later
+  consolidation ring.
+- Reconciling the `_trash_config.json`
+  path divergence between
+  `wl_handler.py` (uses
+  `OWN_LOOKUPS/TRASH_CONFIG_FILE`) and
+  `wl_trash.py` (uses
+  `OWN_LOOKUPS/VERSIONS_DIR/TRASH_CONFIG_FILE`).
+  Same scope decision as 6.1.7a — flagged
+  in `trash_config_rmw_lock` docstring,
+  out of scope for Ring 6.1.
+
+### Carries forward from R6.1-D7b
+
+- Day 6.1.8: live-test the `_rate_limits`
+  per-worker hypothesis at
+  `bin/wl_ratelimit.py:16` (R6-F8 sibling
+  class).
+- Day 6.1.9: prototype the two R6-F8 fix
+  shapes (Option A: KV-backed presence,
+  Option B: file-locked presence) and
+  decide which lands.
+- Day 6.1.10: tighten
+  `test_concurrent_presence.cjs` Phase D
+  collapse-tolerance after R6-F8 fix lands.
+- Ring 6.1 retro + close.

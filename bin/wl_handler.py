@@ -6104,39 +6104,60 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         Uses a file lock to prevent concurrent approval operations
         from racing on the same queue entry.
-        """
-        with _approval_queue_lock():
-            result = self._process_approval_inner(
-                request, payload, admin_user)
 
-        # Increment admin approval counter on success.
-        #
-        # R6-F2 fix (build 649, 2026-05-11): previously this check was
-        # ``resp_body.get("success")``, but the canonical approve return
-        # body in _process_approval_inner is ``{message, request_id,
-        # diff}`` — no ``success`` field. Only the inline bulk_row_edit
-        # path (which returns the ``_save_csv`` result directly) carried
-        # ``success: true``. Result: the admin ``approval_count`` daily
-        # rate-limit was silently unenforced for every approve action
-        # type except inline bulk_row_edit, including bulk_row_removal,
-        # column_removal, bulk_row_addition, csv_import_replace, and the
-        # rule/csv lifecycle approvals. Verified live: wladmin1 had 39
-        # request_approved events in 30 days while ``_daily_limits.json``
-        # did not exist in the container at all.
-        #
-        # New gate: HTTP status 200 + no top-level error field. Matches
-        # the response contract used by every approve-success path in
-        # _process_approval_inner and by _fail_approval_request's
-        # status_code/error envelope on the failure side.
-        decision = payload.get("decision", "")
-        resp_body = json.loads(result.get("payload", "{}"))
-        if (decision == "approve"
-                and result.get("status", 500) == 200
-                and not resp_body.get("error")):
-            admin_roles = get_roles(request)
-            if is_admin(admin_roles) and \
-               not is_superadmin(admin_roles):
-                _increment_admin_daily_limit(admin_user, "approval_count")
+        Ring 6.1 Day 6.1.7b (R6-F6 deferred site): the inner
+        ``_check_admin_daily_limit("approval_count")`` and the
+        ``_increment_admin_daily_limit(...)`` here are 150+ lines
+        apart and previously sat in DIFFERENT lock domains (the
+        check ran inside ``_approval_queue_lock``; the increment
+        ran outside it). Two admins racing on different requests
+        could both pass the cap check at counter=N, both run, and
+        both increment to N+2 — silently leaking past the cap.
+        Wrap the entire check + execute + increment sequence in
+        the per-user admin daily-limit lock. Lock order is
+        admin_limit → queue (the queue lock is acquired below),
+        matching the order used by the 8 wrappers landed in
+        Day 6.1.2.
+        """
+        admin_roles = get_roles(request)
+        with _maybe_admin_limit_lock(admin_user, admin_roles):
+            with _approval_queue_lock():
+                result = self._process_approval_inner(
+                    request, payload, admin_user)
+
+            # Increment admin approval counter on success.
+            #
+            # R6-F2 fix (build 649, 2026-05-11): previously this
+            # check was ``resp_body.get("success")``, but the
+            # canonical approve return body in
+            # _process_approval_inner is ``{message, request_id,
+            # diff}`` — no ``success`` field. Only the inline
+            # bulk_row_edit path (which returns the ``_save_csv``
+            # result directly) carried ``success: true``. Result:
+            # the admin ``approval_count`` daily rate-limit was
+            # silently unenforced for every approve action type
+            # except inline bulk_row_edit, including
+            # bulk_row_removal, column_removal, bulk_row_addition,
+            # csv_import_replace, and the rule/csv lifecycle
+            # approvals. Verified live: wladmin1 had 39
+            # request_approved events in 30 days while
+            # ``_daily_limits.json`` did not exist in the
+            # container at all.
+            #
+            # New gate: HTTP status 200 + no top-level error
+            # field. Matches the response contract used by every
+            # approve-success path in _process_approval_inner and
+            # by _fail_approval_request's status_code/error
+            # envelope on the failure side.
+            decision = payload.get("decision", "")
+            resp_body = json.loads(result.get("payload", "{}"))
+            if (decision == "approve"
+                    and result.get("status", 500) == 200
+                    and not resp_body.get("error")):
+                if is_admin(admin_roles) and \
+                   not is_superadmin(admin_roles):
+                    _increment_admin_daily_limit(
+                        admin_user, "approval_count")
 
         return result
 

@@ -29,7 +29,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wl_csv import read_csv, write_csv, compute_diff
 from wl_versions import snapshot_version, get_versions_list
 from wl_rules import (read_rules_registry, write_rules_registry, get_rule_csv_file,
-                      create_rule_pipeline, delete_rule_pipeline, delete_csv_pipeline)
+                      create_rule_pipeline, delete_rule_pipeline, delete_csv_pipeline,
+                      rules_rmw_lock)
 from wl_trash import move_to_trash, restore_from_trash
 from wl_audit import build_audit_event, post_audit_event
 from wl_logging import get_audit_logger
@@ -448,25 +449,30 @@ def _execute_replay_create_csv(context: Dict[str, Any], request_item: Dict[str, 
         version_id, _ = snapshot_version(path, analyst, "create_csv")
 
         # Update rule-CSV mapping file
+        # Ring 6.1 R6-F5 class fix (Day 6.1.7b): serialize the RMW
+        # against the canonical pipeline in wl_rules so a concurrent
+        # create_rule / delete_rule / delete_csv cannot read a stale
+        # snapshot and clobber this replay's mapping append.
         try:
-            existing = []
-            if os.path.isfile(MAPPING_FILE):
-                with open(MAPPING_FILE, "r", newline="",
-                          encoding="utf-8-sig") as fh:
-                    existing = list(csv.DictReader(fh))
-            existing.append({
-                "rule_name": detection_rule,
-                "csv_file": csv_file,
-                "app_context": app_context or "wl_manager",
-            })
-            with open(MAPPING_FILE, "w", newline="",
-                      encoding="utf-8") as fh:
-                writer = csv.DictWriter(
-                    fh,
-                    fieldnames=["rule_name", "csv_file", "app_context"],
-                    extrasaction="ignore")
-                writer.writeheader()
-                writer.writerows(existing)
+            with rules_rmw_lock():
+                existing = []
+                if os.path.isfile(MAPPING_FILE):
+                    with open(MAPPING_FILE, "r", newline="",
+                              encoding="utf-8-sig") as fh:
+                        existing = list(csv.DictReader(fh))
+                existing.append({
+                    "rule_name": detection_rule,
+                    "csv_file": csv_file,
+                    "app_context": app_context or "wl_manager",
+                })
+                with open(MAPPING_FILE, "w", newline="",
+                          encoding="utf-8") as fh:
+                    writer = csv.DictWriter(
+                        fh,
+                        fieldnames=["rule_name", "csv_file", "app_context"],
+                        extrasaction="ignore")
+                    writer.writeheader()
+                    writer.writerows(existing)
         except OSError as exc:
             _logger.error(f"Failed to update mapping for create_csv: {exc}")
 
