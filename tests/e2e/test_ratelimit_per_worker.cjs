@@ -1,34 +1,35 @@
 /**
- * Ring 6.1 Day 6.1.8 — Live-test the R6-F8-sibling
- * per-worker rate-limit hypothesis.
+ * Ring 6.1 Day 6.1.8 (discovery) + Day 6.1.10 (tightened):
+ * verify R6-F8 stays closed for the rate limiter.
  *
- * Hypothesis (deferred from Ring 6 R6-F8):
- *   bin/wl_ratelimit.py:16 stores `_rate_limits` as a
- *   module-level dict. Splunk's PersistentScriptHandler
- *   runs a pool of Python worker processes, each with its
- *   OWN module-level state. So one user's writes routed
- *   across N workers see the cap (RATE_MAX_WRITES=30 / 60s)
- *   enforced INDEPENDENTLY per worker — effective cap is
- *   roughly 30*N, not 30.
+ * Context: bin/wl_ratelimit.py originally stored
+ * `_rate_limits` as a module-level dict. Splunk's
+ * PersistentScriptHandler runs N worker processes, each
+ * with its OWN module-level state, so the cap was enforced
+ * INDEPENDENTLY per worker (effective cap ~30*N, not 30).
  *
- * Test design:
- *   - Use ONE wladmin1 session.
- *   - Fire 60 parallel POSTs to log_event (cheap action,
- *     no admin daily limit, no other side effects).
- *   - Classify each response: success (200 + no error) vs
- *     rate-limit reject (HTTP 429 or "Rate limit
- *     exceeded" body).
- *   - Assert based on hypothesis:
+ * Day 6.1.9b (build 657) closed R6-F8 by:
+ *   - Migrating state to a Splunk KV collection
+ *     (`wl_ratelimit_state`).
+ *   - Wrapping the read-modify-write sequence in a
+ *     per-(user, action_type) cross-process file lock.
  *
- *     Cross-worker (correct):   successes == 30 exactly.
- *     Per-worker (R6-F8):       successes > 30 (magnitude
- *                                indicates worker count).
+ * This test (post-fix shape, Day 6.1.10) fires 60 parallel
+ * POSTs to log_event from ONE user and HARD-FAILS if:
+ *   - any other-errors appear
+ *   - successes is not in {RATE_MAX_WRITES,
+ *     RATE_MAX_WRITES - 1}  (the -1 is warmup accounting)
+ *   - rate_rejects != PARALLELISM - successes
  *
- * This test is INFORMATIONAL on Day 6.1.8 — it does NOT
- * hard-fail either way. Its job is to surface concrete
- * evidence for Day 6.1.9 (prototype the fix). Once a fix
- * lands in 6.1.9 or 6.1.10, this test should be tightened
- * to assert successes == 30 exactly.
+ * Any deviation = regression — either the KV path isn't
+ * running, or the lock isn't held across the RMW.
+ *
+ * Note on test-run cadence: rate-limit state is shared
+ * cross-worker, so back-to-back runs of this test (or
+ * other E2E tests using wladmin1) can collide on the
+ * same 60s sliding window. Wait ≥75s between runs OR
+ * use a distinct user — see tests/e2e/README on
+ * test-run cadence guidance (Day 6.1.10 follow-up).
  */
 
 const H = require("./lib_helpers.cjs");
@@ -138,46 +139,65 @@ async function restCallStatusAware(page, action, payload) {
                     + JSON.stringify(sample.body).slice(0, 200));
             }
 
-            // ──────── Hypothesis verdict (INFORMATIONAL) ─────
-            if (successes === RATE_MAX_WRITES) {
-                console.log("    VERDICT: cap enforced "
-                    + "cross-worker (NO bug). R6-F8 hypothesis "
-                    + "for rate limiter is FALSE.");
-            } else if (successes > RATE_MAX_WRITES) {
-                const ratio = (successes / RATE_MAX_WRITES);
-                console.log("    VERDICT: cap enforced "
-                    + "PER-WORKER (R6-F8 hypothesis CONFIRMED). "
-                    + "successes/cap = " + ratio.toFixed(2)
-                    + " — suggests ~" + Math.ceil(ratio)
-                    + " workers in the persistconn pool.");
-            } else {
-                console.log("    VERDICT: AMBIGUOUS — successes ("
-                    + successes + ") < cap (" + RATE_MAX_WRITES
-                    + "). Could be other_errors mis-classifying "
-                    + "or worker-pool not warmed up. "
-                    + "Re-run after server warmup.");
-            }
-
-            // No hard assertion on success count by design —
-            // Day 6.1.8 is the discovery test. Day 6.1.9 will
-            // land the fix and Day 6.1.10 will tighten this
-            // test to: assert(successes === RATE_MAX_WRITES).
+            // Ring 6.1 Day 6.1.10 — tightened post-fix.
             //
-            // BUT do assert classification math is sound:
-            if (successes + rate_rejects + other_errors
-                    !== PARALLELISM) {
-                throw new Error(
-                    "Classification gap: " + (PARALLELISM
-                        - successes - rate_rejects - other_errors)
-                    + " responses fit no bucket");
+            // R6-F8 closed at build 657 (KV-backed state +
+            // per-(user,action_type) file lock around the RMW).
+            // Cross-worker enforcement is now strict, so the
+            // burst must produce EXACTLY RATE_MAX_WRITES
+            // successes — minus any budget the warmup call
+            // consumed in the same sliding window.
+            //
+            // Expected post-fix outcomes:
+            //   - successes IN {RATE_MAX_WRITES,
+            //                   RATE_MAX_WRITES - 1}
+            //     The -1 is the warmup-accounting case (warmup
+            //     burned 1 of the 30 budget; 29 of 60 burst
+            //     calls succeed).
+            //   - rate_rejects == PARALLELISM - successes
+            //   - other_errors == 0
+            //
+            // Any deviation = regression: either the lock
+            // isn't holding the RMW (KV-only fallback) or the
+            // KV-backed code path isn't running (module
+            // reverted to in-memory).
+            if (other_errors > 0) {
+                throw new Error("REGRESSION: " + other_errors
+                    + " other-errors. Sample: status="
+                    + (results.find(r => !r.ok && !r.rate_limited)
+                       || {}).status);
             }
+            if (successes < RATE_MAX_WRITES - 1
+                    || successes > RATE_MAX_WRITES) {
+                throw new Error("R6-F8 REGRESSION: successes="
+                    + successes + " (expected "
+                    + (RATE_MAX_WRITES - 1) + " or "
+                    + RATE_MAX_WRITES + "). Post-Ring-6.1 cap "
+                    + "must be enforced cross-worker. "
+                    + (successes > RATE_MAX_WRITES
+                       ? "successes > cap implies the KV-backed "
+                         + "code path isn't running or the lock "
+                         + "isn't held."
+                       : "successes < cap-1 implies excess "
+                         + "warmup consumption or test "
+                         + "contamination from a prior run "
+                         + "within the 60s window."));
+            }
+            if (rate_rejects !== PARALLELISM - successes) {
+                throw new Error("Classification gap: rate_rejects="
+                    + rate_rejects + " expected "
+                    + (PARALLELISM - successes));
+            }
+            console.log("    VERDICT: cap enforced "
+                + "cross-worker (R6-F8 CLOSED). successes="
+                + successes + " / " + RATE_MAX_WRITES + " cap.");
         });
     } finally {
         await M.closeSessions(sessions);
     }
 
     const summary = H.summary(
-        "RATELIMIT PER-WORKER HYPOTHESIS (Day 6.1.8 — informational)");
+        "RATELIMIT CROSS-WORKER ENFORCEMENT (R6-F8 closed at build 657)");
     process.exit(summary.failed > 0 ? 1 : 0);
 })().catch(async (e) => {
     console.error("FATAL:", e.message);

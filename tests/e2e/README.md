@@ -161,3 +161,38 @@ If `assertTestHarness()` throws during a test run:
 | `test_adversarial_hardening.cjs` | Threat-model-driven checks across all 3 user tiers |
 | `test_admin_limits.cjs` | Admin limit RBAC, enforcement, bypass resistance |
 | `lib_helpers.cjs` | Shared helpers including `assertTestHarness` and `clearKvCooldownCounter` |
+
+## Test-Run Cadence (Ring 6.1 Day 6.1.10)
+
+Since the Day 6.1.9b fix landed (build 657), rate limiting is enforced
+strictly cross-worker: each `(user, action_type)` bucket allows
+**30 writes / 60 seconds** across the entire Splunk persistconn pool.
+This is the correct production behavior, but it changes how the
+test suite must be sequenced.
+
+**Cadence rule for concurrency tests** that fire many POSTs as
+the same user (e.g. `test_concurrent_save_csv.cjs`,
+`test_concurrent_limit_other_counters.cjs`,
+`test_concurrent_presence.cjs`,
+`test_ratelimit_per_worker.cjs`):
+
+- Wait **at least 75 seconds** between runs that share a user
+  (default test users: `superadmin1`, `wladmin1`, `analyst1`).
+- The 60-second sliding window plus a small margin ensures the
+  prior bucket has fully aged out before setup writes hit the cap.
+- Symptom of violating the cadence: setup-phase actions like
+  `create_rule`, `save_csv`, or `report_presence` return
+  `"Rate limit exceeded"` and the test fails in Phase A or B.
+
+**Why this is correct behavior**: pre-fix the per-worker
+`_rate_limits` dict bypassed this — each worker had its own
+30/60s budget, so two workers gave you 60/60s, four workers
+120/60s, etc. The R6-F8 fix at build 657 closed this and
+restored the documented cap. Tests must now respect the cap
+just like production callers do.
+
+**Future work**: if the cadence cost becomes painful (e.g. the
+full suite goes from 5 min to 25 min because of wait gates),
+add a `wait_for_ratelimit_clear(page, user, action_type)`
+helper to `lib_helpers.cjs` that polls a cheap GET endpoint
+until the bucket has capacity. Out of scope for Ring 6.1.

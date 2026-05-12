@@ -342,7 +342,7 @@ function activeUsersOf(presenceResponse) {
         // After the dust has settled, one final read to ensure the
         // presence state isn't corrupted or wedged.
 
-        await H.test("Phase D: post-race get_presence — measures R6-F8 collapse signature", async () => {
+        await H.test("Phase D: post-race get_presence — R6-F8 closed, collapse ratio must be 1.0", async () => {
             const r = await getPresence(sessionList[0], CSV);
             if (r.error) {
                 throw new Error("post-race get_presence: " + r.error);
@@ -360,34 +360,43 @@ function activeUsersOf(presenceResponse) {
                 + ", Phase D view size: " + seen.length
                 + ", collapse ratio: " + collapseRatio.toFixed(3));
 
+            // Ring 6.1 Day 6.1.10 — tightened post-fix.
+            //
+            // R6-F8 closed at build 656 (wl_presence.py migrated
+            // to KV-backed state). Cross-worker reads are now
+            // strictly coherent — the post-race view MUST match
+            // Phase B's view size exactly. Any collapse (view
+            // size < Phase B avg) implies one of:
+            //   - the KV-backed code path isn't running
+            //   - the handler isn't passing session_key
+            //   - module reverted to in-memory _presence
+            //
+            // Pre-fix this branch logged "FULL COLLAPSE" /
+            // "PARTIAL COLLAPSE" as soft signals — Day 6.1.10
+            // promotes them to hard fails.
             if (seen.length === 0) {
-                throw new Error("post-race view is EMPTY — presence "
-                    + "state lost entirely (worse than R6-F8 collapse)");
+                throw new Error("post-race view is EMPTY — "
+                    + "presence state lost entirely");
             }
-            if (seen.length >= PARALLELISM - 1) {
-                console.log("    OUTCOME: no collapse — concurrent "
-                    + "pings landed on same worker(s) as the read. "
-                    + "(Single-process Splunk config, or unlucky "
-                    + "routing didn't manifest.)");
-            } else if (seen.length === 1) {
-                console.log("    OUTCOME: R6-F8 FULL COLLAPSE — "
-                    + "post-race view has 1 user vs Phase B's "
-                    + phaseBavg + ". Concurrent pings scattered "
-                    + "across worker processes; get_presence "
-                    + "returned a single worker's state. UI 'Also "
-                    + "viewing' indicator is non-deterministic and "
-                    + "loses fidelity proportional to concurrency. "
-                    + "Known multi-worker shared-state issue. "
-                    + "Deferred to Ring 6.1.");
-            } else {
-                console.log("    OUTCOME: R6-F8 PARTIAL COLLAPSE — "
-                    + "post-race view has " + seen.length
-                    + " of " + PARALLELISM + " expected. Concurrent "
-                    + "pings reached " + seen.length + " of N worker "
-                    + "processes that the get_presence reader could "
-                    + "see. Known multi-worker shared-state issue. "
-                    + "Deferred to Ring 6.1.");
+            if (seen.length < phaseBavg) {
+                throw new Error("R6-F8 REGRESSION: post-race "
+                    + "view size " + seen.length
+                    + " < Phase B avg " + phaseBavg
+                    + " (collapse ratio "
+                    + collapseRatio.toFixed(3)
+                    + "). Post-Ring-6.1 the cross-worker view "
+                    + "MUST be coherent. Investigate KV-backed "
+                    + "code path: (a) verify wl_presence_state "
+                    + "collection exists in collections.conf, "
+                    + "(b) verify handler is threading "
+                    + "session_key into report/get_presence, "
+                    + "(c) verify wl_presence.py uses "
+                    + "_kv_read_csv / _kv_write_csv when "
+                    + "session_key is non-empty.");
             }
+            console.log("    OUTCOME: cross-worker coherent "
+                + "(R6-F8 CLOSED). Phase D matches Phase B "
+                + "exactly.");
         });
 
     } finally {
