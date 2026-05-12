@@ -3897,3 +3897,247 @@ race-safety test meaningful.
    the TCP-stack-level inter-arrival jitter (3-10ms)
    becomes the only remaining spread. That's the
    actual race window we're testing.
+
+### R6-F4 — rule_deletion + csv_deletion counter silently unenforced for empty-CSV / failed-trash paths
+
+**Severity**: MEDIUM-HIGH — defense-in-depth
+control bypassed for important success paths. Third
+occurrence of the same gate-shape bug class as
+R6-F2 + R6-F3.
+
+**Found**: Day 3 bonus (2026-05-12) following the
+user's request to "spot-check 2-3 other counter
+actions for the same race property" after Day 3's
+primary test on rule_creation came back clean. The
+bonus test exercised csv_creation (passed — same
+canonical gate shape) and rule_deletion (FAILED
+with 6 of 7 races landing against a cap of 2).
+
+**Root cause**: At
+[wl_handler.py:2943](../bin/wl_handler.py#L2943)
+(rule_deletion) and
+[wl_handler.py:2820](../bin/wl_handler.py#L2820)
+(csv_deletion), the counter increment was gated on
+``data.get("trashed")``. But the pipeline's
+``trashed`` flag is only True under specific
+conditions, not on every success path:
+
+- ``delete_rule_pipeline``
+  ([wl_rules.py:351-372](../bin/wl_rules.py#L351-L372)):
+  ``trashed = True`` only when the rule has CSVs
+  AND ``move_to_trash`` succeeds. For rules with no
+  CSVs — a common case for analyst-created rule
+  cleanup — the pipeline returns
+  ``data: {"trashed": False, ...}`` even on
+  successful permanent delete.
+- ``delete_csv_pipeline``
+  ([wl_rules.py:497-512](../bin/wl_rules.py#L497-L512)):
+  if ``move_to_trash`` raises, the CSV is still
+  deleted via direct ``os.remove`` but ``trashed``
+  stays False. Counter doesn't fire.
+
+The cap-check at lines 2877/2781 fires correctly,
+but the counter staying at 0 forever meant the cap
+was silently unenforced for these paths.
+
+**Verification of the bug**: Day 3 bonus pre-fix
+race produced 6 of 7 permanent rule deletes
+landing against a cap of 2/day. Counter pre-race:
+0. Counter post-race: 0. The cap-check thinks
+counter is at 0/2 forever, so every request passes.
+
+**Fix shipped** (build 651): replace
+``if data.get("trashed"):`` with
+``if removal_type == "permanent":`` at both sites.
+Symmetric with the cap-CHECK above the increment,
+which already keys off ``removal_type``. Inline
+change kept minimal (one expression replaced) so
+the diff is reviewable.
+
+**Regression coverage**:
+[tests/integration/test_delete_increment_gate.py](../tests/integration/test_delete_increment_gate.py) (8 cases).
+Pins the gate against every success-path shape:
+empty-CSV rule + permanent (the bug case),
+populated-CSV rule + permanent (preserved
+behaviour), unlink (skip cap — symmetric), pipeline
+failure (skip cap), superadmin (exempt). Same for
+the csv_deletion variant.
+
+**Audit confirmation**: now the third instance of
+the SAME class — gate condition checking a flag
+that isn't True on every legitimate success path.
+
+- R6-F2 (shipped at build 649): ``approval_count`` checking
+  ``body.get("success")`` on a response shape that
+  has no ``success`` field.
+- R6-F3 (shipped at build 650): ``usage_reset`` checking
+  ``body.get("success")`` on the same wrong field.
+- R6-F4 (shipped at build 651): ``rule_deletion`` and
+  ``csv_deletion`` checking
+  ``data.get("trashed")`` on pipeline output where
+  ``trashed`` is only sometimes True.
+
+These three together justify treating "shape-mismatch
+gate bypass" as a CODEBASE-LEVEL pattern in this
+project. Captured in
+`memory/feedback_shape_mismatch_gate_bypass.md`
+(updated) and
+`~/.claude/knowledge/security/secure-design-principles.md`
+"Verify Defense-in-Depth Controls Actually Fire".
+Future increment-gate code should be code-reviewed
+against this checklist before merge.
+
+**Companion test-infra fix**: my first Day 3 bonus
+run reported a FALSE race-bypass on csv_creation
+(5 successes against cap=5 falsely flagged as 4
+expected). Root cause: ``adminCounterFor`` summed
+across ALL period buckets in
+``_daily_limits.json``, picking up a stale
+admin_csv_creation=1 in wladmin1's 2026-04-12
+bucket from a historical session. The handler's
+cap-check uses today's bucket only. Fixed by
+reading today's UTC date bucket directly in both
+``test_concurrent_limit.cjs`` and
+``test_concurrent_limit_other_counters.cjs``.
+
+### R6-F5 / R6-F6 — Cross-process file races (DEFERRED to Ring 6.1)
+
+**Severity**: MEDIUM-HIGH — silent data loss
+(deleted rules can revive, counter caps can leak)
+under normal concurrent admin activity. Not a
+privilege escalation but a real integrity bug.
+Surfaced by Day 3 bonus but not fixed in this
+sub-ring — flagged as a planned Ring 6.1 because
+the fix is infrastructure work that warrants
+proper test coverage across every file-backed
+state in the codebase.
+
+**R6-F5 — Read-modify-write race on
+``_detection_rules.json`` and ``rule_csv_map.csv``**:
+
+[bin/wl_rules.py](../bin/wl_rules.py):
+
+- Line 34: ``_detection_rules_lock = Lock()`` —
+  this is a Python ``threading.Lock``. Splunk
+  routes parallel REST requests to multiple worker
+  PROCESSES; threading locks are per-process and
+  provide ZERO cross-process protection.
+- Line 82-91: ``write_rules_registry`` writes to
+  ``path + ".tmp"`` then renames. Atomic at the
+  byte level (rename is atomic on POSIX), but does
+  NOT prevent LOGIC-level RMW races. Process A and
+  B can both read the same registry snapshot,
+  remove different rules, and B's stale-snapshot
+  write reverts A's removal (or vice versa).
+  Symptom: deleted rules "come back from the
+  dead", or unrelated rules briefly disappear from
+  reads.
+- Line 242-259: ``_write_mapping_rows`` is WORSE —
+  it doesn't even use temp+rename. Direct
+  ``open(MAPPING_FILE, "w")`` then ``writerows``.
+  Two simultaneous writers will produce
+  byte-mixed CSV that may fail to parse on the
+  next read.
+
+**Day 3 bonus evidence**: of 7 concurrent
+``permanent`` rule deletes (each targeting a
+unique rule), 1 reported "Rule X not found in
+mapping or registry" while the other 6 succeeded.
+The targeted rule existed pre-race; the "not
+found" is the visible manifestation of a stale-read
+RMW race where the writer's snapshot didn't
+include the rule (because another writer's
+overlapping write had used a snapshot taken
+BEFORE that rule was added — or some interleaving
+caused a brief disappearance).
+
+**R6-F6 — Counter TOCTOU on ``_daily_limits.json``**:
+
+The admin daily-rate-limit gate has a non-atomic
+sequence:
+
+```
+1. _check_admin_daily_limit (read counter from file)
+2. execute pipeline (slow — multiple file writes)
+3. _increment_admin_daily_limit (write counter to file)
+```
+
+Steps 1 and 3 are non-adjacent and not lock-protected
+across processes. Pre-R6-F4 fix, step 3 was the bug
+(gate never fired). Post-R6-F4 fix, step 3 fires
+correctly, but the window between 1 and 3 still
+allows TOCTOU. Multiple workers can read counter=N
+at step 1, all pass the (N+1)<=max check, all
+execute (step 2), all post-increment (step 3),
+leaking 1 or more requests past the cap.
+
+**Day 3 bonus evidence** (post-build-651): 3 of 7
+``permanent`` rule deletes landed against a cap of
+2/day. Bypass magnitude = 1 (much smaller than
+pre-fix bypass = 5). Counter went 0→3 instead of
+the cap-correct 0→2. The fix narrowed the bypass
+from "no cap at all" to "cap with TOCTOU leak",
+but didn't close the leak.
+
+**Why Day 3 PRIMARY test missed this race**:
+rule_creation cap=5 against 7 racers leaves a
+larger safe zone than rule_deletion cap=2. Most
+parallel writers serialize correctly when the
+safe zone is wider; the leak only becomes visible
+when cap-utilization is very high.
+
+**Same class as R6-F5**: both are file-backed
+state with no cross-process locking. The fix
+shape is uniform: wrap each read-modify-write
+critical section in cross-process file locking
+(fcntl flock on POSIX, msvcrt.locking on Windows,
+or a more abstract `filelock` library). The
+project already has `wl_filelock.py` based on a
+quick grep — leveraging that for these write
+paths is the natural Ring 6.1 deliverable.
+
+**Why deferred (rather than fixed in this session)**:
+
+1. The fix touches multiple write paths
+   (``_detection_rules.json``,
+   ``rule_csv_map.csv``,
+   ``_daily_limits.json``, ``_notifications.json``,
+   ``_limit_config.json``, ``_admin_limits.json``,
+   approval queue, and more). A piecemeal fix
+   risks inconsistency.
+2. Performance impact of file locking on every
+   write needs benchmarking against the existing
+   chaos test suite. Trivially-added flock can
+   serialize ALL admin actions through one global
+   lock — that's a perf cliff.
+3. Each write path has different "what should
+   happen if I lose the race" semantics. Some
+   should retry (counter increments — they're
+   commutative); some should error (registry
+   deletes — they're not). One-size-fits-all is
+   wrong.
+4. The test surface needs to expand: every fixed
+   path needs its own concurrency test similar to
+   Day 3 bonus, with race-magnitude assertions
+   tightened from "<3" to "==0".
+
+**Recommended Ring 6.1 scope**:
+
+- Day 6.1.1: Audit every file write in the codebase
+  for locking + atomicity + retry semantics. Build
+  a coverage matrix.
+- Day 6.1.2: Adopt `wl_filelock.py` (or a
+  comparable cross-process lock primitive)
+  uniformly across critical-section writes.
+- Day 6.1.3: Strengthen Day 3 bonus + new tests
+  per write path to assert ZERO bypass magnitude
+  (vs current "<3" tolerance).
+- Day 6.1.4: Benchmark before/after to confirm no
+  unacceptable perf regression.
+
+Until Ring 6.1 ships, the tolerances baked into
+``test_concurrent_limit_other_counters.cjs``
+(bypass magnitude <3, counter drift <3) act as a
+soft regression alarm — a hard fail there would
+indicate a NEW gate-shape regression (R6-F4 class)
+rather than the known R6-F5/F6 leak.

@@ -2816,8 +2816,20 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                     queue, resolved_rule, csv_file, "remove_csv", "",
                     lambda evt: self._index_audit(request, evt))
 
-        # Increment admin daily limit counter
-        if data.get("trashed"):
+        # Increment admin daily limit counter.
+        #
+        # R6-F4 fix (build 651, 2026-05-12): previously gated on
+        # data.get("trashed"). But the pipeline's "trashed" flag is
+        # only True when move_to_trash succeeds — if the move_to_trash
+        # call raised (line 505-512 in wl_rules.py), the CSV is still
+        # deleted via direct os.remove but trashed stays False, so
+        # the counter never incremented even though the destructive
+        # action completed. Same class as R6-F2/F3: gate condition
+        # checks a flag that isn't True on every success path.
+        #
+        # Symmetric with the cap-check at line 2781 which fires for
+        # `removal_type == "permanent"`. Use the same condition here.
+        if removal_type == "permanent":
             if is_admin(roles) and not is_superadmin(roles):
                 _increment_admin_daily_limit(user, "csv_deletion")
 
@@ -2939,8 +2951,24 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                 queue, rule_name, "", "remove_rule", "",
                 lambda evt: self._index_audit(request, evt))
 
-        # Increment admin daily limit counter
-        if data.get("trashed"):
+        # Increment admin daily limit counter.
+        #
+        # R6-F4 fix (build 651, 2026-05-12): previously gated on
+        # data.get("trashed"). But the pipeline's "trashed" flag is
+        # only True when the rule has CSVs AND move_to_trash
+        # succeeds (delete_rule_pipeline line 351-372). For rules
+        # with NO CSVs — a common case for analyst-created rule
+        # cleanup — the pipeline returns trashed=False even on
+        # successful permanent delete, so the counter never
+        # incremented. The cap-check at line 2877 fires correctly,
+        # but counter staying at 0 forever meant the cap was
+        # silently unenforced for empty-CSV permanent deletes.
+        # Verified with Day 3 bonus race: 6 of 7 concurrent
+        # rule_deletes landed against a cap of 2.
+        #
+        # Symmetric with the cap-check at line 2877 which fires for
+        # `removal_type == "permanent"`. Use the same condition here.
+        if removal_type == "permanent":
             if is_admin(roles) and not is_superadmin(roles):
                 _increment_admin_daily_limit(user, "rule_deletion")
 

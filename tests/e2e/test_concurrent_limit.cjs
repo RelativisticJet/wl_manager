@@ -73,21 +73,24 @@ function readDailyLimitsFile() {
 }
 
 /**
- * Sum admin_<action> counter across all period keys for `user`.
- * Period keys are date-stamped so a single date roll-over during
- * the test would mis-attribute; we'd rather over-count than miss.
+ * Read admin_<action> counter from TODAY's bucket only. The handler's
+ * cap-check (get_admin_counter_period_key in bin/wl_limits.py) uses
+ * the current UTC date as the period key under daily reset frequency;
+ * old buckets from prior date keys are not counted toward the cap.
+ *
+ * Previous version of this helper summed across all periods, which
+ * caused false race-bypass alerts when wladmin1 had stale counters
+ * from a different date bucket (Day 3 bonus round 1, 2026-05-12).
  */
 function adminCounterFor(limitsBlob, user, action) {
     const key = "admin_" + action;
-    let total = 0;
-    for (const period of Object.values(limitsBlob || {})) {
-        if (!period || typeof period !== "object") continue;
-        const userData = period[user];
-        if (userData && typeof userData[key] === "number") {
-            total += userData[key];
-        }
-    }
-    return total;
+    const now = new Date();
+    const todayUTC = now.getUTCFullYear()
+        + "-" + String(now.getUTCMonth() + 1).padStart(2, "0")
+        + "-" + String(now.getUTCDate()).padStart(2, "0");
+    const todayBucket = (limitsBlob || {})[todayUTC] || {};
+    const userData = todayBucket[user] || {};
+    return typeof userData[key] === "number" ? userData[key] : 0;
 }
 
 (async () => {
