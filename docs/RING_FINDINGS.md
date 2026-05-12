@@ -5024,3 +5024,235 @@ later consolidation ring.
   lockdown + trash-configs (~5 sites), one
   for mapping/registry sibling paths
   (~7 sites).
+
+### R6.1-D2 — R6-F5 + R6-F6 fix shipped at build 652
+
+Combined into one commit because the bugs were
+coupled: landing R6-F5 alone (rules_rmw_lock
+serializing the pipeline) made R6-F6 strictly
+worse — the 7-of-7 admin workers now reached
+``_check_admin_daily_limit`` at counter=0
+simultaneously and all passed, regressing from
+4-of-7 bypass to 7-of-7. Shipping them together
+was the right call even though the original plan
+was two commits.
+
+**R6-F5 — `wl_rules.py` registry+mapping
+RMW serialization**:
+
+- Added `rules_rmw_lock()` context manager
+  that wraps `file_lock(MAPPING_FILE +
+  ".rmw.lock")`.
+- Removed `threading.Lock()`-style
+  `_detection_rules_lock` (process-local, no
+  cross-worker effect).
+- Wrapped `create_rule_pipeline`,
+  `delete_rule_pipeline`, `delete_csv_pipeline`
+  bodies in `with rules_rmw_lock():` so the
+  full mapping+registry RMW cycle serializes
+  across Splunk workers.
+- `_write_mapping_rows` switched to
+  temp+rename (was a direct overwrite that
+  left a torn-write window).
+- `wl_handler.py::_detection_rules_modify()`
+  delegates to `wl_rules.rules_rmw_lock()`
+  instead of its own local `threading.Lock`.
+
+**R6-F6 — per-user admin daily-limit
+sequence lock**:
+
+- Added `admin_daily_limit_lock(user)` in
+  `wl_limits.py` returning a context manager
+  on `<daily_path>.<sanitized_user>.rmw.lock`.
+- Per-user granularity chosen so two
+  different admins don't serialize on each
+  other for unrelated actions; same admin's
+  actions DO serialize, which is the
+  cap-bypass surface we care about.
+- Added `_maybe_admin_limit_lock(user, roles)`
+  helper in `wl_handler.py` that only takes
+  the lock when the caller is admin
+  (`not superadmin`) — superadmins bypass
+  caps anyway, so locking would be pure
+  overhead.
+- Wrapped 8 admin-gated action wrappers in
+  `with _maybe_admin_limit_lock(user, roles):`
+  (csv_save, csv_revert, csv_creation,
+  rule_creation, csv_deletion, rule_deletion,
+  usage_reset, trash_restore). The wrap
+  spans the full
+  `_check_admin_daily_limit → execute →
+  _increment_admin_daily_limit` sequence.
+
+**Skipped per plan**:
+
+- `trash_purge` — execute path has no
+  `_increment_admin_daily_limit` call; the
+  daily-limit check fires earlier but the
+  cap is consumed by `trash_restore` not
+  `trash_purge` (purge runs through dual
+  approval). Locking just a check with no
+  increment is overhead with no race to
+  protect.
+- `approval_count` in
+  `_process_approval_inner` — check and
+  increment sites are 150+ lines apart;
+  existing `test_concurrent_approval.cjs`
+  already validates 2-way race correctness.
+  Deferred to Day 6.1.7 with the rest of
+  the MEDIUM-priority batch.
+
+**Fix shape decision**: "wrap each site
+individually" instead of a centralized
+helper. Each wrapper has different signature
+preconditions (admin vs superadmin, role
+detection, payload extraction) and a
+shared helper would either need 8 if-branches
+inside or expose users to the wrong lock
+domain. Individual wraps are 1 line each
+and the policy is visible at each call site.
+
+### R6.1-D3, R6.1-D6 — Test tightening
+
+`test_concurrent_limit_other_counters.cjs`
+(Day 3 bonus) and `test_concurrent_save_csv.cjs`
+(Day 4) were the soft-regression-alarm tests
+that surfaced R6-F5/F6/F7. Post-fix, they were
+tightened from "WARN on leak" to "FAIL on any
+deviation":
+
+- **other_counters**: `bypassMagnitude > 0`
+  hard-fails (was: `bypassMagnitude > 2`).
+  `delta != successes` hard-fails (was:
+  `Math.abs(delta - successes) > 2`). Verified
+  green across 3+ runs at cap=5 (csv_creation)
+  and cap=2 (rule_deletion) with exact
+  enforcement.
+- **save_csv**: `ALLOWED_MAX_SUCCESSES = 1`
+  (was `LEAK_HARDFAIL_THRESHOLD = PARALLELISM`).
+  `lostWrites > 0` throws "R6-F7 REGRESSION".
+  `successes > 1` throws same. Verified green
+  across 5 runs with exactly 1 success + 6
+  conflicts and 1 racer row on disk.
+
+The tightening matters: without it, a future
+regression on the lock (refactor that drops
+the wrap, an exception path that releases
+early, lock-acquisition timeout that silently
+proceeds) would re-introduce the bug under
+the original WARN threshold without tripping
+CI.
+
+### R6.1-D4 — Lock overhead benchmark
+
+Measured wall-clock for 5 consecutive runs of
+each 7-way concurrent test, post-fix at
+build 653. Each test fires 7 admin REST calls
+simultaneously through one Splunk container.
+
+| Test                                                  | Run 1   | Run 2   | Run 3   | Run 4   | Run 5   | Mean    |
+|-------------------------------------------------------|---------|---------|---------|---------|---------|---------|
+| `test_concurrent_save_csv.cjs` (R6-F7)                | 8196 ms | 8659 ms | 8501 ms | 8215 ms | 8251 ms | 8364 ms |
+| `test_concurrent_limit_other_counters.cjs` (R6-F5+F6) | 8708 ms | 8991 ms | 9211 ms | 8952 ms | 8553 ms | 8883 ms |
+
+**Findings**:
+
+- Both tests complete in ~8.4–8.9 s end-to-end
+  for a 7-way race. Each individual REST call
+  to Splunk dominates wall-clock at ~1.1–1.3 s
+  per call (network + auth + handler + audit
+  write).
+- The lock acquire/release overhead is
+  invisible at this granularity. `fcntl.flock`
+  on Linux is ~microseconds for an
+  uncontended acquire and ~milliseconds for
+  a contested one. Compared to the per-call
+  REST cost it's <0.5% of the run.
+- The serialization is real (we measure
+  exactly N successes for cap=N, no
+  over-counting), but the wall-clock cost
+  is in the tail, not the median —
+  contention queues the 6 racers behind
+  the 1 winner, and they each see
+  `cap_exceeded` quickly. The "slow path"
+  (winner runs full pipeline) is only on
+  the winner.
+
+**Caveat**: this is post-fix only. The
+pre-fix baseline would have had identical
+wall-clock (no lock = no acquire cost) but
+emitted wrong results. The relevant question
+"does the lock slow happy-path single-user
+work?" is answered by: a single REST call
+takes the same ~1.1–1.3 s as any other call,
+plus one uncontended `fcntl.flock` acquire
+(microseconds). No user-visible latency
+regression at any realistic load profile
+this app supports.
+
+**Conclusion**: lock overhead is not a
+blocker for shipping R6.1. Document the
+benchmark and move to Day 6.1.7
+(MEDIUM-priority sites).
+
+### R6.1-D5 — R6-F7 fix shipped at build 653
+
+`_save_csv` was wrapped in a per-CSV
+`file_lock("<csv_realpath>.rmw.lock")`
+that spans the full read+optimistic-check+
+write+audit cycle.
+
+**Implementation chose the wrapper pattern**
+to avoid a 290-line indentation diff:
+
+- Renamed `_save_csv` → `_save_csv_locked`
+  (body unchanged).
+- Added a new thin `_save_csv(...)` that:
+  resolves the CSV's realpath via
+  `resolve_csv_path()`, falls back to
+  `OWN_LOOKUPS/csv_file` if `app_context`
+  isn't valid (matches the inner function's
+  own resolution logic), takes the lock on
+  `<realpath>.rmw.lock`, and calls
+  `self._save_csv_locked(...)`.
+- If the path can't be resolved (malformed
+  payload), call through without a lock —
+  the inner function will produce an error
+  response and there's nothing to serialize.
+
+**Why per-CSV granularity**: two analysts
+saving DIFFERENT CSVs don't conflict and
+shouldn't queue on each other. Same CSV =
+they serialize on the same lock file, which
+is exactly the optimistic-locking domain.
+
+**Verified post-fix**:
+
+- `test_concurrent_save_csv.cjs` ran 5 times
+  with exactly 1 success and 6 conflicts per
+  run. Single racer row on disk after each
+  run.
+- No false 200 responses (R6-F7's signature
+  was `save returned 200 but the row was
+  not on disk because a later writer
+  clobbered`).
+
+### Carries forward from R6.1-D2/D5/D4
+
+- Day 6.1.7: MEDIUM-priority sites batch
+  (notifications, lockdown state, trash
+  configs, mapping in trash + replay paths)
+  plus the deferred `approval_count` site
+  in `_process_approval_inner`. ~12-13
+  sites.
+- Day 6.1.8: live-test the `_rate_limits`
+  per-worker hypothesis (R6-F8 sibling at
+  `bin/wl_ratelimit.py:16`).
+- Day 6.1.9: prototype Option A (KV-backed
+  presence) vs Option B (file-locked
+  presence) and decide which lands for
+  R6-F8.
+- Day 6.1.10: tighten
+  `test_concurrent_presence.cjs` Phase D
+  collapse-tolerance once R6-F8 fix lands.
+- Ring 6.1 retro + close.
