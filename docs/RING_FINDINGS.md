@@ -6010,6 +6010,185 @@ Ring 6.1 is **CLOSED**. The cross-process state
 correctness class is fully addressed for every named
 instance discovered through Ring 6 and Ring 6.1.
 
-Next per the user's stated sequencing: Show
+Next per the user's stated sequencing: FIM dual-store
+chaos mini-ring (Ring 6.2, scoped per 2026-05-12
+user decision), then Show
 Requested Data (approval queue preview feature), then
 Sigstore release-verification dry-run.
+
+## Ring 6.2 — FIM dual-store chaos (in progress)
+
+Started 2026-05-12. Scoped at the user's request after a
+strategic-review discussion of three open items
+deferred from prior rings (a11y + ZAP triage, FIM
+dual-store chaos, manual a11y verification + button
+migration). The FIM dual-store chaos item had been
+deferred TWICE — once from Ring 4 Day 6 (when the
+chaos fixture was first built but limited to
+REST-call mid-write kills), once from Ring 5 (when
+the scope was overall scoped to CI completion). The
+user chose to scope a focused mini-ring rather than
+close out-of-scope; the closure case was the
+hardening-track-CLOSED decision at build 629, but
+the user wanted a deliberate exercise of the
+divergence-detection control before parking it.
+
+### What "FIM dual-store chaos" verifies
+
+The FIM baseline is stored TWO ways:
+
+- ``lookups/_versions/.fim_baseline.json`` (filesystem,
+  HMAC-signed, file mode 0600)
+- ``wl_fim_baseline`` KV collection ``state`` record
+  (also HMAC-signed)
+
+[bin/wl_fim.py:716-867] reads both each 15s cycle and
+makes a trust decision. The security claim is:
+
+1. KV missing → silent rebuild from FS (recovery path)
+2. FS missing → CRITICAL alert + rebuild from KV
+   (suspected-tamper path)
+3. Both intact but DISAGREE → CRITICAL
+   ``fim_baseline_kv_fs_divergence`` + union-merge
+   for next comparisons
+
+Claim 3 is the centerpiece — it's how the system
+catches a mid-write splunkd crash (FS written, KV
+not) OR an attacker who tampered with one side after
+the last legitimate write.
+
+### Day 1 — deterministic asymmetric-state tests
+
+New module ``tests/integration/lib_fim_chaos.py``
+(~280 lines) — primitives for putting the system
+into each asymmetric state through legitimate
+operational paths where possible, and through narrow
+synthetic-fixture exceptions where no production
+endpoint can produce the state.
+
+New module ``tests/integration/test_chaos_fim_dual_store.py``
+(~250 lines) — three tests exercising each claim:
+
+- ``test_kv_missing_silent_rebuild_from_fs``
+  Deletes the KV record. Waits for next FIM cycle.
+  Asserts: KV is rebuilt, NO divergence alert fired.
+  Verifies claim 1.
+- ``test_fs_missing_triggers_critical_alert``
+  Deletes the FS file. Waits for next FIM cycle.
+  Asserts: ``fim_fs_baseline_missing_or_tampered``
+  CRITICAL alert fires, FS rebuilt from KV.
+  Verifies claim 2.
+- ``test_divergence_detected_when_fs_and_kv_disagree``
+  Save current FS baseline (BL_v1). Modify a watched
+  JS module (wl_diff.js). Wait for FIM to write
+  BL_v2 to both stores. Restore BL_v1 onto FS (now
+  FS=BL_v1, KV=BL_v2, both with valid HMACs from
+  different cycles). Wait one more cycle. Asserts:
+  ``fim_baseline_kv_fs_divergence`` CRITICAL fires.
+  Verifies claim 3.
+
+All 3 pass on the live container.
+Total run time: ~96 seconds (test 3 dominates
+because it requires three FIM cycle waits).
+
+#### Three non-obvious things surfaced during construction
+
+Documented here so the next contributor doesn't
+repeat the investigation.
+
+**1. ``INDEXED_EXTRACTIONS=json`` extracts fields at
+index time, but the REST ``search`` command does NOT
+include them in the default result envelope.** A bare
+``search ... sourcetype=wl_fim`` returns only
+``_time`` and ``_raw`` as top-level keys; ``action``
+sits inside ``_raw`` as JSON. Adding ``| table _time
+_raw action severity monitored_path`` makes the
+field show up at the top level. This pattern is now
+captured in the chaos lib's ``query_fim_events``.
+
+**2. ``STATEFUL_ALERT_ACTIONS`` dedup silently
+suppresses the second test run.**
+[bin/wl_fim.py:487-500] declares a frozenset of
+HIGH/CRITICAL actions (``fim_fs_baseline_missing_or_tampered``,
+``fim_baseline_kv_fs_divergence``, 9 others) that
+get suppressed for 1 hour after first fire. The
+dedup state lives in ``.fim_alert_state.json``. A
+test that exercises one of these actions can
+appear to fail with "the security control didn't
+fire" when actually it did, an hour earlier.
+
+The autouse ``_reset_fim_alert_dedup`` fixture in
+the test module deletes the dedup cache before each
+test. ``rm`` has no WRITE_INDICATOR match in the
+synthetic-fixtures hook
+(``scripts/hooks/block-synthetic-fixtures.js``), so
+this passes — the file is a pure cache, the next
+FIM cycle rebuilds it.
+
+This is also a real-world operational hazard: an
+incident-responder rerunning a chaos scenario
+manually would hit the same dedup behavior. Worth
+noting in any incident-response runbook that mentions
+re-triggering FIM alerts: "Clear
+``.fim_alert_state.json`` if the same action has
+fired in the last hour."
+
+**3. ``scripts/`` directory doesn't exist in the
+test container.** The first Test-3 implementation
+appended a comment to ``scripts/package.sh`` (a
+WATCH_CODE target listed in
+[bin/wl_fim.py:173]). Inside the container, the
+file doesn't exist — only the runtime app files
+(bin/, default/, appserver/, lookups/) are deployed
+via docker cp. Switched to
+``appserver/static/modules/wl_diff.js``, a leaf JS
+module — appending a comment changes its hash
+deterministically without affecting any runtime
+Python or in-flight dashboards (Splunk doesn't
+hot-reload static JS).
+
+#### Adversarial check
+
+Run through the 7-question rubric in `patterns.md`:
+
+- **Partial failure**: explicitly what test 3 simulates
+  (mid-write crash producing asymmetric state).
+  Covered.
+- **Concurrent**: 15s polling means only one wl_fim.py
+  cycle runs at a time; wl_fim_watch.py is a separate
+  process but doesn't write the FIM baseline. Not
+  a coverage gap for this test.
+- **Bypass**: divergence detection cannot be bypassed
+  by an attacker without forging a valid HMAC. We
+  test that it FIRES when the trigger condition
+  exists, not that it can be evaded.
+- **Cascade**: divergence triggers union-merge
+  (lines 752-756) — a tampered baseline gets
+  max-paranoia treatment for the next comparison.
+  Verified by reading the code; not asserted in
+  test 3 but the production cycle that emits
+  divergence is the same one that takes this branch.
+
+Not testable here:
+
+- **Mid-write SIGKILL within the actual 15s window**.
+  That's Day 2's job — a statistical chaos test that
+  runs many iterations and asserts ≥1 lands in the
+  microsecond-wide window between
+  ``_write_fs_baseline`` and ``_write_kv_baseline``.
+
+#### What's testable in Day 2
+
+The Day 1 tests prove the DETECTION path. What they
+don't prove is that a real splunkd crash actually
+produces the asymmetric state in the first place
+(the docs claim it does because the two writes are
+sequential, not atomic — but we should observe it).
+
+Day 2 will use ``lib_chaos.py``'s ``kill_after_delay``
+primitive: kick off an action that triggers a FIM
+baseline rebuild, time the kill to land between the
+two writes. Statistical: over N iterations,
+calculate the % that produce asymmetric state and
+then trigger divergence detection on the next cycle.
+
