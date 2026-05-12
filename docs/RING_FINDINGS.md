@@ -5801,3 +5801,215 @@ add a fresh-bucket helper to `lib_helpers.cjs`).
   in `tests/e2e/` README or test-suite
   docs.
 - Ring 6.1 retro + close.
+
+## Ring 6.1 — Cross-process state fixes (CLOSED at build 657)
+
+### Why Ring 6.1 existed
+
+Ring 6 (the prior multi-user-concurrency discovery
+ring) surfaced four deferred bugs, all of the same
+underlying class: state that should serialize across
+Splunk PersistentScriptHandler worker processes was
+in fact per-worker. The deferred items split into two
+fix vectors:
+
+- **R6-F5/F6/F7** — file-write read-modify-write
+  cycles that lacked cross-process locking. Detection
+  rule mapping, admin daily-limit counters, and the
+  CSV save RMW each had a `threading.Lock` (intra-
+  process only) where they needed an `fcntl.flock`
+  via `bin/wl_filelock.py`.
+- **R6-F8** — module-level mutable state in
+  `wl_presence.py` (and structurally identical in
+  `wl_ratelimit.py`) that each worker maintained
+  independently. The "X is also viewing this CSV"
+  indicator was unreliable; the rate-limit cap was
+  silently multiplied by the worker pool size.
+
+Ring 6.1 was scoped to close both vectors without
+turning into a general refactor. 10 deliverables across
+10 day-blocks (6.1.1–6.1.10), three commits per major
+fix.
+
+### What landed in Ring 6.1
+
+| Day           | Deliverable                                                          | Commit    | Build |
+|---------------|----------------------------------------------------------------------|-----------|------:|
+| 6.1.1         | File-write audit + coverage matrix (~36 sites classified)            | `61f662f` |   651 |
+| 6.1.2         | R6-F5 + R6-F6 fixes (`rules_rmw_lock`, `admin_daily_limit_lock`)     | `1bea969` |   652 |
+| 6.1.3 + 6.1.6 | Test tightening (hard-fail on any bypass / counter drift)            | `f98ad25` |   652 |
+| 6.1.5         | R6-F7 fix (`_save_csv` wrapped in per-CSV `file_lock`)               | `75d8d15` |   653 |
+| 6.1.4         | Lock-overhead benchmark (lock cost <0.5% of wall-clock)              | `2bb6a08` |   653 |
+| 6.1.7a        | MEDIUM batch 1: notifications + lockdown + trash + deploy_window     | `e6d552d` |   654 |
+| 6.1.7b        | MEDIUM batch 2: trash restore + replay create_csv + approval_count   | `79c778c` |   655 |
+| 6.1.8         | Live-test confirms R6-F8 in rate limiter (60/0 burst, 2x cap)        | `ea9e3ff` |   655 |
+| 6.1.9a        | Presence migrated to KV-backed state                                 | `5822b2c` |   656 |
+| 6.1.9b        | Rate limiter migrated to KV + per-(user,action) file_lock            | `225960b` |   657 |
+| 6.1.10        | R6-F8 tests tightened to hard-fail on regression                     | `d71c8ee` |   657 |
+
+**Build span**: 651 → 657 (7 build bumps across 11
+commits). Ring 6.1 shipped 6 production-code commits
+and 5 test/doc commits.
+
+### Closed bugs
+
+All four Ring 6 deferred bugs are closed:
+
+- **R6-F5** (rules registry + mapping cross-process race)
+  — closed by Day 6.1.2 `rules_rmw_lock()`.
+- **R6-F6** (admin daily-limit check + increment TOCTOU)
+  — closed by Day 6.1.2 + Day 6.1.7b
+  `admin_daily_limit_lock()` (extended to
+  `_process_approval` in 6.1.7b).
+- **R6-F7** (`_save_csv` optimistic-check + RMW + write
+  silent-loss) — closed by Day 6.1.5 per-CSV file lock.
+- **R6-F8** (per-worker module-level state) — closed by
+  Day 6.1.9a (presence to KV) + Day 6.1.9b (rate limiter
+  to KV + lock). The sibling instance in `wl_ratelimit.py`
+  was discovered live during Ring 6.1 (Day 6.1.8) and
+  closed in the same ring.
+
+### Bugs surfaced + closed within Ring 6.1 (not in Ring 6)
+
+- **R6-F8 in `wl_ratelimit.py`** — found during Day 6.1.8
+  live-test, closed Day 6.1.9b same ring. Effective cap
+  was ~30*N where N = worker count; production
+  4-8-worker deployments had a 4-8x silent over-allowance
+  on the defense-in-depth API-abuse control.
+
+### Bugs surfaced but explicitly NOT closed in Ring 6.1
+
+- **Pre-existing `_trash_config.json` path divergence**
+  between `wl_handler.py` (writes to
+  `OWN_LOOKUPS/TRASH_CONFIG_FILE`) and `wl_trash.py`
+  (writes to `OWN_LOOKUPS/VERSIONS_DIR/TRASH_CONFIG_FILE`).
+  Flagged in `trash_config_rmw_lock` docstring;
+  scoped out of Ring 6.1 as a cleanup-ring item.
+- **Replay-function drift from canonical pipelines**.
+  `_execute_replay_create_csv` in `wl_replay.py` has
+  its own inline MAPPING_FILE RMW (a parallel
+  implementation of `wl_rules.create_csv_pipeline`).
+  Ring 6.1 wrapped it in `rules_rmw_lock()` (surgical
+  fix), but per `MEMORY.md`'s "Replay functions must
+  delegate to pipeline functions" rule, the long-term
+  fix is to route through `wl_rules`. Scoped out as a
+  cleanup-ring item.
+
+### Lessons reinforced
+
+- **Two bugs from the same class deserve the rule of
+  three.** Ring 6 surfaced R6-F8 in presence; Day 6.1.8
+  surfaced the sibling instance in rate limiter. If a
+  third "module-level mutable state per worker" instance
+  appears, the ring should formalize a "cross-worker
+  shared state" pattern in a global memory file. (Two
+  is suspicious; three is a class — extract it.)
+- **KV-backed state alone is insufficient for RMW
+  serialization**. Day 6.1.9b's first deploy still saw
+  60/60 successes despite KV-backed state, because the
+  read → check → write sequence wasn't atomic. The
+  same per-key file lock that closed R6-F6 (admin daily
+  limits) closes the rate-limit RMW. Two locking
+  patterns coexist now: persistent-state locks live
+  next to their data files; ephemeral-state locks live
+  in `tempfile.gettempdir()`. Different lifetimes,
+  different placement.
+- **Coupled bugs need coupled fixes**. Day 6.1.2 was
+  planned as two commits (R6-F5 standalone, then R6-F6
+  standalone). Shipping just R6-F5 made the R6-F6 test
+  go from 4-of-7 bypass to 7-of-7 bypass — because
+  serializing the pipeline pushed all admins to the
+  cap check at counter=0 simultaneously. Coupled bugs
+  must ship together; the "two commits" preference is
+  generally correct but bowed to this discovery.
+- **Strict cross-worker rate limiting reshapes the
+  test suite**. Pre-fix, tests could fire setup writes
+  unconstrained because the per-worker bypass hid the
+  cap. Post-fix, back-to-back concurrency tests
+  cascade-fail on setup until the 60s sliding window
+  clears. The constraint moved from "invisible bug" to
+  "test infrastructure cadence rule" — documented in
+  `tests/e2e/README.md` under "Test-Run Cadence".
+- **The wrapper-method pattern avoids massive
+  indentation diffs**. Day 6.1.5 wrapped a 290-line
+  `_save_csv` body by renaming the original to
+  `_save_csv_locked` and adding a thin wrapper that
+  acquires the lock then delegates. Zero indentation
+  changes inside the locked function body; reviewer's
+  diff is small and focused.
+- **Dual-mode (session_key=None → in-memory) is the
+  right shape when migrating to KV-backed state**.
+  Days 6.1.9a/b preserved 23+11 existing unit tests
+  by defaulting to the original in-memory dict when
+  no session_key is provided. Production paths always
+  pass session_key (threaded from the handler request);
+  unit tests run Splunk-free against the in-memory
+  fallback. The "no synthetic fixtures" rule still
+  applies to integration tests; pure-helper unit tests
+  are the documented exception.
+
+### What didn't land in Ring 6.1 — explicit non-deliverables
+
+- **Refactoring trash/replay mapping writes to route
+  through `wl_rules` pipeline functions.** Surgical
+  fix landed in 6.1.7b; refactor queued for a later
+  consolidation ring.
+- **Unifying the three locking styles** (Style 1
+  `file_lock`, Style 2 inline `fcntl`, Style 3 custom
+  `_csv_file_lock` in `wl_versions.py`). Day 6.1.1
+  audit explicitly decided to use Style 1 for new
+  locking only; migration of existing Style 2/3 sites
+  to Style 1 is OUT of scope.
+- **Reconciling `_trash_config.json` path divergence**
+  between wl_handler.py and wl_trash.py. Flagged
+  during 6.1.7a; scoped out as a cleanup ring item.
+- **Extracting a shared `wl_kv.py` helper module.**
+  The KV access helpers in `wl_handler.py` (cooldowns),
+  `wl_presence.py`, and `wl_ratelimit.py` share the
+  same pattern (`_kv_url`, `_kv_read_*`,
+  `_kv_write_*`, `_do_insert` fallback). A natural
+  refactor would extract these into a shared module.
+  Out of scope for Ring 6.1 — code-quality
+  consolidation, not correctness.
+- **A `wait_for_ratelimit_clear` helper for the test
+  suite.** Tests pass with manual ≥75s waits between
+  concurrency suites. If the cadence cost becomes
+  painful, a poll-until-clear helper would replace the
+  hard wait. Out of scope for Ring 6.1.
+
+### Ring 6.1 totals
+
+- **Days**: 10 work days + 1 retro (this section).
+- **Commits**: 11 (6 production fixes, 3 test/doc, 1
+  audit, 1 benchmark).
+- **Builds**: 7 bumps (651 → 657).
+- **New KV collections**: 2 (`wl_presence_state`,
+  `wl_ratelimit_state`).
+- **New file locks**: 4 (rules RMW, per-user admin
+  daily limit, per-CSV save_csv, per-(user,action)
+  rate limit) + 3 from MEDIUM batch 1
+  (notifications, lockdown, trash config, deploy
+  window).
+- **Tests tightened**: 4
+  (`test_concurrent_limit_other_counters.cjs`,
+  `test_concurrent_save_csv.cjs`,
+  `test_concurrent_presence.cjs`,
+  `test_ratelimit_per_worker.cjs`).
+- **Tests added**: 1
+  (`test_ratelimit_per_worker.cjs`).
+- **Bugs closed**: 4 (R6-F5/F6/F7/F8 across both
+  instances).
+- **Bugs surfaced + closed in same ring**: 1 (R6-F8
+  in rate limiter).
+- **Bugs surfaced + flagged for later**: 2 (trash
+  config path divergence, replay-function drift).
+
+### Status
+
+Ring 6.1 is **CLOSED**. The cross-process state
+correctness class is fully addressed for every named
+instance discovered through Ring 6 and Ring 6.1.
+
+Next per the user's stated sequencing: Show
+Requested Data (approval queue preview feature), then
+Sigstore release-verification dry-run.
