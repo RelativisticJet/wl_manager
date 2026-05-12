@@ -5690,7 +5690,7 @@ keep the in-memory fallback.
 
 **Critical discovery during 6.1.9b**: KV
 alone is INSUFFICIENT for rate limiting.
-The first deploy at build 657 still showed
+The first deploy (shipped at build 657) still showed
 60/60 successes in the burst test —
 because the read-modify-write sequence
 (read timestamps → check cap → append +
@@ -5747,7 +5747,7 @@ their persistent data files.
   Day 6.1.9a's commit (single conf
   reload covers both 9a and 9b).
 
-**Verified at build 657 with sliding
+**Verified (shipped at build 657) with sliding
 window cleared**:
 
 - `tests/unit/test_ratelimit.py`
@@ -5802,7 +5802,7 @@ add a fresh-bucket helper to `lib_helpers.cjs`).
   docs.
 - Ring 6.1 retro + close.
 
-## Ring 6.1 — Cross-process state fixes (CLOSED at build 657)
+## Ring 6.1 — Cross-process state fixes (CLOSED, shipped at build 657)
 
 ### Why Ring 6.1 existed
 

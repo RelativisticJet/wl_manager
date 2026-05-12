@@ -57,17 +57,23 @@ const PAGES = [
     {
         label: "control_panel",
         urlPath: "/en-US/app/wl_manager/control_panel",
-        // Control panel renders the Approval Queue tab first
-        // by default; its container is a reliable ready signal.
-        readySelector: "#cp-tab-content",
+        // Control panel JS hides #wl-cp-content until tabs are
+        // built, then shows it. Wait for it to be visible — that
+        // implies tab UI is rendered. The previous #cp-tab-content
+        // selector never existed in the rendered DOM (Ring 5 Day 4
+        // shipped with a stale guess; first run on Day 6.1.10
+        // surfaced the bug).
+        readySelector: "#wl-cp-content",
     },
     {
         label: "audit",
         urlPath: "/en-US/app/wl_manager/audit",
-        // The audit dashboard is a SimpleXML view; the timestamp
-        // dropdown is rendered last and reliably indicates the
-        // dashboard is fully loaded.
-        readySelector: "input[type='text']",
+        // SimpleXML dashboard. Wait for the first panel-row to
+        // render — Splunk's standard container that appears after
+        // dashboard form initialization. The previous
+        // "input[type='text']" matched 3 hidden Splunk dropdown
+        // inputs and waitForSelector kept polling for visibility.
+        readySelector: ".dashboard-row",
     },
 ];
 

@@ -437,7 +437,7 @@ require([
         var pendingStart = pendingPage * PAGE_SIZE;
         var pendingSlice = allPending.slice(pendingStart, pendingStart + PAGE_SIZE);
 
-        html += '<h3 class="wl-section-header">Pending Requests (' + pendingTotal + '/20)</h3>';
+        html += '<h2 class="wl-section-header">Pending Requests (' + pendingTotal + '/20)</h2>';
 
         if (!pendingTotal) {
             html += '<p class="wl-empty-state">No pending approval requests.</p>';
@@ -516,7 +516,7 @@ require([
         var historyStart = historyPage * PAGE_SIZE;
         var historySlice = allResolved.slice(historyStart, historyStart + PAGE_SIZE);
 
-        html += '<h3 class="wl-section-header">Recent History (' + historyTotal + '/100)</h3>';
+        html += '<h2 class="wl-section-header">Recent History (' + historyTotal + '/100)</h2>';
         if (historyTotal) {
             // Same horizontal-scroll wrapper as the Pending table — Recent
             // History has 11 columns and is even more prone to viewport overflow.
@@ -1478,7 +1478,7 @@ require([
                 'data-info="' + _.escape(text) + '">i</span>';
         }
 
-        var html = '<h3 class="wl-section-header">Analyst Settings</h3>';
+        var html = '<h2 class="wl-section-header">Analyst Settings</h2>';
         html += '<div style="max-width:820px">';
         fields.forEach(function (f) {
             var val = limits[f.key] !== undefined ? limits[f.key] : 10;
@@ -1628,7 +1628,7 @@ require([
 
         // Analyst permissions — 3-state dropdowns
         html += '<div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--wl-border-light,#e0e0e0)">' +
-            '<h4 style="margin:0 0 10px;font-size:14px;font-weight:600">Analyst Permissions</h4>';
+            '<h3 style="margin:0 0 10px;font-size:14px;font-weight:600">Analyst Permissions</h3>';
 
         function permValue(allowKey, requireKey) {
             if (!limits[allowKey]) return "off";
@@ -2056,7 +2056,7 @@ require([
 
     function renderLimitHistory(history) {
         var html = '<div id="wl-cp-limit-history" style="margin-top:20px">';
-        html += '<h3 class="wl-section-header">Recent Changes</h3>';
+        html += '<h2 class="wl-section-header">Recent Changes</h2>';
 
         if (!history || !history.length) {
             html += '<p style="color:var(--wl-text-muted,#888);font-size:13px">' +
@@ -2214,8 +2214,8 @@ require([
         var startIdx = usagePage * USAGE_PER_PAGE;
         var pageAnalysts = analysts.slice(startIdx, startIdx + USAGE_PER_PAGE);
 
-        var html = '<h3 class="wl-section-header">Analyst Usage for ' +
-                   _.escape(date) + '</h3>';
+        var html = '<h2 class="wl-section-header">Analyst Usage for ' +
+                   _.escape(date) + '</h2>';
 
         if (!analysts.length) {
             html += '<p class="wl-empty-state">No activity recorded today.</p>';
@@ -2354,8 +2354,8 @@ require([
     }
 
     function renderTrashTable(items, autoPurged) {
-        var html = '<h3 class="wl-section-header">Trash (' +
-            items.length + ' items)</h3>';
+        var html = '<h2 class="wl-section-header">Trash (' +
+            items.length + ' items)</h2>';
 
         if (autoPurged > 0) {
             html += '<p style="color:var(--wl-muted,#888);font-size:12px;margin-bottom:8px">' +
@@ -2608,7 +2608,7 @@ require([
                 'data-info="' + _.escape(text) + '">i</span>';
         }
 
-        var html = '<h3 class="wl-section-header">Admin Settings</h3>' +
+        var html = '<h2 class="wl-section-header">Admin Settings</h2>' +
             '<p style="color:var(--wl-muted,#888);font-size:12px;margin-bottom:12px">' +
             'These limits restrict admin actions per period. Super-admins are exempt. ' +
             'Set 0 to disable the action entirely.</p>';
@@ -2739,7 +2739,7 @@ require([
 
         // ── Admin Permission Toggles ──
         html += '<div style="margin-top:4px;padding-top:12px;border-top:1px solid var(--wl-border-light,#e0e0e0)">' +
-            '<h4 style="margin:0 0 10px;font-size:14px;font-weight:600">Admin Permissions</h4>';
+            '<h3 style="margin:0 0 10px;font-size:14px;font-weight:600">Admin Permissions</h3>';
 
         function buildAdminPermToggle(id, key, labelText, infoText) {
             var val = (limits[key] !== undefined) ? limits[key] : (defaults[key] !== undefined ? defaults[key] : true);
@@ -2922,7 +2922,7 @@ require([
 
     function renderAdminLimitHistory(history) {
         var html = '<div id="wl-cp-admin-limit-history" style="margin-top:20px">';
-        html += '<h3 class="wl-section-header">Recent Changes</h3>';
+        html += '<h2 class="wl-section-header">Recent Changes</h2>';
 
         if (!history || !history.length) {
             html += '<p style="color:var(--wl-text-muted,#888);font-size:13px">' +

@@ -31,7 +31,7 @@
     --wl-bg-selected:     #1b3a1b;
     --wl-text:            #e0e0e0;
     --wl-text-secondary:  #aaa;
-    --wl-text-muted:      #777;
+    --wl-text-muted:      #9a9a9a;  /* a11y triage (build 658): bumped from #777 to pass WCAG 2.1 AA 4.5:1 contrast on both --wl-bg-disabled (#0d0e10) and --wl-bg (#212527) */
     --wl-text-selected:   #a5d6a7;
     --wl-border:          #444;
     --wl-border-light:    #333;

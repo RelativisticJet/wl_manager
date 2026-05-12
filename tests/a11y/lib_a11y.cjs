@@ -107,8 +107,15 @@ function loadBaseline() {
  * Filter axe results against the baseline. A violation is
  * suppressed when:
  *  - its rule id has an entry in baseline.json, AND
- *  - every one of its node.target selectors is present in
- *    that entry's accepted-selectors array.
+ *  - every one of its node.target selectors matches an entry
+ *    in that rule's accepted-selectors array.
+ *
+ * Match modes (per accepted-selector entry):
+ *  - plain string  -> exact equality with target.join(" ")
+ *  - "re:<regex>"  -> tested as a regex against target.join(" ")
+ *                     Use this for Splunk-bundled elements whose
+ *                     IDs are auto-generated per render (e.g.
+ *                     "re:^#view_\\d+-paginator\\d+ > ...").
  *
  * Returns a NEW results object — the input is not mutated.
  */
@@ -117,9 +124,28 @@ function filterAgainstBaseline(results, baseline) {
     const surviving = [];
     const suppressed = [];
 
+    function nodeMatchesAny(targetString, acceptedList) {
+        for (const entry of acceptedList) {
+            if (typeof entry !== "string") continue;
+            if (entry.startsWith("re:")) {
+                try {
+                    if (new RegExp(entry.slice(3)).test(targetString)) {
+                        return true;
+                    }
+                } catch (_e) {
+                    // Bad regex in baseline — skip; the entry won't
+                    // suppress anything.
+                }
+            } else if (entry === targetString) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     for (const v of results.violations) {
-        const acceptedSelectors = new Set(acceptedRules[v.id] || []);
-        if (acceptedSelectors.size === 0) {
+        const acceptedList = acceptedRules[v.id] || [];
+        if (acceptedList.length === 0) {
             surviving.push(v);
             continue;
         }
@@ -129,7 +155,7 @@ function filterAgainstBaseline(results, baseline) {
         // just the new nodes.
         const newNodes = v.nodes.filter(node => {
             const target = (node.target || []).join(" ");
-            return !acceptedSelectors.has(target);
+            return !nodeMatchesAny(target, acceptedList);
         });
         if (newNodes.length === 0) {
             suppressed.push(v.id);

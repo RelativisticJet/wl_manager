@@ -1,1 +1,19 @@
-{}
+{
+  "_comment": "Accessibility baseline — suppressed violations are explicitly accepted as known issues. Each rule-id key maps to a list of accepted node-target selectors. Entries prefixed with 're:' are regex patterns (used for Splunk-bundled DOM whose IDs are auto-generated per render). Every suppression MUST cite (1) the violation pattern, (2) the Splunk-specific reason it is acceptable, (3) the date added.",
+
+  "aria-allowed-attr": [
+    "input[placeholder=\"Find\"]",
+    "re:^#view_\\d+-paginator\\d+ > \\.selected\\[aria-label=\"Selected page \\d+\"\\]\\[aria-current=\"page\"\\]$"
+  ],
+  "_aria-allowed-attr-rationale": "(1) input[placeholder='Find'] is Splunk's global Find input in the dashboard header (role='textbox' + aria-expanded + aria-activedescendant — combination unsupported by axe but emitted by Splunk's bundled MVC). (2) #view_NNN-paginatorNNN selected page is Splunk's SimpleXML paginator widget (role='button' on an <a> with aria-current='page' — also unsupported combo per axe). Both live in Splunk-bundled DOM we do not control; an upstream Splunk fix is required. Added 2026-05-12 (Ring-5 Day-4 first-run triage).",
+
+  "aria-valid-attr-value": [
+    "input[placeholder=\"Find\"]"
+  ],
+  "_aria-valid-attr-value-rationale": "Same Splunk global Find input — aria-activedescendant points to an internal Splunk widget ID that doesn't exist as a DOM element axe can verify. Splunk's bundled component, not ours. Added 2026-05-12.",
+
+  "region": [
+    "#wl-notif-badge"
+  ],
+  "_region-rationale": "The notification badge is injected by appserver/static/notifications.js into Splunk's chrome header. There is no Splunk-provided landmark wrapper at that insertion point and wrapping the badge in our own <aside role='complementary'> would visually drift from Splunk's chrome layout. Acceptable to leave — the badge has aria-label and is keyboard reachable. Added 2026-05-12."
+}

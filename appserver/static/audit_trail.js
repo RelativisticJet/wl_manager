@@ -231,9 +231,12 @@ require([
         // Avoid duplicate injection on auto-refresh
         if ($hideLink.prev(".wl-audit-refresh").length) { return; }
 
+        // a11y triage (build 658): darkened from #5cc05c -> #2e7d32
+        // so the white-on-green contrast hits WCAG AA 4.5:1
+        // (previous ratio was 2.05).
         var $btn = $(
             '<span class="wl-audit-refresh" style="display:inline-block;padding:6px 14px;' +
-            'margin-right:10px;background:#5cc05c;color:#fff;border-radius:4px;' +
+            'margin-right:10px;background:#2e7d32;color:#fff;border-radius:4px;' +
             'font-size:13px;cursor:pointer;font-weight:600;user-select:none;' +
             'vertical-align:middle">&#x21bb; Refresh</span>'
         );
