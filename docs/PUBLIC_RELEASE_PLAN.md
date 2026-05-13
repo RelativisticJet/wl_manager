@@ -29,7 +29,7 @@ explicit user re-decision.
 | D2 | **Cloud cert scope: dual cert (Splunk Cloud + on-prem) from v1** | Broadest addressable market. Highest engineering cost. NO FALLBACK — if AppInspect surfaces multi-week refactor, timeline slips, scope doesn't shrink. |
 | D3 | **Timeline: moderate (6-8 weeks public, +2 months Splunkbase) — FLEXIBLE per D2** | Realistic for one maintainer. Quality bar constant, time variable. |
 | D4 | **App name: keep "Whitelist Manager"** | Available on Splunkbase (no collision found in search). Generic-but-clear. Decision is permanent on Splunkbase upload. |
-| D5 | **Copyright holder: Oleh (real name)** | Replaces "Security Engineering" placeholder. Personal-brand alignment. Affects future commercialization vehicle structure. |
+| D5 | **Copyright holder: "Oleh Bezsonov" (real name)** | Replaces "Security Engineering" placeholder. Personal-brand alignment. Affects future commercialization vehicle structure. Unified with D15 (same identity on Splunkbase publisher field). |
 | D6 | **Splunk Developer account: set up from scratch** | ~1 day delay at Phase 1 kickoff. No existing account state. |
 | D7 | **Cloud-cert escalation: at Phase 1 week 4 if not green, escalate to user for re-decision** | Soft cap. NOT auto-fallback. User explicitly chooses to continue / refactor / re-scope. |
 | D8 | **Hosted docs site: MkDocs Material on GitHub Pages** | Most popular for technical docs. Polished theme out-of-box. Markdown source in `docs/`. ~1 hour initial setup. |
@@ -39,6 +39,7 @@ explicit user re-decision.
 | D12 | **Versioning: reset to v1.0.0 for first public release** | Pre-public uses v1.0.0-rc1, -rc2 etc. The v2.0.0 in app.conf was an internal milestone — resetting is the standard FOSS pattern. |
 | D13 | **Pre-public hold period: 4 weeks minimum** | After repo flips public, hold ~4 weeks before Splunkbase submission. Lets early adopters surface install bugs. Splunkbase reviewers prefer apps with traction. |
 | D14 | **Plan persistence: this document, committed at `docs/PUBLIC_RELEASE_PLAN.md`** | Survives session transitions. Becomes public-facing when repo flips — trust signal showing deliberate process. |
+| D15 | **Splunk Developer / Splunkbase publisher name: "Oleh Bezsonov"** (real name, not `@RelativisticJet` handle). Account email: `communicate.oleh@gmail.com`. Created at dev.splunk.com 2026-05-13. | Unifies identity with D5 LICENSE copyright. Real name is publicly visible on every Splunkbase listing under this account — trade-off accepted. Avoids future legal-entity transfer friction that a handle-as-brand might create. Matches convention of established Splunkbase community apps (e.g., TrackMe V1 published as "Guilhem Marchand"). Reversible by emailing Splunk Developer Support if an LLC is ever formed. |
 
 ---
 
