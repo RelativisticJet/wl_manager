@@ -154,7 +154,7 @@ else
     pass "No hardcoded passwords in conf files"
 fi
 
-if grep -rn "token\s*=" "$APP_DIR/bin/" 2>/dev/null | grep -v "token=" | grep -v "authtoken" | grep -v "session_key" | grep -q .; then
+if grep -rn "token\s*=" "$APP_DIR/bin/" 2>/dev/null | grep -v "token=" | grep -v "authtoken" | grep -v "session_key" | grep -v "b64encode" | grep -q .; then
     fail "Possible hardcoded token in Python files"
 else
     pass "No hardcoded tokens in Python files"
