@@ -260,6 +260,20 @@ deployment:
 
 ---
 
+## Section 3.6 — Verifying the release signature (recommended before install)
+
+The `.spl` is Sigstore-signed by GitHub Actions. Verifying before install
+confirms the artifact came from this repo's release pipeline and was not
+swapped on the GitHub Releases page. See
+[docs/SBOM.md](docs/SBOM.md#verifying-a-release-with-cosign) for the
+canonical `cosign verify-blob` command and identity-regex.
+
+Skipping this check leaves you exposed to a release-channel takeover
+(an attacker who compromises the Releases page can swap both the `.spl`
+and the `.sha256` sidecar). Sigstore signing closes that gap.
+
+---
+
 ## Section 4 — Post-install verification checklist
 
 Run these checks after the first install:

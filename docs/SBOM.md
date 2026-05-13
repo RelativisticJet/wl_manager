@@ -88,36 +88,65 @@ sha256sum -c wl_manager-<version>.spl.sha256
 
 ### Limitations of the current model
 
-1. The .spl and the .sha256 are distributed via the same channel
-   (GitHub Releases). An attacker who compromises GitHub Releases
-   for this repository can replace BOTH files. The hash file is
-   only an integrity check against in-flight tampering / CDN
-   corruption / archive rot — NOT against a release-channel
-   takeover.
-2. There is no signature on the .sha256 file. A `gpg --verify`
-   step would tie the release to a key whose public half is
-   distributed out-of-band (e.g., `KEYS` file in this repo,
-   PGP keyserver, maintainer's web bio).
+1. (resolved as of 2026-05-13) — The .spl is now Sigstore-signed in
+   addition to having a SHA-256 sidecar. Customers who run only the
+   `sha256sum -c` check have the same exposure to a release-channel
+   takeover as before, but customers who run the cosign verification
+   below cannot be deceived by a Releases-page swap.
+2. There is still no GPG signature on the .sha256 file. A `gpg --verify`
+   step would tie the release to a maintainer key whose public half is
+   distributed out-of-band. Not in this round; see "Future hardening"
+   below.
 
-### Recommended next-step hardening (not in this round)
+### Verifying a release with cosign
 
-- **Sigstore / cosign keyless signing** — sign the .spl during
-  the GitHub Actions release run using the OIDC token from the
-  workflow itself. Verifiers can confirm the .spl was produced by
-  `RelativisticJet/wl_manager`'s release workflow without us
-  managing any long-lived signing key. Single best ROI.
-- **`KEYS` file at repo root** with a maintainer GPG public key,
-  and `release.yml` signing the .sha256 with the matching private
-  key (stored as a GitHub Actions secret). Heavier than Sigstore
-  but matches what most established Splunk apps ship.
-- **Per-release SBOM artifact** (CycloneDX or SPDX) attached
-  alongside the .spl. The current SBOM is small enough to live in
-  this document, but customers running automated SCA tools expect
-  a machine-readable file per release.
+Each release ships `.sig` (signature) and `.crt` (Fulcio short-lived
+certificate) sidecar files for both the `.spl` and the `.cdx.json`
+SBOM. The signing identity is the GitHub Actions workflow
+(`.github/workflows/release.yml`) that produced the artifact, recorded
+in the Rekor transparency log.
 
-These are all C-tier follow-ups for a future round; the current
-.sha256 model is adequate for the threat the repo currently faces
-(opportunistic CDN tampering, unintentional corruption).
+Install cosign (>= v2.4):
+
+- macOS: `brew install cosign`
+- Linux: see <https://docs.sigstore.dev/cosign/system_config/installation/>
+- Windows: `winget install sigstore.cosign`
+
+Verify (replace `<VERSION>` with the release you're installing):
+
+```bash
+cosign verify-blob \
+  --new-bundle-format=false \
+  --certificate wl_manager-<VERSION>.spl.crt \
+  --signature wl_manager-<VERSION>.spl.sig \
+  --certificate-identity-regexp '^https://github.com/RelativisticJet/wl_manager/\.github/workflows/release\.yml@refs/tags/.*$' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  wl_manager-<VERSION>.spl
+```
+
+A passing verifier prints `Verified OK`. A tampered .spl or a signature
+from any other repo's workflow fails closed.
+
+`--new-bundle-format=false` is required for cosign 3.x because the
+release workflow currently signs with cosign v2.4.1 (producing the
+legacy `.sig` + `.crt` pair, not the new single-`.sigstore`-bundle
+format that cosign 3.x defaults to). cosign 2.x users can drop the
+flag — the command works either way.
+
+You can also verify the SBOM the same way by substituting
+`wl_manager-<VERSION>.spl.cdx.json` and its `.sig` / `.crt` pair.
+
+### Future hardening (not in this round)
+
+- **GPG sidecar on .sha256**: a maintainer key distributed via a `KEYS`
+  file at repo root, with `release.yml` GPG-signing the .sha256. Heavier
+  than Sigstore but matches what most established Splunk apps ship.
+  Defense-in-depth against the day Fulcio's CA cert chain rotates faster
+  than customers can update their cosign install.
+- **Upgrade signing to cosign v3.x new-bundle format**: removes the
+  `--new-bundle-format=false` flag from the customer command. Wait until
+  the customer base demonstrates they're on cosign 3.x; today most
+  package managers still ship cosign 2.x.
 
 ## Subresource Integrity (SRI) — N/A by architecture
 

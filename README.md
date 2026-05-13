@@ -71,6 +71,7 @@ Built for SOC teams who need to manage detection rule exceptions without touchin
 - Server-side RBAC enforcement on every request
 - Path traversal protection, input sanitization, rate limiting
 - Control Panel restricted to admin roles
+- Release artifacts are Sigstore-signed; see [docs/SBOM.md](docs/SBOM.md#verifying-a-release-with-cosign) for the cosign verification command
 
 ### Row Expiration
 

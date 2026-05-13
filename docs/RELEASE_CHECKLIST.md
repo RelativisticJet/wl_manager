@@ -119,7 +119,7 @@ or new filters here.
 
 ---
 
-## 8. Sigstore Signing — End-to-End Verification (REQUIRED on first signed release)
+## 8. Sigstore Signing — End-to-End Verification [x] DONE — verified 2026-05-13 on tag v0.0.0-sigstore-test
 
 **Background.** Round 8 (build 629, 2026-04-29) wired Sigstore keyless
 signing into `.github/workflows/release.yml`. The workflow uses GitHub
@@ -252,3 +252,41 @@ After this section is completed once, mark this section as
 leave it in place. Future releases verify automatically via the
 quarterly pip-audit cadence + per-release workflow run; this one-shot
 just proves the wiring.
+
+### Outcome notes (2026-05-13 dry-run on tag v0.0.0-sigstore-test)
+
+5/5 verification scenarios passed:
+
+- Step 2 (legit verify against production identity-regex) — `Verified OK`
+- Step 3 (tamper test, appended bytes to .spl) — failed with "invalid
+  signature when validating ASN.1 encoded signature"
+- Step 3b (foreign-signature identity-pin test, added as a rigor
+  extension to this runbook) — verified that a known-good Sigstore
+  signature from a different repo (`sigstore/cosign` v2.4.3 RPM, which
+  is signed via Google OIDC, not GitHub Actions) is rejected by the
+  production identity-regex. Confirms the identity pin is the actual
+  security boundary, not just signature-integrity. Recommend adding
+  Step 3b to this checklist permanently.
+- Step 4 (Rekor lookup with explicit `--rekor-url`) — `Verified OK`
+- Bonus: SBOM (`.cdx.json`) signature verifies the same way
+
+Verifier command published in `docs/SBOM.md` (canonical) with pointers
+from `README.md` (Security section) and `INSTALLATION.md` (Section 3.6).
+
+Three side-findings worth follow-up but not blocking:
+
+- The release workflow runs `actions/checkout@v4` + `actions/setup-python@v5`
+  which both deprecate Node 20; GitHub forces Node 24 by 2026-09-16.
+- `cosign-release: 'v2.4.1'` outputs `.crt` as base64-wrapped PEM
+  (cosign-internal format). cosign verify-blob handles it transparently;
+  only matters for openssl inspection.
+- `scripts/package.sh` derives `<VERSION>` for the .spl filename from
+  `default/app.conf:version`, not from the git tag. Pre-tag-cut step
+  must bump `app.conf:version` to match the tag, otherwise the .spl
+  filename mismatches the tag and Sigstore identity still verifies but
+  the customer-facing artifact name looks wrong. Add to "Tag cut"
+  pre-checklist on next round.
+
+The two prerequisite fixes that the dry-run forced (commits 691c651 +
+6f8dc79) are not Sigstore-related — they were pre-existing validate.sh
+issues that had never been exercised by a passing release run.
