@@ -6390,7 +6390,7 @@ container at `http://localhost:8000`:
 | --- | --- |
 | Buttons via Tab | ✅ 21 action buttons all reachable |
 | Focus-visible ring | ✅ 2px #2196f3 outline renders |
-| Reduced-motion | ❌ FIXED build 659 (see below) |
+| Reduced-motion | ❌ FIXED build 659 (historical, see below) |
 | Modal focus on open | ✅ focuses input in name-prompt modal |
 | Modal Tab cycle | ❌ Tab past Cancel escapes to `<body>` |
 | Modal Escape close | ⚠️ closes modal but focus stays on body |
@@ -6519,7 +6519,7 @@ Visually identical (CSS already styles `.wl-search-clear-btn`,
 HTML changes in 3 sites. Estimated 30 minutes including
 verification.
 
-### Build 659 — summary
+### Build 659 — summary (historical)
 
 - **Files changed**: 3 (`whitelist_manager.css`,
   `whitelist_manager.js`, `app.conf`).

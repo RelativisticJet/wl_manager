@@ -64,6 +64,108 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-14 (Phase 0.0: AppInspect de-risk + targeted fixes)
+
+### Build — 659 → 660
+
+Phase 0.0 of the pre-public release plan (`docs/PUBLIC_RELEASE_PLAN.md`)
+ran `splunk-appinspect` 4.2.0 locally against the current `.spl` with
+both `cloud` and on-prem (Standalone) profiles. Verdict: **Phase 1
+effort class is TRACTABLE, not multi-week**. No D7 escalation
+triggered. The biggest unknown in the entire release plan (R1.1 —
+"Cloud-cert refactor could be 6 weeks") is not supported by static
+signal. Findings doc + raw JSON reports at
+`.planning/go-public/PHASE_0_0_APPINSPECT_FINDINGS.md` and
+`.planning/appinspect/`.
+
+### Config — version mismatch + `[id]` stanza
+
+- `default/app.conf`: renamed `[package]` stanza to `[id]` (Splunkbase
+  cert canonical form). Field rename `id` → `name`. Added `version`
+  field synced to `[launcher]`. Closes AppInspect failure
+  `check_version_is_valid_semver` and warning
+  `check_for_valid_package_id` on both profiles.
+- `app.manifest`: bumped `info.id.version` from `1.0.0` → `2.0.0` to
+  match `default/app.conf [launcher]`. Updated `releaseDate` to
+  current.
+
+### Config — `python.required` migration (Splunk Enterprise 10.2+)
+
+Replaced deprecated `python.version = python3` with the canonical
+`python.required = python3` across 5 stanzas in 3 conf files. Closes
+all 3 `future_failure` AppInspect checks
+(`check_scripted_inputs_python_required`,
+`check_commands_conf_python_required`,
+`check_script_restmap_conf_python_required`).
+
+Files: `default/inputs.conf` (3 stanzas), `default/commands.conf`
+(1 stanza), `default/restmap.conf` (1 stanza).
+
+### Config — scripted-input path patterns
+
+In `default/inputs.conf` (3 stanzas: `wl_expiration_cleanup.py`,
+`wl_fim.py`, `wl_fim_watch.py`), switched relative-form
+`./bin/<script>` to absolute-form
+`$SPLUNK_HOME/etc/apps/wl_manager/bin/<script>` (Cloud-profile best
+practice). Closes `check_scripted_inputs_cmd_path_pattern` warning.
+Both forms work in practice but the absolute form is what Cloud
+Vetting expects.
+
+### Build — `scripts/package.sh` exclusion hardening
+
+Root cause: the previous denylist drifted as new dev tooling was added
+(`.playwright-mcp`, `.mutmut-cache`, `.firecrawl`, `.audit`, `.zap`,
+`.hypothesis`, `node_modules`, `htmlcov`, `bench_results`,
+`test-results`). The first AppInspect run on a `bash scripts/package.sh`-built
+`.spl` failed packaging-standards on 8+ paths and gated 237 downstream
+checks behind those failures.
+
+Fix:
+
+- Added `--exclude='*/.*'` glob to catch ALL dot-prefix paths at any
+  depth. Defense-in-depth against future denylist drift.
+- Added explicit excludes for non-dot dev/runtime dirs:
+  `node_modules`, `htmlcov`, `bench_results`, `test-results`,
+  `graphify-out`, `lookups/_trash`, `sbom.cdx.json`, `*.png`,
+  `package.json`, `package-lock.json`, `playwright.config.*`,
+  `pyproject.toml`, `requirements*.txt`, `pytest.ini`.
+- Added Step 4b post-tar sanity check that fails the build with a
+  diagnostic if known-bad patterns appear in the tarball — backstop
+  in case a new prohibited path bypasses both layers above.
+
+Result: `.spl` size 20 MB → 5 MB (75% reduction was `node_modules`).
+Closes AppInspect warning `check_hostnames_and_ips` (private IPs that
+previously leaked in via runtime `lookups/_trash/` snapshots no
+longer ship).
+
+### Cache
+
+`appserver/static/whitelist_manager.js` `urlArgs: "_b=660"` keeps the
+RequireJS cache-bust synced with `app.conf:build` per CLAUDE.md
+"Maintenance rule" comment.
+
+### Not in this commit (flagged as deferred)
+
+- `app.conf:version` bump 2.0.0 → 1.0.0-rc1 — scheduled for
+  Phase 0.8 as a single-purpose commit.
+- `app.manifest:license.name = "MIT"` and `author.name = "RelativisticJet"`
+  — scheduled for Phase 0.6 (Apache 2.0 switch) and Phase 0.7 (D5/D15
+  copyright/publisher = Oleh Bezsonov).
+- AppInspect warning W4 (Py2/3 compat) — already moot via
+  `app.manifest:platformRequirements.splunk.Enterprise = ">=9.0.0"`
+  which drops Splunk 8.x support.
+- 4 saved-search cron-schedule warnings (W6) — Phase 1.3 will document
+  per-search justification in the formal findings doc (file name TBD
+  per the plan). One (`wl_csv_external_modification_alert`) is already
+  justified in CLAUDE.md Decision Log entry 2026-04-23.
+
+### Verification
+
+Re-ran AppInspect after edits against the rebuilt `.spl`. Numbers
+appended to the Phase 0.0 findings doc.
+
+---
+
 ## Unreleased — 2026-05-11 (Ring 5 Day 5: retrospective + ring close)
 
 ### Docs — Ring 5 close

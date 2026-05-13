@@ -86,15 +86,19 @@ else
     fail "app.conf missing version"
 fi
 
-if grep -q "^\[package\]" "$APP_DIR/default/app.conf"; then
-    PACKAGE_ID=$(grep "^id" "$APP_DIR/default/app.conf" | head -1 | cut -d= -f2 | tr -d ' ')
+# AppInspect's check_for_valid_package_id wants [id]; legacy Splunk
+# apps used [package]. Both accept name/id field aliases. Accept either
+# stanza here so the validator works during the transitional period
+# and after Phase 0.0 (2026-05-14) which renamed [package] → [id].
+if grep -qE "^\[(package|id)\]" "$APP_DIR/default/app.conf"; then
+    PACKAGE_ID=$(grep -E "^(name|id)[[:space:]]*=" "$APP_DIR/default/app.conf" | head -1 | cut -d= -f2 | tr -d ' ')
     if [[ "$PACKAGE_ID" == "$APP_NAME" ]]; then
-        pass "app.conf package id = $APP_NAME"
+        pass "app.conf [id]/[package] name = $APP_NAME"
     else
-        fail "app.conf package id is '$PACKAGE_ID', expected '$APP_NAME'"
+        fail "app.conf [id]/[package] name is '$PACKAGE_ID', expected '$APP_NAME'"
     fi
 else
-    fail "app.conf missing [package] stanza"
+    fail "app.conf missing [id] (or legacy [package]) stanza"
 fi
 
 # ══════════════════════════════════════════════════════════════════════

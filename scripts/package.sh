@@ -106,39 +106,52 @@ head -1 "$APP_DIR/lookups/rule_csv_map.csv" > "$PROD_MAP"
 cp "$APP_DIR/lookups/rule_csv_map.csv" "$APP_DIR/lookups/rule_csv_map.csv.bak"
 cp "$PROD_MAP" "$APP_DIR/lookups/rule_csv_map.csv"
 
+# Exclude strategy (post-2026-05-14 Phase 0.0 AppInspect findings):
+#   1. `*/.*` glob catches ALL dot-prefixed paths (any depth). This is
+#      defense-in-depth against denylist drift — new dev tools that
+#      create `.foo` dirs are auto-excluded without script edits.
+#   2. Explicit excludes for non-dot dev/runtime dirs that AppInspect
+#      flags as prohibited or that would inflate package size 4-15x
+#      (node_modules, htmlcov, etc.).
+#   3. Step 4b below adds a post-tar sanity check that fails the build
+#      if known-bad patterns appear in the tarball — backstop in case
+#      a new prohibited path bypasses both layers above.
 tar -czf "$SPL_FILE" \
     -C "$(dirname "$APP_DIR")" \
-    --exclude="$APP_NAME/.git" \
-    --exclude="$APP_NAME/.github" \
-    --exclude="$APP_NAME/.docker" \
-    --exclude="$APP_NAME/.claude" \
-    --exclude="$APP_NAME/.code-review-graph" \
-    --exclude="$APP_NAME/.pytest_cache" \
-    --exclude="$APP_NAME/.superpowers" \
-    --exclude="$APP_NAME/.mcp.json" \
-    --exclude="$APP_NAME/.vscode" \
+    --exclude='*/.*' \
     --exclude="$APP_NAME/dist" \
     --exclude="$APP_NAME/demo" \
     --exclude="$APP_NAME/scripts" \
     --exclude="$APP_NAME/tests" \
     --exclude="$APP_NAME/docs" \
+    --exclude="$APP_NAME/node_modules" \
+    --exclude="$APP_NAME/htmlcov" \
+    --exclude="$APP_NAME/bench_results" \
+    --exclude="$APP_NAME/test-results" \
+    --exclude="$APP_NAME/graphify-out" \
     --exclude="$APP_NAME/docker-compose.yml" \
-    --exclude="$APP_NAME/.dockerignore" \
-    --exclude="$APP_NAME/.gitignore" \
     --exclude="$APP_NAME/Makefile" \
     --exclude="$APP_NAME/CLAUDE.md" \
+    --exclude="$APP_NAME/package.json" \
+    --exclude="$APP_NAME/package-lock.json" \
+    --exclude="$APP_NAME/playwright.config.*" \
+    --exclude="$APP_NAME/pyproject.toml" \
+    --exclude="$APP_NAME/requirements*.txt" \
+    --exclude="$APP_NAME/pytest.ini" \
+    --exclude="$APP_NAME/sbom.cdx.json" \
     --exclude="$APP_NAME/__pycache__" \
     --exclude="$APP_NAME/**/__pycache__" \
     --exclude="$APP_NAME/**/*.pyc" \
-    --exclude="$APP_NAME/.DS_Store" \
     --exclude="$APP_NAME/lookups/DR*" \
     --exclude="$APP_NAME/lookups/*.bak" \
     --exclude="$APP_NAME/lookups/_versions" \
     --exclude="$APP_NAME/lookups/_*.json" \
+    --exclude="$APP_NAME/lookups/_trash" \
     --exclude="$APP_NAME/metadata/local.meta" \
     --exclude="$APP_NAME/local" \
     --exclude="$APP_NAME/*.spl" \
     --exclude="$APP_NAME/*.pdf" \
+    --exclude="$APP_NAME/*.png" \
     --exclude="$APP_NAME/test_*.py" \
     --exclude="$APP_NAME/*-after-*" \
     --exclude="$APP_NAME/login-check" \
@@ -149,6 +162,28 @@ mv "$APP_DIR/lookups/rule_csv_map.csv.bak" "$APP_DIR/lookups/rule_csv_map.csv"
 rm -rf "$STAGING_DIR"
 
 echo "  Archive created."
+
+# ── Step 4b: Sanity-check the .spl for prohibited content ─────────────
+# AppInspect's `check_that_extracted_splunk_app_does_not_contain_prohibited_*`
+# checks fail if a .spl ships dev artifacts. This local check catches the
+# same patterns before the .spl ever reaches AppInspect — fail fast.
+echo ""
+echo "Step 4b: Sanity-checking .spl contents..."
+PROHIBITED_REGEX='(/\.[^/]+(/|$)|/node_modules/|/htmlcov/|/bench_results/|/test-results/|/graphify-out/|/lookups/_trash/|/lookups/_versions/|/lookups/_[^/]+\.json$|/__pycache__/|\.pyc$|/local/|\.bak$|/sbom\.cdx\.json$|\.spl$|\.pdf$|/CLAUDE\.md$|/Makefile$|/docker-compose\.yml$|/package(-lock)?\.json$|/pyproject\.toml$|/pytest\.ini$|/requirements[^/]*\.txt$|/playwright\.config\.[^/]+$|/test_[^/]+\.py$|-after-)'
+BAD_HITS="$(tar -tzf "$SPL_FILE" | grep -E "$PROHIBITED_REGEX" || true)"
+if [[ -n "$BAD_HITS" ]]; then
+    echo "  ERROR: .spl contains prohibited paths:"
+    echo "$BAD_HITS" | head -20 | sed 's/^/    /'
+    HIT_COUNT="$(echo "$BAD_HITS" | wc -l | tr -d ' ')"
+    if [[ "$HIT_COUNT" -gt 20 ]]; then
+        echo "    ... and $((HIT_COUNT - 20)) more"
+    fi
+    echo ""
+    echo "  Fix: add an --exclude flag in scripts/package.sh."
+    rm -f "$SPL_FILE"
+    exit 1
+fi
+echo "  No prohibited paths in archive."
 
 # ── Step 5: Generate checksum ─────────────────────────────────────────
 echo ""
