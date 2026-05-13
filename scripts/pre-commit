@@ -128,6 +128,38 @@ if [ -n "$BIN_PY_FILES" ]; then
     done
 fi
 
+# ── 9. Build / urlArgs cache-bust sync guard ──
+# Background: Splunk serves /static/@<server-hash>/... with a 1-year
+# Cache-Control. Bumping `app.conf build` does NOT invalidate browser
+# cache; users keep running stale JS until they hard-refresh. The
+# project uses a RequireJS `urlArgs: "_b=N"` cache-bust in
+# whitelist_manager.js that MUST match `app.conf build`. The pairing
+# was previously enforced only as a CLAUDE.md prose maintenance rule;
+# this guard makes it mechanical (build 660, 2026-05-14).
+#
+# Trigger: when app.conf OR the entry-point JS is staged.
+BUILD_SYNC_TRIGGER=$(echo "$STAGED" | grep -E '^default/app\.conf$|^appserver/static/whitelist_manager\.js$' || true)
+if [ -n "$BUILD_SYNC_TRIGGER" ]; then
+    REPO_ROOT=$(git rev-parse --show-toplevel)
+    APP_CONF_BUILD=$(grep '^build' "$REPO_ROOT/default/app.conf" | head -1 | sed -E 's/^build[[:space:]]*=[[:space:]]*([0-9]+).*/\1/')
+    JS_URLARGS_BUILD=$(grep -oE 'urlArgs:[[:space:]]*"_b=[0-9]+"' "$REPO_ROOT/appserver/static/whitelist_manager.js" | head -1 | sed -E 's/.*_b=([0-9]+).*/\1/')
+    if [ -z "$APP_CONF_BUILD" ]; then
+        echo -e "${RED}BLOCKED:${NC} could not parse build from default/app.conf"
+        echo "  Expected a line like 'build = 660'."
+        ERRORS=$((ERRORS + 1))
+    elif [ -z "$JS_URLARGS_BUILD" ]; then
+        echo -e "${RED}BLOCKED:${NC} could not parse urlArgs from appserver/static/whitelist_manager.js"
+        echo "  Expected a line like: require.config({ urlArgs: \"_b=660\" });"
+        ERRORS=$((ERRORS + 1))
+    elif [ "$APP_CONF_BUILD" != "$JS_URLARGS_BUILD" ]; then
+        echo -e "${RED}BLOCKED:${NC} build mismatch — app.conf build=$APP_CONF_BUILD but whitelist_manager.js _b=$JS_URLARGS_BUILD"
+        echo "  Splunk's 1-year static-asset cache means bumping app.conf:build"
+        echo "  without bumping whitelist_manager.js:_b=N ships stale JS to users."
+        echo "  Fix: set both to the same number (the new build value)."
+        ERRORS=$((ERRORS + 1))
+    fi
+fi
+
 # ── Result ──
 if [ $ERRORS -gt 0 ]; then
     echo ""

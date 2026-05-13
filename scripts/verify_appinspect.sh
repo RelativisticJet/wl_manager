@@ -1,25 +1,38 @@
 #!/usr/bin/env bash
 #
 # ═══════════════════════════════════════════════════════════════════════
-# AppInspect Validation Wrapper — Standard + Cloud Tag Sets
+# AppInspect Validation Wrapper — Docker-based, JSON-parsed
 # ═══════════════════════════════════════════════════════════════════════
 #
 # This script:
-#   1. Builds the .spl file (via package.sh)
-#   2. Runs splunk-appinspect with configurable tag sets
-#   3. Parses output for high/critical/warning counts
-#   4. Reports status and exits appropriately
+#   1. Builds the .spl file (via package.sh) if missing
+#   2. Builds the wl-appinspect Docker image (one-time, ~30s) if missing
+#   3. Runs splunk-appinspect inside the container with the chosen profile
+#   4. Parses JSON output and reports counts per result class
+#   5. Exits non-zero if any error/failure/future_failure is found
 #
 # Usage:
-#   bash scripts/verify_appinspect.sh                # default: standard tag set
-#   bash scripts/verify_appinspect.sh --standard     # explicit standard
-#   bash scripts/verify_appinspect.sh --cloud        # cloud-only tag set
-#   bash scripts/verify_appinspect.sh --both         # standard + cloud (exhaustive)
+#   bash scripts/verify_appinspect.sh                # default: both profiles
+#   bash scripts/verify_appinspect.sh --standalone   # on-prem (Standalone) cert
+#   bash scripts/verify_appinspect.sh --cloud        # Splunk Cloud cert
+#   bash scripts/verify_appinspect.sh --both         # both (default)
+#
+# Tag-set names:
+#   "standalone" maps to the local CLI's default (no included-tags filter,
+#   ~249 checks). This is the AppInspect Cloud API's
+#   `splunk_platform_standalone` profile — the local CLI just doesn't
+#   expose that exact tag name.
 #
 # Exit codes:
-#   0  = All checks passed (high + critical = 0)
-#   1  = Found high or critical issues, or appinspect not installed
+#   0  = All checks passed (0 errors + 0 failures + 0 future_failures)
+#   1  = One or more errors/failures/future_failures found
+#   2  = Setup error (Docker not running, .spl build failed, etc.)
 #
+# Migration note (2026-05-14):
+#   Replaced previous native-binary path that broke on Python 3.14
+#   (no pre-built wheels for pillow/lxml transitive deps). The Docker
+#   image at .planning/appinspect/Dockerfile pins Python 3.11 + libmagic1
+#   and works portably across dev machines.
 
 set -euo pipefail
 
@@ -27,212 +40,167 @@ set -euo pipefail
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="wl_manager"
 DIST_DIR="$APP_DIR/dist"
+DOCKER_IMAGE="wl-appinspect:latest"
+DOCKERFILE_DIR="$APP_DIR/.planning/appinspect"
+OUTPUT_DIR="$APP_DIR/.planning/appinspect"
 
-# Parse command-line arguments
-TAG_SET="${1:-standard}"
-case "$TAG_SET" in
-    standard|--standard)
-        TAG_SET="standard"
-        ;;
-    cloud|--cloud)
-        TAG_SET="cloud"
-        ;;
-    both|--both)
-        TAG_SET="both"
-        ;;
-    *)
-        echo "ERROR: Unknown tag set: $TAG_SET"
-        echo "Usage: $0 [standard|cloud|both]"
-        exit 1
-        ;;
-esac
+# ── Parse arguments ───────────────────────────────────────────────────
+PROFILES="both"
+if [[ $# -gt 0 ]]; then
+    case "$1" in
+        --standalone|standalone) PROFILES="standalone" ;;
+        --cloud|cloud)           PROFILES="cloud" ;;
+        --both|both)             PROFILES="both" ;;
+        # Back-compat with older --standard flag (alias for --standalone).
+        --standard|standard)     PROFILES="standalone" ;;
+        -h|--help)
+            sed -n '4,32p' "$0"
+            exit 0
+            ;;
+        *)
+            echo "ERROR: unknown argument: $1"
+            echo "Usage: $0 [--standalone | --cloud | --both]"
+            exit 2
+            ;;
+    esac
+fi
 
-# ── Helper Functions ──────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────
+require_docker() {
+    if ! command -v docker &>/dev/null; then
+        echo "ERROR: docker is not on PATH. Install Docker Desktop or equivalent."
+        exit 2
+    fi
+    if ! docker info &>/dev/null; then
+        echo "ERROR: docker daemon is not responding."
+        echo "  Start Docker Desktop (or 'systemctl start docker') and retry."
+        exit 2
+    fi
+}
 
-check_appinspect_installed() {
-    if ! command -v splunk-appinspect &>/dev/null; then
-        echo "ERROR: splunk-appinspect is not installed."
-        echo ""
-        echo "Install it with:"
-        echo "  pip install splunk-appinspect"
-        echo ""
-        echo "Or install from source:"
-        echo "  https://github.com/splunk/app-inspect"
+ensure_image() {
+    if docker image inspect "$DOCKER_IMAGE" &>/dev/null; then
+        return 0
+    fi
+    echo "Building Docker image $DOCKER_IMAGE (one-time, ~30s)..."
+    MSYS_NO_PATHCONV=1 docker build -t "$DOCKER_IMAGE" "$DOCKERFILE_DIR"
+    echo "  Image ready."
+}
+
+build_spl_if_missing() {
+    if [[ ! -f "$SPL_FILE" ]]; then
+        echo "Building .spl file via scripts/package.sh..."
+        if ! bash "$APP_DIR/scripts/package.sh"; then
+            echo "ERROR: scripts/package.sh failed. Fix errors above and retry."
+            exit 2
+        fi
+    fi
+    if [[ ! -f "$SPL_FILE" ]]; then
+        echo "ERROR: .spl file not found at $SPL_FILE after package.sh"
+        exit 2
+    fi
+}
+
+run_profile() {
+    # $1: profile name ("standalone" or "cloud")
+    # $2: extra args to pass to splunk-appinspect (e.g. "--included-tags cloud")
+    local profile="$1"
+    local extra_args="$2"
+    local out_file="$OUTPUT_DIR/appinspect-${profile}.json"
+
+    echo ""
+    echo "── Running profile: $profile ──"
+    # shellcheck disable=SC2086
+    MSYS_NO_PATHCONV=1 docker run --rm \
+        -v "$DIST_DIR:/spl:ro" \
+        -v "$OUTPUT_DIR:/out" \
+        "$DOCKER_IMAGE" inspect "/spl/$(basename "$SPL_FILE")" \
+            --mode test --data-format json \
+            --output-file "/out/appinspect-${profile}.json" \
+            $extra_args 2>&1 | tail -12
+    echo "Report: $out_file"
+}
+
+parse_and_report() {
+    # $1: profile name; emits per-class counts, returns 1 if any
+    # error/failure/future_failure is found.
+    local profile="$1"
+    local out_file="$OUTPUT_DIR/appinspect-${profile}.json"
+    if [[ ! -f "$out_file" ]]; then
+        echo "ERROR: report file missing: $out_file"
         return 1
     fi
-    return 0
+    # Use the same Docker image's Python to parse — guarantees the script
+    # works even if the host has no python3 (or a too-new Python like 3.14).
+    MSYS_NO_PATHCONV=1 docker run --rm \
+        -v "$OUTPUT_DIR:/out:ro" \
+        --entrypoint python \
+        "$DOCKER_IMAGE" -c "
+import json,sys
+d = json.load(open('/out/appinspect-${profile}.json'))
+s = d.get('summary', {})
+err  = s.get('error', 0)
+fail = s.get('failure', 0)
+ff   = s.get('future_failure', 0)
+warn = s.get('warning', 0)
+ok   = s.get('success', 0)
+na   = s.get('not_applicable', 0)
+sk   = s.get('skipped', 0)
+print('  errors:         {}'.format(err))
+print('  failures:       {}'.format(fail))
+print('  future_failures:{}'.format(ff))
+print('  warnings:       {}'.format(warn))
+print('  success:        {}'.format(ok))
+print('  not_applicable: {}'.format(na))
+print('  skipped:        {}'.format(sk))
+blocking = err + fail + ff
+sys.exit(1 if blocking > 0 else 0)
+"
 }
 
-run_appinspect() {
-    local spl_file="$1"
-    local tags="$2"
-    local output_file="$3"
-
-    # Run appinspect with specified tag set
-    if [[ "$tags" == "standard" ]]; then
-        splunk-appinspect inspect "$spl_file" \
-            --tag-blacklist other,splunk_appinspect \
-            > "$output_file" 2>&1 || true
-    elif [[ "$tags" == "cloud" ]]; then
-        splunk-appinspect inspect "$spl_file" \
-            --included-tags cloud \
-            --tag-blacklist other,splunk_appinspect \
-            > "$output_file" 2>&1 || true
-    fi
-}
-
-parse_appinspect_output() {
-    local output_file="$1"
-
-    # Extract counts from output
-    local high_count=0
-    local critical_count=0
-    local warning_count=0
-
-    # Parse output for issue counts
-    # AppInspect output format varies, but typically:
-    # - Lines with "high" issues start with "high:"
-    # - Lines with "critical" issues start with "critical:"
-    # - Lines with "warning" issues start with "warning:"
-
-    if grep -q "^high:" "$output_file" 2>/dev/null; then
-        high_count=$(grep "^high:" "$output_file" | wc -l)
-    fi
-
-    if grep -q "^critical:" "$output_file" 2>/dev/null; then
-        critical_count=$(grep "^critical:" "$output_file" | wc -l)
-    fi
-
-    if grep -q "^warning:" "$output_file" 2>/dev/null; then
-        warning_count=$(grep "^warning:" "$output_file" | wc -l)
-    fi
-
-    echo "$high_count:$critical_count:$warning_count"
-}
-
-format_report() {
-    local spl_file="$1"
-    local tag_set="$2"
-    local high="$3"
-    local critical="$4"
-    local warning="$5"
-    local output_file="$6"
-
-    echo ""
-    echo "=== AppInspect Validation ($tag_set) ==="
-    echo "File: $spl_file"
-    echo "High: $high, Critical: $critical, Warnings: $warning"
-
-    if [[ $((high + critical)) -eq 0 ]]; then
-        echo "Status: PASS"
-    else
-        echo "Status: FAIL"
-        echo ""
-        echo "Issues found (see details below):"
-        cat "$output_file" | grep -E "^(high|critical):" || true
-    fi
-    echo ""
-}
-
-# ── Main Execution ────────────────────────────────────────────────────
-
+# ── Main ──────────────────────────────────────────────────────────────
 echo ""
 echo "═══════════════════════════════════════════════════════════════════"
-echo "  AppInspect Validation ($TAG_SET tag set)"
+echo "  AppInspect Validation (profile: $PROFILES)"
 echo "═══════════════════════════════════════════════════════════════════"
-echo ""
 
-# Step 1: Check if appinspect is installed
-echo "Checking for splunk-appinspect..."
-if ! check_appinspect_installed; then
-    exit 1
-fi
-echo "  Found: $(splunk-appinspect --version 2>/dev/null || echo 'unknown version')"
-echo ""
-
-# Step 2: Get version from app.conf
 VERSION=$(grep "^version" "$APP_DIR/default/app.conf" | head -1 | cut -d= -f2 | tr -d ' ')
 SPL_FILE="$DIST_DIR/${APP_NAME}-${VERSION}.spl"
 
-# Step 3: Build the .spl file (if needed)
-if [[ ! -f "$SPL_FILE" ]]; then
-    echo "Building .spl file..."
-    if ! bash "$APP_DIR/scripts/package.sh"; then
-        echo "ERROR: Failed to package app. Fix errors and try again."
-        exit 1
-    fi
+require_docker
+ensure_image
+mkdir -p "$OUTPUT_DIR"
+build_spl_if_missing
+echo "  .spl: $SPL_FILE"
+
+OVERALL_RC=0
+
+run_one() {
+    # $1: profile name; $2: extra appinspect args
+    run_profile "$1" "$2"
     echo ""
+    echo "Summary ($1):"
+    if ! parse_and_report "$1"; then
+        OVERALL_RC=1
+        echo "  Status: FAIL (one or more error/failure/future_failure)"
+    else
+        echo "  Status: PASS"
+    fi
+}
+
+if [[ "$PROFILES" == "standalone" || "$PROFILES" == "both" ]]; then
+    run_one "standalone" ""
 fi
 
-if [[ ! -f "$SPL_FILE" ]]; then
-    echo "ERROR: .spl file not found at $SPL_FILE"
-    exit 1
+if [[ "$PROFILES" == "cloud" || "$PROFILES" == "both" ]]; then
+    run_one "cloud" "--included-tags cloud"
 fi
 
-# Step 4: Run appinspect validation
-echo "Running AppInspect validation..."
 echo ""
-
-if [[ "$TAG_SET" == "both" ]]; then
-    # Run both standard and cloud tag sets
-    TEMP_STANDARD=$(mktemp)
-    TEMP_CLOUD=$(mktemp)
-
-    trap "rm -f '$TEMP_STANDARD' '$TEMP_CLOUD'" EXIT
-
-    # Standard tag set
-    echo "Step 1/2: Running standard tag set..."
-    run_appinspect "$SPL_FILE" "standard" "$TEMP_STANDARD"
-    COUNTS_STANDARD=$(parse_appinspect_output "$TEMP_STANDARD")
-    IFS=":" read -r STANDARD_HIGH STANDARD_CRITICAL STANDARD_WARNING <<<"$COUNTS_STANDARD"
-
-    echo ""
-    format_report "$SPL_FILE" "standard" "$STANDARD_HIGH" "$STANDARD_CRITICAL" "$STANDARD_WARNING" "$TEMP_STANDARD"
-
-    # Cloud tag set
-    echo "Step 2/2: Running cloud tag set..."
-    run_appinspect "$SPL_FILE" "cloud" "$TEMP_CLOUD"
-    COUNTS_CLOUD=$(parse_appinspect_output "$TEMP_CLOUD")
-    IFS=":" read -r CLOUD_HIGH CLOUD_CRITICAL CLOUD_WARNING <<<"$COUNTS_CLOUD"
-
-    echo ""
-    format_report "$SPL_FILE" "cloud" "$CLOUD_HIGH" "$CLOUD_CRITICAL" "$CLOUD_WARNING" "$TEMP_CLOUD"
-
-    # Overall status
-    echo "═══════════════════════════════════════════════════════════════"
-    if [[ $((STANDARD_HIGH + STANDARD_CRITICAL)) -eq 0 ]]; then
-        echo "OVERALL STATUS: PASS (standard tag set clean)"
-    else
-        echo "OVERALL STATUS: FAIL (standard tag set has issues)"
-    fi
-    echo "═══════════════════════════════════════════════════════════════"
-    echo ""
-
-    # Exit with failure if standard tag set has issues
-    [[ $((STANDARD_HIGH + STANDARD_CRITICAL)) -eq 0 ]]
-    exit $?
-
+if [[ "$OVERALL_RC" -eq 0 ]]; then
+    echo "AppInspect: PASS (no errors, failures, or future_failures)"
 else
-    # Run single tag set (standard or cloud)
-    TEMP_OUTPUT=$(mktemp)
-    trap "rm -f '$TEMP_OUTPUT'" EXIT
-
-    run_appinspect "$SPL_FILE" "$TAG_SET" "$TEMP_OUTPUT"
-    COUNTS=$(parse_appinspect_output "$TEMP_OUTPUT")
-    IFS=":" read -r HIGH CRITICAL WARNING <<<"$COUNTS"
-
-    format_report "$SPL_FILE" "$TAG_SET" "$HIGH" "$CRITICAL" "$WARNING" "$TEMP_OUTPUT"
-
-    echo "═══════════════════════════════════════════════════════════════"
-    if [[ $((HIGH + CRITICAL)) -eq 0 ]]; then
-        echo "OVERALL STATUS: PASS"
-    else
-        echo "OVERALL STATUS: FAIL"
-    fi
-    echo "═══════════════════════════════════════════════════════════════"
-    echo ""
-
-    # Exit with failure if issues found
-    [[ $((HIGH + CRITICAL)) -eq 0 ]]
-    exit $?
+    echo "AppInspect: FAIL — see the per-profile JSON reports in"
+    echo "  $OUTPUT_DIR for details."
 fi
+exit "$OVERALL_RC"
