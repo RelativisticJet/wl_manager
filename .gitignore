@@ -1,5 +1,8 @@
-# Claude temporary files
-.claude/
+# Claude temporary files (per-developer; exception below for shared QA library)
+.claude/*
+# Exception: project-local QA failure-mode library is shared with collaborators
+# (see CLAUDE.md "Synthetic Fixtures" and ~/.claude/docs/SECOND_PASS_REVIEW.md)
+!.claude/qa-failure-modes.md
 .mcp.json
 .superpowers/
 
