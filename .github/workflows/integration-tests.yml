@@ -177,6 +177,17 @@ jobs:
           mount | grep -E "$(pwd|head -c 20)" | head -3
           which setfacl 2>&1
           getfacl lookups/DR130_priv_escalation.csv 2>&1 | head -10
+          echo "--- getfacl -R lookups/_versions/ (QA #8 FIX-FIRST diagnostic) ---"
+          # This answers: does _versions/ subdir inherit the default ACL
+          # we set on lookups/, or was it created post-setfacl without
+          # the d:u:1001 / d:u:41812 inheritance? If the d: entries are
+          # missing here, re-apply-setfacl after setup_test_env.sh is the
+          # evidence-backed next step. If they ARE present but tar still
+          # fails, the issue is file-level (Splunk chmod-clearing ACLs or
+          # cross-fs atomic rename) and we pivot to the fixture refactor.
+          getfacl -R lookups/_versions/ 2>&1 | head -40
+          echo "--- ls -la lookups/_versions/ (first 8) ---"
+          ls -la lookups/_versions/ 2>&1 | head -8
           echo "=== CONTAINER (as splunk) ==="
           docker exec wl_manager_test id 2>&1
           docker exec wl_manager_test ls -la /opt/splunk/etc/apps/wl_manager/lookups/ 2>&1 | head -14
