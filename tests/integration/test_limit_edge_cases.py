@@ -238,9 +238,22 @@ class TestAnalystLimitResetTime:
     ])
     def test_invalid_times_silently_rejected(
             self, container_state, container_curl, invalid):
-        _post(container_curl, "set_daily_limits", {
+        # Establish a clean baseline ("08:00") before sending the
+        # invalid value. If the baseline itself can't be set
+        # (rate-limit hit, container state pollution, etc.), this
+        # test would silently assert against DEFAULT_LIMITS state
+        # and report "invalid time X not rejected — got '00:00'"
+        # which is a misleading message: it's not that the
+        # validator failed, it's that the prior call failed.
+        # Mirror the same skip-on-error guard the sibling
+        # `test_valid_times_accepted` uses.
+        baseline_body = _post(container_curl, "set_daily_limits", {
             "limits": {"reset_time_utc": "08:00"}},
             user="superadmin1")
+        if "error" in baseline_body:
+            pytest.skip(
+                "baseline set_daily_limits failed: {}".format(
+                    baseline_body))
         _post(container_curl, "set_daily_limits", {
             "limits": {"reset_time_utc": invalid}},
             user="superadmin1")

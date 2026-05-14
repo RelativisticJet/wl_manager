@@ -84,10 +84,18 @@ KV_ENDPOINT = (
 
 # Two consecutive FIM cycles + read latency. The script runs every
 # 15s; worst case we set up state right after a cycle started and
-# need to wait nearly a full cycle. Add a 5s buffer so flaky timing
-# (slow indexing, network) doesn't bite. A test that waits 35s once
-# per assertion is fine — these are -m slow tests.
-FIM_CYCLE_WAIT_SECONDS = 35
+# need to wait nearly a full cycle. A test that waits 60s once per
+# assertion is fine — these are -m slow tests.
+#
+# Bumped 35 → 60 (2026-05-14) after CI run 25873757526 showed
+# test_kv_missing_silent_rebuild_from_fs failing with "FIM cycle
+# did not run within 35s". Local dev still completes in well under
+# 35s; the gap is Splunk's indexing latency on shared CI runners,
+# which can spike to 15-20s under contention (vs sub-second locally).
+# Budget: 15s cycle interval + 20s worst-case index latency + 2s
+# poll interval + 23s slack = 60s. Same pattern as lib_chaos.py's
+# `splunkd readiness poll` 10→30 bump for the same root cause.
+FIM_CYCLE_WAIT_SECONDS = 60
 
 
 def _docker_run(*args: str,
