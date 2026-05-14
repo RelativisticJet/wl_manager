@@ -64,7 +64,7 @@ CLAUDE.md split. Purely internal; no external dependencies.
 | # | Task | Acceptance | Est. |
 |---|------|------------|------|
 | 0.0 | **De-risk Phase 1 FIRST** — install `splunk-appinspect` locally (`pip install splunk-appinspect`), run against the current `.spl` with both `cloud` and `splunk-platform-standalone` profiles, record findings. Decides whether Phase 1 is "trivial" or "multi-week refactor" BEFORE committing the rest of Phase 0. If findings are catastrophic, escalate to user before continuing. | Findings summary written; Phase 1 effort-class estimated | 30-60 min |
-| 0.1 ✅ 2026-05-14 (commit 7d4765a) | Fix `validate-and-package.yml` — bump `actions/upload-artifact` v3→v4 (also `actions/checkout` v3→v4 same file, no other workflow still on v3) | Workflow green on next push | 15 min |
+| 0.1 ✅ 2026-05-14 (commit 7d4765a) | Fix `validate-and-package.yml` — bump `actions/upload-artifact` v3→v4 (also `actions/checkout` v3→v4 same file; audited all 10 workflows in `.github/workflows/` — none of the other 9 still on v3) | Workflow green on next push | 15 min |
 | 0.2 | Fix `ci.yml` + `integration-tests.yml` pytest/Python mismatch (pytest 9.x requires Python ≥3.10; CI uses 3.9) | Both workflows green. Decision documented: cap pytest at ≤8.4.x OR upgrade workflow Python to 3.10+ | 30 min |
 | 0.3 | Fix `e2e-smoke.yml` Playwright `undefined` env var failure (Windows binary path appears on Linux runner) | Workflow green | 1-2 hr |
 | 0.4 | Verify `a11y-audit` / `zap-baseline` / `pip-audit` workflows fire on schedule | At least one successful recent run of each | 10 min |
