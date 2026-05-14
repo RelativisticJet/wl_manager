@@ -214,7 +214,7 @@ class TestApprovalFlowNotificationExtra:
             container_curl, csv_file, rule_name,
             comment="extra-test-new_request")
         if "error" in body:
-            pytest.skip(body)
+            pytest.skip(str(body))
         request_id = body["request_id"]
 
         notifs = _get_notifications(container_curl, user="wladmin1")
@@ -289,7 +289,7 @@ class TestApprovalFlowNotificationExtra:
             container_curl, csv_file, rule_name,
             comment="extra-test-approved {}".format(marker))
         if "error" in sub:
-            pytest.skip(sub)
+            pytest.skip(str(sub))
         request_id = sub["request_id"]
 
         appr = _post(container_curl, "process_approval", {
@@ -402,7 +402,7 @@ class TestNotificationReadState:
             container_curl, csv_file, rule_name,
             comment="unread-state-test")
         if "error" in sub:
-            pytest.skip(sub)
+            pytest.skip(str(sub))
         request_id = sub["request_id"]
 
         # Fetch as wladmin1 (the recipient of new_request notif)
@@ -425,7 +425,7 @@ class TestNotificationReadState:
             container_curl, csv_file, rule_name,
             comment="mark-read-test")
         if "error" in sub:
-            pytest.skip(sub)
+            pytest.skip(str(sub))
         request_id = sub["request_id"]
 
         # Mark all as read

@@ -154,7 +154,7 @@ class TestAdminPermissionToggles:
             "limits": {"allow_admin_reset_usage": True},
         })
         if "error" in body:
-            pytest.skip(body)
+            pytest.skip(str(body))
         cfg = _get_admin_limits(container_curl)
         admin = cfg.get("limits", cfg.get("admin_limits", cfg))
         assert admin["allow_admin_reset_usage"] is True
@@ -186,7 +186,7 @@ class TestAdminLimitScheduleRanges:
             "limits": {"reset_day_of_year": 366},
         })
         if "error" in body:
-            pytest.skip(body)
+            pytest.skip(str(body))
         cfg = _get_admin_limits(container_curl)
         admin = cfg.get("limits", cfg.get("admin_limits", cfg))
         assert admin["reset_day_of_year"] == 366, \
@@ -226,7 +226,7 @@ class TestAdminLimitFrequencyAndTime:
             "limits": {"reset_frequency": "yearly"},
         })
         if "error" in body:
-            pytest.skip(body)
+            pytest.skip(str(body))
         cfg = _get_admin_limits(container_curl)
         admin = cfg.get("limits", cfg.get("admin_limits", cfg))
         assert admin["reset_frequency"] == "yearly"
