@@ -357,6 +357,25 @@ def _restore_canonical_demo_state(docker_available, request):
             f"warning: canonical state restore (docker cp) "
             f"returned {cp_proc.returncode}: {cp_proc.stderr}\n")
         return
+    # Ensure runtime-state subdirectories exist inside the container.
+    # `lookups/_versions/` is .gitignored (its contents are runtime
+    # state — version snapshots, FIM baseline, cooldown markers — that
+    # don't belong in version control), so on a fresh CI checkout the
+    # directory doesn't exist on the host and `docker cp` above copies
+    # nothing for it. Without `_versions/` present, the handler can't
+    # write version snapshots, FIM can't write its baseline, and
+    # several tests fail with "directory does not exist" cascades.
+    # `_trash/` is partially git-tracked (specific items inside) so it
+    # usually exists on checkout, but ensure here for symmetry and
+    # robustness against an empty-`_trash/` edge case.
+    subprocess.run(  # noqa: S603 — list-form, no shell
+        ["docker", "exec", "-u", "0", CONTAINER_NAME,
+         "mkdir", "-p",
+         f"{APP_PATH}/{LOOKUPS_REL}/_versions",
+         f"{APP_PATH}/{LOOKUPS_REL}/_trash"],
+        capture_output=True, timeout=10,
+        check=False, env=env,
+    )
     # Chown so Splunk can read/write the restored files
     subprocess.run(  # noqa: S603 — list-form, no shell
         ["docker", "exec", "-u", "0", CONTAINER_NAME,
