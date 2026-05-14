@@ -69,25 +69,30 @@ jobs:
         # initial admin password set; ~30-60s on warm runners.
         run: docker compose up -d
 
-      - name: Fix bind-mount permissions for Splunk user
-        # On Linux runners (ubuntu-latest), bind mounts preserve
-        # the host UID/GID. The repo files are owned by the runner
-        # user; Splunk runs as `splunk` (UID 41812) inside the
-        # container and can't write to lookups/ until we chown.
-        # On Windows/Docker Desktop this isn't required (implicit
-        # user mapping handles it) but it's a no-op there too if
-        # chown is run inside the container as root.
-        # Ring 2 Day 7 session-level state restore depends on
-        # writable lookups/, so this MUST run before the test
-        # phase.
+      - name: Make bind-mount paths world-rw (splunk + runner UID coexistence)
+        # On Linux runners (ubuntu-latest), bind mounts preserve host
+        # UID/GID. Splunk runs as `splunk` (UID 41812) inside the
+        # container. The repo files are owned by the runner user (a
+        # different UID). They need to coexist.
+        #
+        # Previous approach (chown inside container) was wrong: a
+        # `docker exec -u 0 ... chown -R splunk:splunk` propagates
+        # THROUGH the bind mount back to the host, so the host files
+        # become owned by UID 41812 too. The runner user (a normal
+        # GHA user) then can't read its own checked-out files, and
+        # `docker cp` calls in tests fail with `permission denied`
+        # when tar'ing the directory to ship to the container. This
+        # produced 220 teardown errors in Ring 3 CI runs.
+        #
+        # Fix: chmod -R a+rwX on the host paths so both the splunk
+        # container user AND the runner can read/write. `X` means
+        # execute-only-on-dirs-or-already-executable so we don't
+        # accidentally mark every .py file as executable. We `sudo`
+        # because the chmod recurses into directories that may be
+        # owned by `root` after the prior session's chown attempts.
         run: |
-          docker exec -u 0 wl_manager_test \
-            chown -R splunk:splunk \
-              /opt/splunk/etc/apps/wl_manager/bin \
-              /opt/splunk/etc/apps/wl_manager/default \
-              /opt/splunk/etc/apps/wl_manager/lookups \
-              /opt/splunk/etc/apps/wl_manager/appserver \
-              /opt/splunk/etc/apps/wl_manager/metadata
+          sudo chmod -R a+rwX \
+            bin default lookups appserver metadata
 
       - name: Wait for Splunk + provision test users/roles
         # setup_test_env.sh polls /services/server/info until 200,
