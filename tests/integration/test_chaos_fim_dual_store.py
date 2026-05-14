@@ -138,23 +138,29 @@ def test_kv_missing_silent_rebuild_from_fs(container_curl):
     deleted = delete_kv_baseline(container_curl)
     assert deleted, "delete_kv_baseline returned False"
 
-    # Wait for the next FIM cycle to run
-    cycle_ran, events = wait_for_next_fim_cycle(
-        container_curl,
-        check_for_action=None,
-        timeout=FIM_CYCLE_WAIT_SECONDS,
-    )
-    assert cycle_ran, (
-        "FIM cycle did not run within "
-        f"{FIM_CYCLE_WAIT_SECONDS}s — either the scripted input "
-        "is disabled or splunkd is unhealthy")
-
-    # Assert: KV was silently rebuilt
-    post_kv = read_kv_baseline(container_curl)
+    # Poll for the KV record to reappear. The silent-rebuild path
+    # at bin/wl_fim.py:760-776 handles kv_status=="missing" +
+    # fs_status=="ok" by rewriting KV from FS but DOES NOT call
+    # _emit() — so wait_for_next_fim_cycle(check_for_action=None)
+    # is the wrong signal here: it polls for any wl_fim event,
+    # but the path under test is contractually event-less. The
+    # actual observable signal IS the KV record reappearing.
+    # (Previous attempt with timeout bumps 35→60 in commit ccb37fc
+    # failed because it treated this as a timing issue when the
+    # real cause is structural: polling for the wrong signal.)
+    import time as _time
+    deadline = _time.monotonic() + FIM_CYCLE_WAIT_SECONDS
+    post_kv = None
+    while _time.monotonic() < deadline:
+        post_kv = read_kv_baseline(container_curl)
+        if post_kv is not None:
+            break
+        _time.sleep(2)
     assert post_kv is not None, (
-        "KV record was not rebuilt from FS after cycle ran — "
-        "this is a regression in the rebuild-from-FS path "
-        "([bin/wl_fim.py:776])")
+        "KV record was not rebuilt from FS within "
+        f"{FIM_CYCLE_WAIT_SECONDS}s. Either the silent-rebuild "
+        "path at bin/wl_fim.py:760-776 regressed, the scripted "
+        "input is disabled, or splunkd is unhealthy.")
 
     # Assert: NO divergence alert fired (silent rebuild contract)
     divergence_events = query_fim_events(
