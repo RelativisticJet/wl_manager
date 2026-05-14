@@ -49,7 +49,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.11"
 
       - name: Install Python deps
         # Pinned to the same versions as ci.yml's unit-tests job.
