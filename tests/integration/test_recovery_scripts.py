@@ -445,7 +445,21 @@ class TestRecoveryLogContract:
         """Every recovery log entry's action must be a documented
         recovery surface. A new action means we shipped a new
         recovery script without updating the inventory in this
-        test (or the dashboard panel that surfaces these events)."""
+        test (or the dashboard panel that surfaces these events).
+
+        Filters out audit-POST fallback entries (those with
+        ``audit_post_failed=true``). The recovery log doubles as a
+        safety net for any audit event whose authenticated REST
+        path fails — e.g. ``wl_expiration_cleanup`` falling back
+        when its stdin session key arrives empty during a splunkd
+        restart race (see ``bin/wl_expiration_cleanup.py
+        :_append_recovery_log``). Those fallback entries carry
+        original audit actions like ``auto_removed`` and are NOT
+        first-class recovery surfaces. Conflating them with the
+        deliberate destructive-action trail (emergency_unlock,
+        reset_cooldowns, etc.) would falsely flag every
+        intermittent audit-POST failure as a contract drift.
+        """
         # Trigger a known action so the log isn't empty after
         # snapshot/restore.
         _post_action(
@@ -462,6 +476,10 @@ class TestRecoveryLogContract:
         # Recent 20 entries — older ones may be from now-removed scripts
         unknown = []
         for entry in lines[-20:]:
+            # Skip audit-POST fallback entries — not first-class
+            # recovery surfaces (see docstring above).
+            if entry.get("audit_post_failed"):
+                continue
             action = entry.get("action", "")
             if action and action not in self.KNOWN_ACTIONS:
                 unknown.append(action)
