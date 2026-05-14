@@ -98,6 +98,46 @@ jobs:
         # multiple invocations.
         run: bash tests/e2e/setup_test_env.sh wl_manager_test
 
+      - name: DIAGNOSTIC — permission/ownership state right before pytest
+        # Added 2026-05-14 to break a 4-deep hypothesis loop on the
+        # "220 teardown errors" failure mode. Captures the EXACT
+        # state pytest sees at the moment the fixture's docker cp
+        # starts failing with `tar: permission denied`. Compare host
+        # vs container views; compare what runner sees vs what
+        # splunk sees. Remove this step once the root cause is
+        # identified and fixed.
+        if: always()
+        run: |
+          set -x
+          echo "=== HOST ==="
+          id
+          uname -a
+          umask
+          echo "--- host: ls -la lookups/ (first 12) ---"
+          ls -la lookups/ | head -12
+          echo "--- host: stat one specific failing file ---"
+          stat lookups/DR130_priv_escalation.csv || true
+          echo "--- host: can the runner cat that file? ---"
+          head -c 50 lookups/DR130_priv_escalation.csv; echo
+          echo "--- host: try tar (the operation that fails) ---"
+          tar -czf /tmp/host_probe.tgz lookups/ 2>&1 | head -10 || true
+          ls -la /tmp/host_probe.tgz 2>&1 | head -1 || true
+          echo "=== DOCKER ENGINE ==="
+          docker version --format 'Server: {{.Server.Version}}' 2>&1
+          docker info 2>&1 | grep -iE "Docker Root Dir|userns|rootless|Storage Driver|Cgroup" | head -10
+          echo "=== CONTAINER (as root) ==="
+          docker exec -u 0 wl_manager_test id splunk 2>&1
+          docker exec -u 0 wl_manager_test ls -la /opt/splunk/etc/apps/wl_manager/lookups/ 2>&1 | head -12
+          docker exec -u 0 wl_manager_test stat /opt/splunk/etc/apps/wl_manager/lookups/DR130_priv_escalation.csv 2>&1 || true
+          echo "=== CONTAINER (as splunk) ==="
+          docker exec wl_manager_test whoami 2>&1
+          docker exec wl_manager_test ls -la /opt/splunk/etc/apps/wl_manager/lookups/ 2>&1 | head -12
+          docker exec wl_manager_test cat /opt/splunk/etc/apps/wl_manager/lookups/DR130_priv_escalation.csv 2>&1 | head -c 50 || true
+          echo
+          echo "=== DOCKER CP DRY-RUN (the operation that fails inside the fixture) ==="
+          docker cp lookups/. wl_manager_test:/tmp/probe_lookups/ 2>&1 | head -10 || true
+          docker exec -u 0 wl_manager_test ls -la /tmp/probe_lookups/ 2>&1 | head -5 || true
+
       - name: Run integration suite
         # The session-level _restore_canonical_demo_state fixture
         # (Ring 2 Day 7) copies host lookups/ into the container
