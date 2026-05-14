@@ -443,16 +443,21 @@ def test_set_limit_config_valid(mock_limit_config):
     """Test: valid config written successfully.
 
     set_limit_config delegates to write_limit_config which uses
-    fcntl directly (not a file_lock context manager). We only need
-    to mock open + os.replace to keep the test off-disk.
+    fcntl directly (not a file_lock context manager). We mock
+    open + os.replace to keep the test off-disk, AND patch
+    wl_limits.fcntl to a MagicMock so the inline flock calls do
+    not attempt to lock a Mock file descriptor. The latter is
+    Python-3.11-mandatory: fcntl.flock rejects non-int fds with
+    TypeError on 3.11+, while 3.9 happened to be more lenient.
     """
     with patch('wl_limits._get_limit_config_path',
                return_value="/tmp/limit_config.json"):
         with patch('builtins.open', mock_open()):
             with patch('os.replace'):
-                success, error = wl_limits.set_limit_config(mock_limit_config)
-                assert success is True
-                assert error == ""
+                with patch('wl_limits.fcntl'):
+                    success, error = wl_limits.set_limit_config(mock_limit_config)
+                    assert success is True
+                    assert error == ""
 
 
 @pytest.mark.unit
@@ -654,14 +659,19 @@ def test_write_daily_limits_success():
     """Test: write_daily_limits writes atomically.
 
     The new API returns None (raises on failure). Verify it
-    completes without raising and that open() was called."""
+    completes without raising and that open() was called.
+
+    Also patches wl_limits.fcntl so the inline flock call does
+    not attempt to lock a Mock fd — same Python-3.11-mandatory
+    fix as test_set_limit_config_valid above."""
     test_data = {"2026-04-01": {"jsmith": {"row_removal": 5}}}
     with patch('wl_limits._get_daily_limits_path',
                return_value="/tmp/daily_limits.json"):
         with patch('builtins.open', mock_open()) as mocked_open:
             with patch('os.replace'):
-                wl_limits.write_daily_limits(test_data)
-                assert mocked_open.called
+                with patch('wl_limits.fcntl'):
+                    wl_limits.write_daily_limits(test_data)
+                    assert mocked_open.called
 
 
 @pytest.mark.unit
