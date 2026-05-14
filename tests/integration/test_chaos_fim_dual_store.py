@@ -148,14 +148,13 @@ def test_kv_missing_silent_rebuild_from_fs(container_curl):
     # (Previous attempt with timeout bumps 35→60 in commit ccb37fc
     # failed because it treated this as a timing issue when the
     # real cause is structural: polling for the wrong signal.)
-    import time as _time
-    deadline = _time.monotonic() + FIM_CYCLE_WAIT_SECONDS
+    deadline = time.monotonic() + FIM_CYCLE_WAIT_SECONDS
     post_kv = None
-    while _time.monotonic() < deadline:
+    while time.monotonic() < deadline:
         post_kv = read_kv_baseline(container_curl)
         if post_kv is not None:
             break
-        _time.sleep(2)
+        time.sleep(2)
     assert post_kv is not None, (
         "KV record was not rebuilt from FS within "
         f"{FIM_CYCLE_WAIT_SECONDS}s. Either the silent-rebuild "
