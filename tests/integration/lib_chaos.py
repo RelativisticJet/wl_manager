@@ -265,7 +265,7 @@ def restart_and_wait(timeout: int = 180) -> float:
             "-w", "%{http_code}",
             "-u", f"admin:{DEFAULT_PASSWORD}",
             "https://localhost:8089/services/server/info",
-            timeout=10,
+            timeout=30,
         )
         if (proc.stdout or "").strip() == "200":
             return time.monotonic() - start

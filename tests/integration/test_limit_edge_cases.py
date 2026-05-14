@@ -105,7 +105,7 @@ class TestAnalystLimitBoundaries:
             "limits": {"row_removal": 100},
         }, user="superadmin1")
         if "error" in body:
-            pytest.skip(body)
+            pytest.skip(str(body))
         cfg = _get_analyst_limits(container_curl)
         assert cfg["limits"]["row_removal"] == 100
 
@@ -192,7 +192,7 @@ class TestAnalystLimitFrequency:
             "limits": {"reset_frequency": freq},
         }, user="superadmin1")
         if "error" in body:
-            pytest.skip(body)
+            pytest.skip(str(body))
         cfg = _get_analyst_limits(container_curl)
         assert cfg["limits"]["reset_frequency"] == freq
 
@@ -224,7 +224,7 @@ class TestAnalystLimitResetTime:
             "limits": {"reset_time_utc": valid},
         }, user="superadmin1")
         if "error" in body:
-            pytest.skip(body)
+            pytest.skip(str(body))
         cfg = _get_analyst_limits(container_curl)
         assert cfg["limits"]["reset_time_utc"] == valid
 
@@ -271,7 +271,7 @@ class TestAnalystLimitScheduleRanges:
         body = _post(container_curl, "set_daily_limits", {
             "limits": {key: low}}, user="superadmin1")
         if "error" in body:
-            pytest.skip(body)
+            pytest.skip(str(body))
         cfg = _get_analyst_limits(container_curl)
         assert cfg["limits"][key] == low, \
             "{} low bound {} not accepted, got {}".format(
@@ -288,7 +288,7 @@ class TestAnalystLimitScheduleRanges:
         body = _post(container_curl, "set_daily_limits", {
             "limits": {key: high}}, user="superadmin1")
         if "error" in body:
-            pytest.skip(body)
+            pytest.skip(str(body))
         cfg = _get_analyst_limits(container_curl)
         assert cfg["limits"][key] == high, \
             ("{} high bound {} not accepted, got {}. "
