@@ -89,6 +89,40 @@ jobs:
               /opt/splunk/etc/apps/wl_manager/appserver \
               /opt/splunk/etc/apps/wl_manager/metadata
 
+      - name: Grant ACL access on lookups/ (Splunk + runner UID coexistence)
+        # Phase 0.2.1 — evidence-backed fix for the 220 teardown
+        # errors that persisted across 4 prior hypothesis-driven
+        # commits. The chown step above makes lookups/* owned by
+        # UID 41812 (splunk in container). Splunk then writes new
+        # CSV files with umask 0177 → mode 600. The runner
+        # (uid 1001) can no longer read those, so docker cp fails
+        # on the host-side tar.
+        #
+        # Fix: add a default ACL granting BOTH uid 1001 (runner)
+        # AND uid 41812 (splunk) rwX access on lookups/ — including
+        # future files Splunk creates. Default ACLs (-d prefix) are
+        # inherited on file creation by the kernel, independent of
+        # the writing process's umask. setfacl is preinstalled on
+        # ubuntu-latest (`/usr/bin/setfacl` confirmed in diagnostic
+        # round 2, commit 632e4eb). Filesystem is overlay2 atop ext4
+        # which supports ACLs.
+        #
+        # Evidence: commit 632e4eb's diagnostic showed
+        #   `tar: DR130_priv_escalation.csv: Cannot open: Permission
+        #   denied` (exit 2) on 3 mode-600 files (PROBE 1) and the
+        #   full lookups/ tar (PROBE 2). QA #7 verdict: PASS at
+        #   85-95% confidence per question on the evidence chain.
+        #
+        # Scope: lookups/ only. Evidence didn't show permission
+        # issues in bin/, default/, appserver/, metadata/. If a
+        # future run reveals mode-600 writes in those dirs, extend
+        # the ACL scope then; don't preemptively widen.
+        run: |
+          sudo setfacl -R \
+            -m u:1001:rwX -m d:u:1001:rwX \
+            -m u:41812:rwX -m d:u:41812:rwX \
+            lookups
+
       - name: Wait for Splunk + provision test users/roles
         # setup_test_env.sh polls /services/server/info until 200,
         # waits for KV store to reach "ready" status, then creates
