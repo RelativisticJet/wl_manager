@@ -100,43 +100,59 @@ jobs:
 
       - name: DIAGNOSTIC — permission/ownership state right before pytest
         # Added 2026-05-14 to break a 4-deep hypothesis loop on the
-        # "220 teardown errors" failure mode. Captures the EXACT
-        # state pytest sees at the moment the fixture's docker cp
-        # starts failing with `tar: permission denied`. Compare host
-        # vs container views; compare what runner sees vs what
-        # splunk sees. Remove this step once the root cause is
-        # identified and fixed.
+        # "220 teardown errors" failure mode. Round 2 — reordered so
+        # the tar probe runs FIRST (most diagnostic value), and
+        # explicit `set +e` so failures in any single probe do not
+        # halt the rest. Round 1 (91772ad) hit `set -e` (inherited
+        # from `bash -e {0}`) at the `head -c 50` line which exited
+        # before tar could run.
         if: always()
         run: |
-          set -x
-          echo "=== HOST ==="
+          set +e  # disable errexit — let every probe run regardless
+          set -x  # trace each command
+          echo "=== PROBE 1 — does tar (what docker cp uses) fail? ==="
+          # This is the single most important probe. If tar
+          # succeeds, the mode-600 files are NOT what blocks
+          # docker cp; the bug is elsewhere. If tar fails with
+          # permission denied, we have direct evidence.
+          tar czf /tmp/host_tar_probe.tgz -C lookups DR130_priv_escalation.csv DR20_whitelist.csv DR45_whitelist_hosts.csv 2>&1
+          echo "PROBE-1 tar exit: $?"
+          ls -la /tmp/host_tar_probe.tgz 2>&1 | head -1
+          echo
+          echo "=== PROBE 2 — full lookups tar (what _restore_canonical_demo_state does) ==="
+          tar czf /tmp/host_full.tgz lookups/ 2>&1 | head -10
+          echo "PROBE-2 full tar exit: $?"
+          ls -la /tmp/host_full.tgz 2>&1 | head -1
+          echo
+          echo "=== HOST CONTEXT ==="
           id
           uname -a
           umask
-          echo "--- host: ls -la lookups/ (first 12) ---"
-          ls -la lookups/ | head -12
-          echo "--- host: stat one specific failing file ---"
-          stat lookups/DR130_priv_escalation.csv || true
-          echo "--- host: can the runner cat that file? ---"
-          head -c 50 lookups/DR130_priv_escalation.csv; echo
-          echo "--- host: try tar (the operation that fails) ---"
-          tar -czf /tmp/host_probe.tgz lookups/ 2>&1 | head -10 || true
-          ls -la /tmp/host_probe.tgz 2>&1 | head -1 || true
+          echo "--- host: ls -la lookups/ (first 14) ---"
+          ls -la lookups/ | head -14
+          echo "--- host: stat one mode-600 file ---"
+          stat lookups/DR130_priv_escalation.csv 2>&1
+          echo "--- host: can runner read mode-644 file? ---"
+          head -c 50 lookups/DR102_whitelist.csv 2>&1; echo
+          echo "--- host: can runner read mode-600 file? ---"
+          head -c 50 lookups/DR130_priv_escalation.csv 2>&1; echo
           echo "=== DOCKER ENGINE ==="
           docker version --format 'Server: {{.Server.Version}}' 2>&1
-          docker info 2>&1 | grep -iE "Docker Root Dir|userns|rootless|Storage Driver|Cgroup" | head -10
-          echo "=== CONTAINER (as root) ==="
-          docker exec -u 0 wl_manager_test id splunk 2>&1
-          docker exec -u 0 wl_manager_test ls -la /opt/splunk/etc/apps/wl_manager/lookups/ 2>&1 | head -12
-          docker exec -u 0 wl_manager_test stat /opt/splunk/etc/apps/wl_manager/lookups/DR130_priv_escalation.csv 2>&1 || true
+          docker info 2>&1 | grep -iE "Docker Root Dir|userns|rootless|Storage Driver|Cgroup Driver" | head -10
+          echo "=== FILESYSTEM SUPPORTS ACL? ==="
+          mount | grep -E "$(pwd|head -c 20)" | head -3
+          which setfacl 2>&1
+          getfacl lookups/DR130_priv_escalation.csv 2>&1 | head -10
           echo "=== CONTAINER (as splunk) ==="
-          docker exec wl_manager_test whoami 2>&1
-          docker exec wl_manager_test ls -la /opt/splunk/etc/apps/wl_manager/lookups/ 2>&1 | head -12
-          docker exec wl_manager_test cat /opt/splunk/etc/apps/wl_manager/lookups/DR130_priv_escalation.csv 2>&1 | head -c 50 || true
-          echo
-          echo "=== DOCKER CP DRY-RUN (the operation that fails inside the fixture) ==="
-          docker cp lookups/. wl_manager_test:/tmp/probe_lookups/ 2>&1 | head -10 || true
-          docker exec -u 0 wl_manager_test ls -la /tmp/probe_lookups/ 2>&1 | head -5 || true
+          docker exec wl_manager_test id 2>&1
+          docker exec wl_manager_test ls -la /opt/splunk/etc/apps/wl_manager/lookups/ 2>&1 | head -14
+          docker exec wl_manager_test head -c 50 /opt/splunk/etc/apps/wl_manager/lookups/DR130_priv_escalation.csv 2>&1; echo
+          echo "=== DOCKER CP DRY-RUN ==="
+          docker cp lookups/. wl_manager_test:/tmp/probe_lookups/ 2>&1 | head -10
+          echo "PROBE docker cp exit: $?"
+          docker exec -u 0 wl_manager_test ls -la /tmp/probe_lookups/ 2>&1 | head -8
+          # Always exit 0 — this step is diagnostic only, never a gate
+          exit 0
 
       - name: Run integration suite
         # The session-level _restore_canonical_demo_state fixture
