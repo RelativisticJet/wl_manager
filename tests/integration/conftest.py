@@ -488,12 +488,28 @@ def _restore_container_state(host_snapshot: Path,
             raise RuntimeError(
                 f"restore copy-back failed: {cp_proc.stderr}")
 
-    # Wipe lookups/ then untar the snapshot back into APP_PATH.
-    # We use rm -rf on lookups/ specifically — NOT on the whole
+    # Wipe lookups/ contents then untar the snapshot back into
+    # APP_PATH. We target lookups/ specifically — NOT the whole
     # app dir — because default/, bin/, appserver/ are read-only
     # from a test's perspective.
+    #
+    # Use `find -mindepth 1 -delete` rather than `rm -rf` on the
+    # directory itself. In CI (docker-compose.yml line 39),
+    # `./lookups` is bind-mounted to this path. `rm -rf <mount>`
+    # removes the contents successfully but then fails with
+    # exit 1 (EBUSY) when it tries to rmdir the mount point
+    # itself — and `check=True` would propagate that as a
+    # teardown error on every state-mutating test. The
+    # `-mindepth 1` filter keeps `find` from touching the mount
+    # point, so it works identically on bind-mounted and
+    # non-bind-mounted setups.
+    # Evidence trail: getfacl diagnostic 2026-05-14, CI run
+    # 25859367936 stack trace showed `rm -rf /opt/.../lookups`
+    # returning exit 1 inside `_restore_container_state`,
+    # producing 220 teardown errors across the suite.
     _run_in_container(
-        "rm", "-rf", f"{APP_PATH}/{LOOKUPS_REL}",
+        "find", f"{APP_PATH}/{LOOKUPS_REL}",
+        "-mindepth", "1", "-delete",
         check=True, timeout=30,
     )
     _run_in_container(
