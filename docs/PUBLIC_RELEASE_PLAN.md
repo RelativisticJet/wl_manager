@@ -2,8 +2,8 @@
 
 > Plan owner: Oleh (@RelativisticJet)
 > Created: 2026-05-13
-> Status: **Phase 0 — Foundation cleanup (in flight; 9 ✅, 2 PARTIAL, 3 pending of 14 rows)**
-> Updated: 2026-05-15 (Phase 0.5 closed — 3-bucket migration)
+> Status: **Phase 0 — Foundation cleanup (in flight; 10 ✅, 2 PARTIAL, 2 pending of 14 rows)**
+> Updated: 2026-05-15 (Phase 0.10 closed — git history secret-scan clean)
 
 This document is the canonical plan for taking `wl_manager` from
 private-internal to public open-source on GitHub, then to a listed
@@ -75,7 +75,7 @@ CLAUDE.md split. Purely internal; no external dependencies.
 | 0.7 ✅ 2026-05-15 (commit `da5cbc0`) | Copyright holder change from "Security Engineering" to Oleh Bezsonov. Touched `default/app.conf` `[launcher].author` and `docs/Whitelist_Manager_Documentation.md` byline. Deliberately NOT touched: `docs/PUBLIC_RELEASE_PLAN.md` (self-referential historical text) and `docs/Splunk_Admin_Installation_Guide.md` (references a customer-side SOC role named "Security Engineering team", different semantic from this project's authorship). | Single Edit in LICENSE + NOTICE | 5 min |
 | 0.8 ✅ 2026-05-15 (commit `a01aa79`) | `app.conf:version` bump 2.0.0 → 1.0.0-rc1. Both `[launcher].version` and `[id].version` updated (must match per AppInspect 4.2.0). Doc byline in `Whitelist_Manager_Documentation.md` also bumped to match. `[install].build` unchanged — build counters are deploy-cycle monotonic across version bumps. | Version reflects pre-public RC | 5 min |
 | 0.9 | CLAUDE.md backup sync: first push of slim CLAUDE.md to `relativisticjet-dev-knowledge-base/projects/wl_manager/CLAUDE.md` | First sync committed in the backup repo. Sync mechanism documented (manual / cron / git hook — user's preference) | 30 min |
-| 0.10 | `git log --all -p` secret scan to confirm history is publishable | No accidental credentials in history. Or — if found — decision documented (filter-repo vs accept) | 30 min |
+| 0.10 ✅ 2026-05-15 (scan documented in PR review of HEAD) | `git log --all -p` secret scan across all 456 commits / 17 MB of diff history. Scanned 14 high-confidence patterns (PEM private keys, AWS AKIA, AWS secret-access-key assignments, GitHub PAT/OAuth/server/refresh tokens, Slack `xoxX-`, Stripe `sk_live_`/`sk_test_`, 3-segment JWTs, GitLab `glpat-`, npm `npm_`, Splunk HEC-token-UUID) and 5 generic-pattern fallbacks. **High-confidence hits: 0 across all 14 patterns.** Generic-pattern hits: 1 `password="..."` (the `api_call()` helper's default `password="Chang3d!"`, the documented Splunk dev-container admin password) and 3 `token="..."` (Splunk SimpleXML **dashboard-variable** tokens — `general_action_display`, `admin_action_display`, `drilldown_analyst` — Splunk lingo for dashboard state, NOT credentials). No `.env` / `.pem` / `.key` / `.p12` / `.pfx` / `.jks` / `.keystore` files ever committed. **Decision (per Phase 0.10 acceptance footer): ACCEPT — no `git filter-repo` rewrite needed.** `Chang3d!` is a known-dev-credential by design (Splunk Docker container demo password, documented in INSTALLATION + CLAUDE.md, used by 30+ dev/test/docs files); users running the demo container are instructed to change it before any production exposure. | No accidental credentials in history. Or — if found — decision documented (filter-repo vs accept) | 30 min |
 | 0.11 | Close prior-work TODOs that fit Phase 0 scope: `wl_expiration_cleanup.py` 401 investigation, `scripts/package.sh` version-tag drift, Step 3b permanent add to RELEASE_CHECKLIST §8 | Each closed as atomic commit | 2-3 hr |
 
 **Phase 0 acceptance**:
