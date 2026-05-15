@@ -204,6 +204,61 @@ cosign verify-blob \
 **Expected:** verification FAILS with a hash-mismatch error. If it
 passes, the verifier is wired wrong — investigate before shipping.
 
+### Step 3b — Foreign-signature identity-pin test (rigor extension)
+
+Step 3 proves the verifier rejects a tampered artifact. Step 3b
+proves the verifier also rejects a **legitimately-signed artifact
+from a different repo** — i.e., that the identity-regex pin is
+actually load-bearing, not just signature-integrity.
+
+Why this matters: Sigstore signatures are "valid" in two stages —
+(a) the cryptographic signature is well-formed and the cert chain
+is OK, and (b) the cert's identity claim matches the regex pin. A
+broken or absent identity pin would silently accept any
+sigstore-signed artifact from anyone (including an attacker's repo
+running their own GitHub Actions workflow). Step 3 doesn't exercise
+this — it only checks signature integrity.
+
+Pick any other Sigstore-signed artifact + its `.sig` + `.crt`
+(a known-good reference today: a recent `sigstore/cosign` release
+asset, since cosign self-signs via Google OIDC, not GitHub
+Actions). Then attempt to verify it against THIS repo's identity
+regex.
+
+```bash
+# Download a foreign Sigstore-signed asset for the test:
+#   - Reference: sigstore/cosign v2.4.3 .rpm (signed via Google OIDC)
+#   - URL pattern: https://github.com/sigstore/cosign/releases/download/v2.4.3/cosign-2.4.3-1.x86_64.rpm
+#
+# Then attempt verification against THIS repo's identity-regex
+# (NOTE: cosign-release v2.4.1 expects --new-bundle-format=false for
+# pre-v3 signatures; remove flag if upgrading per Phase 2.12).
+cosign verify-blob \
+  --certificate cosign-2.4.3-1.x86_64.rpm.crt \
+  --signature   cosign-2.4.3-1.x86_64.rpm.sig \
+  --certificate-identity-regexp \
+    'https://github.com/RelativisticJet/wl_manager/.github/workflows/release.yml@refs/tags/.*' \
+  --certificate-oidc-issuer \
+    https://token.actions.githubusercontent.com \
+  cosign-2.4.3-1.x86_64.rpm
+```
+
+**Expected:** verification FAILS, but with a DIFFERENT error than
+Step 3. The error must reference the identity-regex mismatch (the
+foreign cert was issued for a `sigstore/cosign` identity, not
+`RelativisticJet/wl_manager`) or the OIDC-issuer mismatch (Google
+vs GitHub Actions). The signature itself IS valid for that foreign
+artifact — what fails is the identity pin.
+
+If this step passes (i.e., the foreign artifact is accepted), the
+identity pin is broken. STOP. Do not ship — any sigstore-signed
+artifact in the world would be accepted as if it came from this
+repo.
+
+**Origin:** added 2026-05-15 as a permanent extension after the
+2026-05-13 dry-run discovered this gap by accident. See "Outcome
+notes" below.
+
 ### Step 4 — Confirm Rekor transparency-log entry
 
 ```bash
@@ -242,8 +297,9 @@ Leaves the repo clean for the real first release tag.
 
 ### Acceptance
 
-- Steps 2+3+4 all produced the expected outcomes (legit verify OK,
-  tamper verify FAIL, Rekor entry confirmed)
+- Steps 2+3+3b+4 all produced the expected outcomes (legit verify OK,
+  tamper verify FAIL on signature, foreign-signature verify FAIL on
+  identity, Rekor entry confirmed)
 - Verifier command published in at least one customer-facing doc
 - Test release deleted
 
