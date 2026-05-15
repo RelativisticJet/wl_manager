@@ -132,6 +132,42 @@ create_user "superadmin1"  -d "roles=admin"     -d "roles=sc_admin"  -d "roles=w
 create_user "superadmin2"  -d "roles=admin"     -d "roles=sc_admin"  -d "roles=wl_editor" -d "roles=wl_superadmin"
 
 echo ""
+echo "--- Seeding limit config (enable analyst create paths + approval routing) ---"
+#
+# The default _limit_config.json has every analyst-creation toggle = False
+# (see DEFAULT_LIMITS in bin/wl_constants.py). E2E tests that exercise the
+# analyst -> approval-queue flow (e.g. LC01/LC02 in
+# test_control_panel_long_content.cjs) need:
+#
+#   allow_analyst_create_rules   -> true  | gate-pass at wl_handler.py L2835
+#   allow_analyst_create_csv     -> true  | gate-pass at wl_handler.py L2771
+#   require_reason_rule_creation -> true  | route to approval queue (returns request_id)
+#   require_reason_csv_creation  -> true  | same for CSV
+#
+# Admin paths bypass these gates at L2747 (create_csv) and L2811
+# (create_rule) -- admins execute directly. So setting these toggles is
+# safe for admin-running tests and necessary for analyst-running tests.
+#
+# Use the production REST action set_daily_limits (superadmin-only per
+# SUPERADMIN_ROLES at wl_handler.py L1395). This is environment
+# provisioning, not synthetic-fixture injection -- the production code
+# path computes the HMAC signature and writes the config atomically.
+# Per CLAUDE.md "Synthetic Fixtures -- Banned" this is the allowed
+# pattern (exercise the real production endpoint).
+CFG_PAYLOAD='{"action":"set_daily_limits","limits":{"allow_analyst_create_rules":true,"allow_analyst_create_csv":true,"require_reason_rule_creation":true,"require_reason_csv_creation":true}}'
+cfg_status=$(MSYS_NO_PATHCONV=1 docker exec "$CONTAINER" \
+    curl -sk -o /dev/null -w "%{http_code}" \
+    -u "superadmin1:$ADMIN_PASS" \
+    -X POST "$BASE_URL/services/custom/wl_manager" \
+    --data-urlencode "payload=$CFG_PAYLOAD" 2>/dev/null)
+if [ "$cfg_status" = "200" ]; then
+    echo "  Limit config seeded (analyst create paths enabled, approval-required)"
+else
+    echo "  Limit config seed failed: HTTP $cfg_status"
+    exit 1
+fi
+
+echo ""
 echo "--- Verifying ---"
 MSYS_NO_PATHCONV=1 docker exec "$CONTAINER" \
     curl -sk -u "$ADMIN_USER:$ADMIN_PASS" \
