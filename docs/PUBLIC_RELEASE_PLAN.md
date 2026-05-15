@@ -2,8 +2,8 @@
 
 > Plan owner: Oleh (@RelativisticJet)
 > Created: 2026-05-13
-> Status: **Phase 0 — Foundation cleanup (not started)**
-> Updated: 2026-05-13 (initial draft)
+> Status: **Phase 0 — Foundation cleanup (in flight; 7 ✅, 2 PARTIAL, 5 pending of 14 rows)**
+> Updated: 2026-05-15 (Phase 0.6 / 0.7 / 0.8 closed)
 
 This document is the canonical plan for taking `wl_manager` from
 private-internal to public open-source on GitHub, then to a listed
@@ -71,9 +71,9 @@ CLAUDE.md split. Purely internal; no external dependencies.
 | 0.3.1 ✅ 2026-05-15 (commit `6ec9bec`) | Fix `e2e-smoke.yml` Smoke 3 (`test_control_panel_long_content.cjs`) red — separate from 0.3's chromium-launch fix. Triage in the original row was "admin settings KV" but the actual gate was the analyst-side toggles (`allow_analyst_create_rules` / `allow_analyst_create_csv`) plus `require_reason_*_creation` to route to the approval queue and return the `request_id` the test expects. **FIX:** commit `6ec9bec` adds a "Seeding limit config" step to `tests/e2e/setup_test_env.sh` that POSTs `set_daily_limits` as `superadmin1` after user provisioning, enabling the four toggles. Admin paths bypass these gates entirely (`wl_handler.py:2747` / `:2811` — admins execute directly), so the change is safe for admin-running tests. **Acceptance met:** workflow run `25922070685` (HEAD `6ec9bec`) — Smoke 1 ✅ + Smoke 2 ✅ + Smoke 3 ✅; workflow run `25922310733` (HEAD `adfaf91`, the prior planning-commit push) — Smoke 1 ✅ + Smoke 2 ✅ + Smoke 3 ✅. Two consecutive green pushes, no flakiness observed. | `e2e-smoke.yml` green on 2 consecutive pushes | 2-4 hr (actual: ~45 min once the gate path was traced) |
 | 0.4 | Verify `a11y-audit` / `zap-baseline` / `pip-audit` workflows fire on schedule | At least one successful recent run of each | 10 min |
 | 0.5 | CLAUDE.md 3-bucket migration: extract Decision Log → `docs/DECISION_LOG.md`, Operational Procedures + Disaster Recovery + Rollback → `docs/RUNBOOKS.md`, Splunk Quirks → `docs/SPLUNK_QUIRKS.md` | 3 files exist, cross-references in CLAUDE.md updated, doc-drift hook passes | 2-3 hr |
-| 0.6 | LICENSE: MIT → Apache 2.0 + add NOTICE file | LICENSE replaced; NOTICE added per Apache 2.0 conventions | 30 min |
-| 0.7 | Copyright holder change from "Security Engineering" to Oleh | Single Edit in LICENSE + NOTICE | 5 min |
-| 0.8 | `app.conf:version` bump 2.0.0 → 1.0.0-rc1 | Version reflects pre-public RC | 5 min |
+| 0.6 ✅ 2026-05-15 (commit `e55e9ab`) | LICENSE: MIT → Apache 2.0 + add NOTICE file. Canonical Apache 2.0 boilerplate from apache.org with "How to apply" appendix carrying `Copyright 2026 Oleh Bezsonov`. NOTICE file carries copyright attribution + Splunk trademark disclaimer (early-landing Phase 2.1 item) + third-party content statement (jQuery/Bootstrap consumed via Splunk runtime, not redistributed). | LICENSE replaced; NOTICE added per Apache 2.0 conventions | 30 min |
+| 0.7 ✅ 2026-05-15 (commit `da5cbc0`) | Copyright holder change from "Security Engineering" to Oleh Bezsonov. Touched `default/app.conf` `[launcher].author` and `docs/Whitelist_Manager_Documentation.md` byline. Deliberately NOT touched: `docs/PUBLIC_RELEASE_PLAN.md` (self-referential historical text) and `docs/Splunk_Admin_Installation_Guide.md` (references a customer-side SOC role named "Security Engineering team", different semantic from this project's authorship). | Single Edit in LICENSE + NOTICE | 5 min |
+| 0.8 ✅ 2026-05-15 (commit `a01aa79`) | `app.conf:version` bump 2.0.0 → 1.0.0-rc1. Both `[launcher].version` and `[id].version` updated (must match per AppInspect 4.2.0). Doc byline in `Whitelist_Manager_Documentation.md` also bumped to match. `[install].build` unchanged — build counters are deploy-cycle monotonic across version bumps. | Version reflects pre-public RC | 5 min |
 | 0.9 | CLAUDE.md backup sync: first push of slim CLAUDE.md to `relativisticjet-dev-knowledge-base/projects/wl_manager/CLAUDE.md` | First sync committed in the backup repo. Sync mechanism documented (manual / cron / git hook — user's preference) | 30 min |
 | 0.10 | `git log --all -p` secret scan to confirm history is publishable | No accidental credentials in history. Or — if found — decision documented (filter-repo vs accept) | 30 min |
 | 0.11 | Close prior-work TODOs that fit Phase 0 scope: `wl_expiration_cleanup.py` 401 investigation, `scripts/package.sh` version-tag drift, Step 3b permanent add to RELEASE_CHECKLIST §8 | Each closed as atomic commit | 2-3 hr |
