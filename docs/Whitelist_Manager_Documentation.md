@@ -1,6 +1,6 @@
 # Whitelist Manager — User Guide
 
-**Version 2.0.0** | Security Engineering Team
+**Version 2.0.0** | Oleh Bezsonov
 
 ---
 
