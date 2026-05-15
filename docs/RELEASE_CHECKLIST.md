@@ -85,6 +85,53 @@ grep -E "^build\s*=" default/app.conf
 
 ---
 
+## 3.5. Version-Tag Consistency (pre-flight before `git tag`)
+
+`scripts/package.sh` derives `<VERSION>` for the .spl filename from
+`default/app.conf:version`, NOT from the git tag. If the two diverge —
+e.g., we cut tag `v1.0.0-rc2` while `app.conf:version` still says
+`1.0.0-rc1` — the produced .spl will be named
+`wl_manager-1.0.0-rc1.spl` and uploaded to the `v1.0.0-rc2` release.
+Sigstore identity still verifies (it's keyed to the tag, not the
+artifact filename), but the customer-facing artifact name mismatches
+the release page → support tickets.
+
+This drift was caught during the 2026-05-13 Sigstore dry-run as a
+"side-finding worth follow-up but not blocking" (see §8 Outcome
+notes). Added here as a permanent pre-tag-cut check.
+
+**Run before pushing any new tag:**
+
+```bash
+# Pick the tag name you're about to cut, e.g.
+INTENDED_TAG=v1.0.0-rc1
+
+# Extract the bare version (strip the leading "v")
+INTENDED_VERSION="${INTENDED_TAG#v}"
+
+# Pull both app.conf version stanzas (AppInspect requires they match)
+LAUNCHER_VER=$(awk -F= '/^\[launcher\]/{flag=1; next} /^\[/{flag=0} flag && /^version/{gsub(/[[:space:]]/,""); print $2}' default/app.conf)
+ID_VER=$(awk -F= '/^\[id\]/{flag=1; next} /^\[/{flag=0} flag && /^version/{gsub(/[[:space:]]/,""); print $2}' default/app.conf)
+
+if [[ "$LAUNCHER_VER" != "$INTENDED_VERSION" || "$ID_VER" != "$INTENDED_VERSION" ]]; then
+  echo "VERSION DRIFT: tag=$INTENDED_TAG app.conf[launcher]=$LAUNCHER_VER app.conf[id]=$ID_VER"
+  echo "Fix app.conf before cutting the tag."
+  exit 1
+fi
+echo "OK: app.conf version matches tag $INTENDED_TAG"
+```
+
+**Expected:** the script exits 0 with `OK: ...`. Any non-zero exit means
+both `[launcher].version` and `[id].version` in `default/app.conf` need
+to be edited to match `${INTENDED_TAG#v}` BEFORE you run `git tag` /
+`gh release create`.
+
+**Maintenance note:** keep this check in sync with `package.sh:33`
+(the grep that reads `^version` from app.conf). If `package.sh` ever
+switches to reading from `$GITHUB_REF` instead, retire this section.
+
+---
+
 ## 4. E2E Suite Green
 
 ```bash
