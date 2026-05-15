@@ -1,8 +1,20 @@
 /**
  * Shared helpers for multi-role E2E tests.
  */
+const path = require("node:path");
 const { chromium } = require("playwright-core");
-const CHROME = process.env.LOCALAPPDATA + "/ms-playwright/chromium-1208/chrome-win64/chrome.exe";
+
+function resolveChromiumExecutable() {
+    if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
+        return process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+    }
+    if (process.platform === "win32" && process.env.LOCALAPPDATA) {
+        return path.join(process.env.LOCALAPPDATA, "ms-playwright", "chromium-1208", "chrome-win64", "chrome.exe");
+    }
+    return undefined;
+}
+
+const CHROME = resolveChromiumExecutable();
 const BASE = "http://localhost:8000";
 const REST = "https://localhost:8089";
 
@@ -40,7 +52,9 @@ function summary(label) {
 }
 
 async function createSession(user, pass) {
-    const browser = await chromium.launch({ headless: true, executablePath: CHROME });
+    const launchOpts = { headless: true };
+    if (CHROME) launchOpts.executablePath = CHROME;
+    const browser = await chromium.launch(launchOpts);
     const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1440, height: 900 } });
     const page = await context.newPage();
     page.__errors = [];

@@ -64,7 +64,12 @@ jobs:
         # — we need an explicit install. Chromium is the only browser
         # tests/e2e/ uses (per lib_helpers.cjs), so we install just it
         # to keep CI runner provisioning fast.
-        run: npx playwright install --with-deps chromium
+        #
+        # MUST pin to the same minor as playwright-core in package.json
+        # (currently 1.59.1). Without a pin, `npx playwright install`
+        # downloads the latest `playwright` CLI which installs a chromium
+        # revision that playwright-core@1.59.x won't find at runtime.
+        run: npx playwright@1.59.1 install --with-deps chromium
 
       - name: Start Splunk container
         run: docker compose up -d

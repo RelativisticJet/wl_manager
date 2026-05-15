@@ -52,7 +52,11 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        # Pin to the same minor as playwright-core in package.json
+        # (currently 1.59.1) so the installed chromium revision matches
+        # what playwright-core resolves at runtime. See e2e-smoke.yml
+        # for the full explanation.
+        run: npx playwright@1.59.1 install --with-deps chromium
 
       - name: Start Splunk container
         run: docker compose up -d

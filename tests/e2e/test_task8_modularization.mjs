@@ -16,7 +16,18 @@
  *   9. Edge cases: concurrent actions, unusual characters, empty state
  */
 
+import path from "node:path";
 import { chromium } from "playwright-core";
+
+function resolveChromiumExecutable() {
+    if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
+        return process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+    }
+    if (process.platform === "win32" && process.env.LOCALAPPDATA) {
+        return path.join(process.env.LOCALAPPDATA, "ms-playwright", "chromium-1208", "chrome-win64", "chrome.exe");
+    }
+    return undefined;
+}
 
 const BASE = "http://localhost:8000";
 const LOGIN_URL = `${BASE}/en-US/account/login`;
@@ -94,8 +105,10 @@ async function getConsoleErrors() {
 // Main test runner
 // ══════════════════════════════════════════════════════════════════
 async function run() {
-    const chromePath = process.env.LOCALAPPDATA + "/ms-playwright/chromium-1208/chrome-win64/chrome.exe";
-    browser = await chromium.launch({ headless: true, executablePath: chromePath });
+    const chromePath = resolveChromiumExecutable();
+    const launchOpts = { headless: true };
+    if (chromePath) launchOpts.executablePath = chromePath;
+    browser = await chromium.launch(launchOpts);
     context = await browser.newContext({
         ignoreHTTPSErrors: true,
         viewport: { width: 1440, height: 900 }
