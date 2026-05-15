@@ -1,6 +1,6 @@
 # Whitelist Manager — User Guide
 
-**Version 2.0.0** | Oleh Bezsonov
+**Version 1.0.0-rc1** | Oleh Bezsonov
 
 ---
 
