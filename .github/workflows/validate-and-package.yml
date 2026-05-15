@@ -23,9 +23,12 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up Bash environment
-      run: |
-        apt-get update && apt-get install -y bash
+    # Bash is pre-installed on `ubuntu-latest` runners. The prior
+    # "Set up Bash environment" step that ran `apt-get install bash`
+    # without sudo failed at every push since the workflow was added
+    # (commit 219355e, 2026-03-22) — 30+ red runs in a row — and the
+    # downstream validate/package steps were never reached. Removed
+    # in this commit to let the workflow actually do its job.
 
     - name: Run validation script
       run: |
