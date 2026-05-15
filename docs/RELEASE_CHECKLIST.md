@@ -113,12 +113,24 @@ INTENDED_VERSION="${INTENDED_TAG#v}"
 LAUNCHER_VER=$(awk -F= '/^\[launcher\]/{flag=1; next} /^\[/{flag=0} flag && /^version/{gsub(/[[:space:]]/,""); print $2}' default/app.conf)
 ID_VER=$(awk -F= '/^\[id\]/{flag=1; next} /^\[/{flag=0} flag && /^version/{gsub(/[[:space:]]/,""); print $2}' default/app.conf)
 
+# AppInspect 4.2.0 also enforces [package].id == [id].name. Cheap to
+# check here so a future rename of one stanza doesn't fail AppInspect
+# silently at the last step.
+ID_NAME=$(awk -F= '/^\[id\]/{flag=1; next} /^\[/{flag=0} flag && /^name/{gsub(/[[:space:]]/,""); print $2}' default/app.conf)
+PKG_ID=$(awk -F= '/^\[package\]/{flag=1; next} /^\[/{flag=0} flag && /^id/{gsub(/[[:space:]]/,""); print $2}' default/app.conf)
+
 if [[ "$LAUNCHER_VER" != "$INTENDED_VERSION" || "$ID_VER" != "$INTENDED_VERSION" ]]; then
   echo "VERSION DRIFT: tag=$INTENDED_TAG app.conf[launcher]=$LAUNCHER_VER app.conf[id]=$ID_VER"
   echo "Fix app.conf before cutting the tag."
   exit 1
 fi
-echo "OK: app.conf version matches tag $INTENDED_TAG"
+
+if [[ "$ID_NAME" != "$PKG_ID" ]]; then
+  echo "ID DRIFT: app.conf[id].name=$ID_NAME app.conf[package].id=$PKG_ID"
+  echo "AppInspect 4.2.0 (check_for_valid_package_id) requires these to match."
+  exit 1
+fi
+echo "OK: app.conf version matches tag $INTENDED_TAG; [package].id == [id].name == $ID_NAME"
 ```
 
 **Expected:** the script exits 0 with `OK: ...`. Any non-zero exit means
@@ -128,7 +140,10 @@ to be edited to match `${INTENDED_TAG#v}` BEFORE you run `git tag` /
 
 **Maintenance note:** keep this check in sync with `package.sh:33`
 (the grep that reads `^version` from app.conf). If `package.sh` ever
-switches to reading from `$GITHUB_REF` instead, retire this section.
+switches to reading from `$GITHUB_REF` instead, retire the
+version-drift portion of this section — the `[package].id == [id].name`
+check stays regardless, since it's an AppInspect rule independent of
+how the tag is derived.
 
 ---
 
@@ -273,11 +288,25 @@ Actions). Then attempt to verify it against THIS repo's identity
 regex.
 
 ```bash
-# Download a foreign Sigstore-signed asset for the test:
-#   - Reference: sigstore/cosign v2.4.3 .rpm (signed via Google OIDC)
-#   - URL pattern: https://github.com/sigstore/cosign/releases/download/v2.4.3/cosign-2.4.3-1.x86_64.rpm
+# Download a foreign Sigstore-signed asset and its detached signature
+# artifacts. Reference release: sigstore/cosign v2.4.3 .rpm — cosign
+# self-signs every release via Google OIDC, so its identity claim is
+# guaranteed not to match this repo's GitHub-Actions regex.
 #
-# Then attempt verification against THIS repo's identity-regex
+# If the exact filenames below 404 (sigstore renames artifact suffixes
+# between minor versions), open the release page in a browser and pick
+# any (artifact, artifact.crt, artifact.sig) triple — the test is
+# agnostic to which artifact you use.
+BASE=https://github.com/sigstore/cosign/releases/download/v2.4.3
+curl -sLO "$BASE/cosign-2.4.3-1.x86_64.rpm"
+curl -sLO "$BASE/cosign-2.4.3-1.x86_64.rpm.crt"
+curl -sLO "$BASE/cosign-2.4.3-1.x86_64.rpm.sig"
+
+# Sanity-check all three downloads landed (curl -O is silent on 404,
+# which would let the cosign step below fail confusingly).
+ls -l cosign-2.4.3-1.x86_64.rpm{,.crt,.sig}
+
+# Now attempt verification against THIS repo's identity-regex.
 # (NOTE: cosign-release v2.4.1 expects --new-bundle-format=false for
 # pre-v3 signatures; remove flag if upgrading per Phase 2.12).
 cosign verify-blob \
@@ -290,17 +319,36 @@ cosign verify-blob \
   cosign-2.4.3-1.x86_64.rpm
 ```
 
-**Expected:** verification FAILS, but with a DIFFERENT error than
-Step 3. The error must reference the identity-regex mismatch (the
-foreign cert was issued for a `sigstore/cosign` identity, not
-`RelativisticJet/wl_manager`) or the OIDC-issuer mismatch (Google
-vs GitHub Actions). The signature itself IS valid for that foreign
-artifact — what fails is the identity pin.
+**Expected:** verification FAILS, with one of two acceptable error
+messages (cosign short-circuits at the first mismatch it sees, so
+which one you observe depends on cosign's internal check order — both
+prove the identity pin is wired):
 
-If this step passes (i.e., the foreign artifact is accepted), the
-identity pin is broken. STOP. Do not ship — any sigstore-signed
-artifact in the world would be accepted as if it came from this
-repo.
+- **PRIMARY (preferred)** — `none of the expected identities matched
+  what was in the certificate` (or similar wording referencing the
+  identity-regex). The foreign cert was issued for a
+  `sigstore/cosign` identity, not `RelativisticJet/wl_manager`.
+- **SECONDARY (also acceptable)** — `expected oidc issuer ... got
+  ...`. The foreign cert's OIDC issuer is Google
+  (`https://accounts.google.com`), not GitHub Actions
+  (`https://token.actions.githubusercontent.com`).
+
+NOT acceptable (would mean the pin is broken or you ran the wrong
+test):
+
+- ✅ verification PASSES → identity pin is broken; any
+  sigstore-signed artifact in the world would be accepted as if it
+  came from this repo. **STOP. Do not ship.**
+- ❌ `hash mismatch` or `signature verification failed` → this is a
+  Step 3 failure, not a Step 3b failure. It means the foreign
+  artifact and its `.sig`/`.crt` are out of sync (re-download all
+  three from the same release). Re-run after fixing.
+- ❌ `failed to read certificate` / `no such file` → a download
+  step 404'd silently. Re-check `ls -l` above before re-running
+  cosign.
+
+The signature itself IS cryptographically valid for that foreign
+artifact — what we want to fail is the identity pin, exclusively.
 
 **Origin:** added 2026-05-15 as a permanent extension after the
 2026-05-13 dry-run discovered this gap by accident. See "Outcome
