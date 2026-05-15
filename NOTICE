@@ -1,0 +1,38 @@
+Whitelist Manager for Splunk Enterprise Security
+Copyright 2026 Oleh Bezsonov
+
+This product is licensed under the Apache License, Version 2.0
+(the "License"); you may not use this product except in compliance
+with the License. You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+implied. See the License for the specific language governing
+permissions and limitations under the License.
+
+-------------------------------------------------------------------
+
+Splunk, Splunk Enterprise, and Splunk Enterprise Security are
+registered trademarks of Splunk LLC. This product is not affiliated
+with, endorsed by, or sponsored by Splunk LLC. The author is solely
+responsible for the contents of this product.
+
+This product depends on the Splunk platform but does not redistribute
+any Splunk software. Users must obtain Splunk Enterprise and Splunk
+Enterprise Security separately from Splunk LLC.
+
+-------------------------------------------------------------------
+
+Third-party content embedded or referenced by this product:
+
+- jQuery (bundled with Splunk Enterprise) — MIT License
+- Bootstrap (bundled with Splunk Enterprise) — MIT License
+- The Splunk Web Framework (mvc/utils, simplexml, etc.) — proprietary
+  to Splunk LLC; consumed via the runtime Splunk platform, not
+  redistributed by this product.
+
+No additional third-party source code is bundled with this
+distribution.
