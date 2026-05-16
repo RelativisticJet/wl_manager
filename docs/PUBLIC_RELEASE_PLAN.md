@@ -2,8 +2,8 @@
 
 > Plan owner: Oleh (@RelativisticJet)
 > Created: 2026-05-13
-> Status: **Phase 0 — Foundation cleanup COMPLETE (12 ✅, 2 PARTIAL by intentional split, 0 pending of 14 rows)**
-> Updated: 2026-05-15 (Phase 0.0 / 0.9 / 0.11 closed — Phase 0 acceptance gate met)
+> Status: **Phase 0 — Foundation cleanup COMPLETE for original 14 rows; Phase 0.12 (Ring 6.1 R6-F8 concurrency hardening) added post-close, IN PROGRESS**
+> Updated: 2026-05-15 (Phase 0 closed; post-close gap review added Phase 0.12 + Phase 2.15-2.18 + optional polish subsection — see footnote at end of §3 for the gap-review rationale)
 
 This document is the canonical plan for taking `wl_manager` from
 private-internal to public open-source on GitHub, then to a listed
@@ -76,6 +76,7 @@ CLAUDE.md split. Purely internal; no external dependencies.
 | 0.8 ✅ 2026-05-15 (commit `a01aa79`) | `app.conf:version` bump 2.0.0 → 1.0.0-rc1. Both `[launcher].version` and `[id].version` updated (must match per AppInspect 4.2.0). Doc byline in `Whitelist_Manager_Documentation.md` also bumped to match. `[install].build` unchanged — build counters are deploy-cycle monotonic across version bumps. | Version reflects pre-public RC | 5 min |
 | 0.9 ✅ 2026-05-15 (backup-repo commit `53559ed`) | CLAUDE.md backup sync: pushed wl_manager-side CLAUDE.md (with the new Phase 0.5 migration banner at the top pointing readers to `docs/DECISION_LOG.md` / `docs/RUNBOOKS.md` / `docs/SPLUNK_QUIRKS.md`) to `relativisticjet-dev-knowledge-base/projects/wl_manager/CLAUDE.md`. **NOT a first sync** — discovered the backup file already existed at SHA `dc9fe369` from a prior unrelated push, so this is an update sync. **Sync mechanism documented:** `gh api -X PUT contents/...` with the payload constructed via stdin'd JSON (avoids the bash argument-length limit on the ~114KB base64-encoded body). Manual cadence — pushed when wl_manager CLAUDE.md has substantive changes worth preserving, not on every edit. | First sync committed in the backup repo. Sync mechanism documented (manual / cron / git hook — user's preference) | 30 min |
 | 0.10 ✅ 2026-05-15 (scan documented in PR review of HEAD) | `git log --all -p` secret scan across all 456 commits / 17 MB of diff history. Scanned 14 high-confidence patterns (PEM private keys, AWS AKIA, AWS secret-access-key assignments, GitHub PAT/OAuth/server/refresh tokens, Slack `xoxX-`, Stripe `sk_live_`/`sk_test_`, 3-segment JWTs, GitLab `glpat-`, npm `npm_`, Splunk HEC-token-UUID) and 5 generic-pattern fallbacks. **High-confidence hits: 0 across all 14 patterns.** Generic-pattern hits: 1 `password="..."` (the `api_call()` helper's default `password="Chang3d!"`, the documented Splunk dev-container admin password) and 3 `token="..."` (Splunk SimpleXML **dashboard-variable** tokens — `general_action_display`, `admin_action_display`, `drilldown_analyst` — Splunk lingo for dashboard state, NOT credentials). No `.env` / `.pem` / `.key` / `.p12` / `.pfx` / `.jks` / `.keystore` files ever committed. **Decision (per Phase 0.10 acceptance footer): ACCEPT — no `git filter-repo` rewrite needed.** `Chang3d!` is a known-dev-credential by design (Splunk Docker container demo password, documented in INSTALLATION + CLAUDE.md, used by 30+ dev/test/docs files); users running the demo container are instructed to change it before any production exposure. | No accidental credentials in history. Or — if found — decision documented (filter-repo vs accept) | 30 min |
+| 0.12 ⏳ in progress (added 2026-05-15, post-Phase-0-close gap review) | **Ring 6.1 — Concurrency hardening, R6-F8 only.** Scope confirmed by live grep 2026-05-15: R6-F5 (rules-registry RMW), R6-F6 (daily-limit counter TOCTOU), and R6-F7 (`save_csv` lockless RMW) are **already fixed** — verified via in-code comments at `bin/wl_handler.py:227-231` (delegates to `rules_rmw_lock`), `bin/wl_rules.py:36-44` (`rules_rmw_lock` uses `file_lock`), `bin/wl_limits.py:185+232` (uses `file_lock`), and `bin/wl_handler.py:4321-4358` ("Ring 6.1 R6-F7 fix" — `file_lock(lock_target + ".rmw.lock")` wraps the entire optimistic-check + read + write). What remains is **R6-F8**: module-level mutable dicts (`_presence` at `bin/wl_presence.py:39`, `_rate_limits` at `bin/wl_ratelimit.py:39`) hold per-Python-worker state. Two failure modes: (a) "Also viewing" presence indicator collapses to `1/PARALLELISM` of actual editors under concurrent activity (UX bug, low criticality, live-confirmed in Ring 6 Day 5 via `tests/e2e/test_concurrent_presence.cjs`); (b) burst rate-limit gate may be bypassable by `worker-count` factor via parallel-session worker spread (security boundary, HIGH criticality, **structural-evidence only — needs live verification**). Fix vector per `feedback_per_worker_state.md` memory: KV-backed storage (precedent: `wl_cooldowns`) for both, with file_lock-guarded RMW on the counter so R6-F8 fix doesn't reintroduce R6-F5/F6/F7-class hazards. Live-test the rate-limit hypothesis FIRST (extend `tests/e2e/test_rate_limit_burst.cjs` to multi-session) so the gap is measured before the fix lands. | (a) `tests/e2e/test_concurrent_presence.cjs` Phase D asserts `seen.length === PARALLELISM` (was tolerated as collapse, now hard-fail); (b) multi-session rate-limit burst test proves cap holds within ±1 across N parallel sessions of one user; (c) module-level mutable dict pattern eliminated from `wl_presence.py` + `wl_ratelimit.py` or explicitly documented as per-worker cache-only with no cross-worker semantics relied on | 1-3 days |
 | 0.11 ✅ 2026-05-15 (3 sub-items closed across commits — see breakdown) | Close prior-work TODOs that fit Phase 0 scope. **0.11a — `wl_expiration_cleanup.py` 401 investigation:** the issue is **already mitigated in code** at `bin/wl_expiration_cleanup.py:50-67` — file-level comments document the failure mode (splunkd recycles scripted-input session tokens around restarts, producing transient 401), and the mitigation is shipped: `_recovery_log.jsonl` fallback path is auto-indexed via the `wl_audit_recovery` monitor input so failed audit POSTs still land in `index=wl_audit sourcetype=wl_audit_recovery`, PLUS `AUDIT_POST_RETRIES = 2` with 1-second sleep catches the common sub-second race. No code change needed — closure by investigation. **0.11b — `scripts/package.sh` version-tag drift, commit `fb5f8f0`:** added `## 3.5. Version-Tag Consistency (pre-flight before git tag)` section to `docs/RELEASE_CHECKLIST.md` per the 2026-05-13 Sigstore dry-run side-finding. 12-line bash check verifies `app.conf` `[launcher].version` and `[id].version` match the intended tag (with leading `v` stripped) before any `git tag` is cut. **0.11c — Step 3b permanent add to RELEASE_CHECKLIST §8, commit `b579d44`:** inserted `### Step 3b — Foreign-signature identity-pin test (rigor extension)` in §8 between Step 3 (signature-integrity tamper test) and Step 4 (Rekor lookup). Proves that the `--certificate-identity-regexp` pin is a SEPARATE security boundary from signature integrity by attempting to verify a known-good `sigstore/cosign` release asset against this repo's identity regex. §8 Acceptance line updated to "Steps 2+3+3b+4 all produced the expected outcomes". | Each closed as atomic commit | 2-3 hr |
 
 **Phase 0 acceptance**:
@@ -92,6 +93,29 @@ CLAUDE.md split. Purely internal; no external dependencies.
 - R0.2 — Secret scan might find genuine secrets. Options: `git filter-repo` (rewrites history, alters all SHAs) vs accept as known. Big decision; escalate.
 - R0.3 — CLAUDE.md migration is invasive (touching 5+ docs). Reserve buffer for doc-drift hook iterations.
 
+**Post-Phase-0-close gap review (2026-05-15)**: After Phase 0 was declared
+COMPLETE, a structured "have I missed something?" pass surfaced 7 gaps
+labelled G1-G7. Disposition:
+
+- G1 (a11y findings on `audit.xml`) → new Phase 2.15 row
+- G2 (Ring 6.1 R6-F8 concurrency hardening) → new Phase 0.12 row above, IN
+  PROGRESS — chosen as fix-now because it's the only gap that could
+  legitimately block a public release (security gate possibly bypassable
+  via worker spread, and the "Also viewing" indicator misleads concurrent
+  editors into thinking they're alone, then save_csv loses one of their
+  rows per R6-F7 — already-fixed but only at the lock layer, not at the
+  warning-the-user layer)
+- G3 (Phase 1.1 status drift) → marked ✅ via D15 below
+- G4 (CodeQL workflow) → new Phase 2.16 row
+- G5 (Dependabot config) → new Phase 2.17 row
+- G6 (OSSF Scorecard) → new Phase 2.18 row, OPTIONAL
+- G7 (SECURITY.md contact channel) → annotated on Phase 2.3 row
+
+The "Optional polish" subsection at the bottom of §5 collects per-item
+decisions discovered alongside G2-G7 that are NOT in the critical path
+(GPG-signed tags, FUNDING.yml, continuous secret-scanning, custom docs
+domain).
+
 ---
 
 ## 4. Phase 1 — Risk discovery (AppInspect)
@@ -106,7 +130,7 @@ timeline slips, scope does not.
 
 | # | Task | Acceptance | Est. |
 |---|------|------------|------|
-| 1.1 | Sign up for Splunk Developer account at dev.splunk.com | Account active, credentials stored securely | 15 min |
+| 1.1 ✅ 2026-05-13 (per Decision D15 in §1; marked retroactively during 2026-05-15 gap review as G3) | Sign up for Splunk Developer account at dev.splunk.com. Account `Oleh Bezsonov` / `communicate.oleh@gmail.com` is active. Reversibility note per D15: transferable by emailing Splunk Developer Support if an LLC is ever formed. | Account active, credentials stored securely | 15 min |
 | 1.2 | Wire `splunk/appinspect-cli-action` in new `.github/workflows/appinspect.yml` | Workflow runs against built .spl with `splunk-platform-standalone` profile | 30 min |
 | 1.3 | First AppInspect CLI run + triage findings → `docs/<APPINSPECT_FINDINGS>.md` | All findings logged by severity (error / warning / manual_check); each has a fix-or-defer decision | 2-4 hr |
 | 1.4 | Provision Splunk Cloud Sandbox or paid trial for API-based dynamic checks | Trial active; credentials in GitHub Actions secrets | 1-2 hr |
@@ -141,7 +165,7 @@ README reads as a finished product.
 |---|------|------------|------|
 | 2.1 | Trademark disclaimer added to README + INSTALLATION ("Splunk and Splunk Enterprise Security are registered trademarks of Splunk LLC...") | Disclaimer present in both files | 30 min |
 | 2.2 | Manual Splunkbase name-collision check for "Whitelist Manager" | Confirmed unique OR backup name picked | 30 min |
-| 2.3 | SECURITY.md with vulnerability disclosure policy | File at repo root. GitHub Security Advisories enabled in repo settings. Private contact path defined. | 30 min |
+| 2.3 | SECURITY.md with vulnerability disclosure policy. **Decision needed before drafting (gap G7 from 2026-05-15 gap review):** which private contact channel? Options: (a) `communicate.oleh@gmail.com` — exposes personal address publicly; (b) dedicated `security@<domain>` — requires a domain not currently owned; (c) GitHub Security Advisories private reports only — no out-of-band channel. Tentative recommendation: (c) with a brief "open a Security Advisory" pointer; revisit if scale demands a dedicated mailbox. Locked decision goes in `docs/DECISION_LOG.md` as D16. | File at repo root. GitHub Security Advisories enabled in repo settings. Private contact path defined. | 30 min |
 | 2.4 | CONTRIBUTING.md with PR + issue process | Covers branch model, commit conventions, test requirements, response SLA expectations | 1 hr |
 | 2.5 | CODE_OF_CONDUCT.md (Contributor Covenant 2.1) | Standard text | 15 min |
 | 2.6 | GitHub issue templates (bug, feature, security, question) | `.github/ISSUE_TEMPLATE/` populated | 45 min |
@@ -154,16 +178,34 @@ README reads as a finished product.
 | 2.13 | Pre-existing TODO cleanup from old CLAUDE.md "Pending / Future Work": MCP server activation status, 3 span clear-button P2 a11y items, 11 test CSV cleanup decision | Each resolved or explicitly deferred | 2-3 hr |
 | 2.14 | Public-friendliness review of DECISION_LOG.md — soften / redact entries that describe attack scenarios in too-explicit detail | One review pass, atomic commit | 1-2 hr |
 
+| 2.15 | **A11y findings on `audit.xml` dashboard** (gap G1 from 2026-05-15 gap review — discovered via Phase 0.4 `a11y-audit.yml` `workflow_dispatch` run `25926030716`, 2026-05-15). The workflow detected 3 SERIOUS violations on the Audit Trail dashboard; 0 violations on `whitelist_manager` and `control_panel`. For an enterprise SOC tool the audit dashboard a11y is shippable-blocking. Triage: download the workflow artifact, classify each violation (likely candidates from prior a11y passes: missing aria-labels on dropdown filters, color-contrast on severity badges, focus-visible on inline drilldown links), fix in atomic commits, re-run the workflow until green. | `a11y-audit.yml` reports 0 SERIOUS violations across all 3 dashboards | 4-6 hr |
+| 2.16 | **CodeQL workflow** (gap G4 from 2026-05-15 gap review) — add `.github/workflows/codeql.yml` with `python` + `javascript` analyzers, weekly schedule + `pull_request` + `push` triggers. Free for public repos; signals "security-first" project; output feeds the repo Security tab and lets Dependabot cross-reference advisories. | Workflow runs green on a clean push; 0 high-severity findings (or each documented with a disposition) | 30 min |
+| 2.17 | **Dependabot config** (gap G5 from 2026-05-15 gap review) — add `.github/dependabot.yml` for `pip` (root + tests dir), `github-actions`, and `npm` if/when frontend deps land in repo (currently they are Splunk-bundled). Weekly cadence; auto-PR. | File present; first scheduled run produces zero PRs or only expected ones | 15 min |
+| 2.18 | **OSSF Scorecard workflow** (gap G6 from 2026-05-15 gap review, **OPTIONAL**) — add `.github/workflows/scorecard.yml` per `ossf/scorecard-action`. Surfaces signal on branch protection, code review, dangerous workflows, fuzzing, packaging, etc. Score visible as a badge in README. Free for public repos. | Workflow runs; score recorded; README badge linked | 30 min |
+
 **Phase 2 acceptance**:
 - All public-facing files exist and are polished
 - Hosted docs site live and indexable
 - README rewritten
 - Repo metadata optimized
 - Trademark + license + security disclosure all in place
+- A11y audit clean on every dashboard (per 2.15)
 
 **Phase 2 risks**:
 - R2.1 — MkDocs Material theming might require iteration. Reserve buffer.
 - R2.2 — README rewrite for public audience is a different skill than internal docs. Drafts may need iteration.
+- R2.3 — A11y findings on `audit.xml` may require dashboard SimpleXML refactor (e.g., custom HTML panels for the multi-action dropdowns). If the fix grows past the 4-6 hr estimate, surface to user — Splunk's SimpleXML accessibility is a known weak surface, not a wl_manager-specific bug.
+
+### 5a. Phase 2 — Optional polish (each item is a per-item user decision when Phase 2 opens)
+
+These nice-to-haves were surfaced during the 2026-05-15 gap review alongside G2-G7. None are blocking the public flip. Pick each independently when Phase 2 starts; if skipped, document the deferral in `docs/DECISION_LOG.md`.
+
+| Optional item | Rationale | Est. |
+|---|---|---|
+| GPG-signed git tags | Orthogonal to Sigstore `.spl` signing — some FOSS users verify tag signatures as well as artifact signatures. Requires GPG key setup + uploaded public key on GitHub. | 30 min including key generation |
+| `.github/FUNDING.yml` | Enables sponsor links (GitHub Sponsors, Ko-fi, etc.) on the repo sidebar. Zero cost to add; trivial to remove. | 5 min |
+| Continuous secret scanning (`gitleaks-action` or equivalent) | Phase 0.10 was a one-shot scan of historical commits. A scheduled / on-push action catches future regressions before they hit the public branch. | 15 min |
+| Custom domain for the hosted docs site | Phase 2.8 currently uses `https://relativisticjet.github.io/wl_manager/`. A custom domain (`<name>.dev` or similar) is more brandable and future-proof if the GitHub handle ever changes. Requires owning the domain. | 30 min plus domain ownership |
 
 ---
 
