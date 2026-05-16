@@ -1,0 +1,20 @@
+# GitHub recognises this file and renders a "Sponsor" button on the
+# repository sidebar when at least one platform is uncommented below.
+#
+# Maintainer: Oleh Bezsonov (@RelativisticJet). All entries are commented
+# out by default — uncomment a platform only after you have set up the
+# corresponding account and verified it accepts contributions. Linking
+# to a platform you haven't actually onboarded creates a 404 from the
+# Sponsor button on the public repo page.
+#
+# Order in this file does not affect rendering order; GitHub renders
+# them in its own canonical order regardless.
+
+# github: RelativisticJet      # GitHub Sponsors — requires onboarding
+# ko_fi: <username>            # https://ko-fi.com/<username>
+# buy_me_a_coffee: <username>  # https://www.buymeacoffee.com/<username>
+# liberapay: <username>        # https://liberapay.com/<username>
+# open_collective: <slug>      # https://opencollective.com/<slug>
+# patreon: <username>          # https://patreon.com/<username>
+# tidelift: pkg/<package>      # only for packages on Tidelift's allowlist
+# custom: ["https://example.com/donate"]

@@ -1,0 +1,46 @@
+# wl_manager — gitleaks configuration
+#
+# Maintained alongside the Phase 0.10 one-shot secret-scan baseline
+# (see commit notes for 2026-05-15 secret-scan history). The default
+# gitleaks ruleset re-detects every entry the Phase 0.10 audit
+# explicitly accepted as false-positive — those acceptances are
+# encoded here so the recurring scan does not refire them.
+#
+# Adding a new allowlist entry requires the same level of justification
+# Phase 0.10 used: identify what the string actually is, why it has to
+# live in the repo, and what the real attack surface is if any. Do NOT
+# expand the allowlist to silence noise.
+
+title = "wl_manager"
+
+# Inherit gitleaks' built-in detectors (PEM private keys, AWS access
+# keys, GitHub PATs, Slack/Stripe/Splunk HEC tokens, JWTs, etc).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Phase 0.10 audit-accepted false-positives + Splunk dashboard syntax."
+
+# Regex allowlist — strings that ARE expected to appear in the repo.
+#
+# 1. The Splunk dev-container admin password.
+#    Documented in CLAUDE.md / INSTALLATION.md as the throwaway default
+#    Splunk Docker image password. Users running the demo container
+#    are instructed to change it before any production exposure. The
+#    string appears in 30+ test fixtures, deploy scripts, and docs;
+#    removing it breaks the dev environment.
+regexes = [
+    '''Chang3d!''',
+]
+
+# Path allowlist — files where token-shaped strings are Splunk SimpleXML
+# dashboard variables, not credentials.
+#
+# 2. `default/data/ui/views/audit.xml` uses `<input token="...">` for
+#    dashboard variable bindings (general_action_display,
+#    admin_action_display, drilldown_analyst). Splunk dashboard lingo,
+#    NOT secrets. Limited to that one file to avoid accidentally
+#    whitelisting real `token=` strings elsewhere.
+paths = [
+    '''default/data/ui/views/audit\.xml''',
+]

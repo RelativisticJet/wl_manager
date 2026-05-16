@@ -205,12 +205,14 @@ README reads as a finished product.
 
 These nice-to-haves were surfaced during the 2026-05-15 gap review alongside G2-G7. None are blocking the public flip. Pick each independently when Phase 2 starts; if skipped, document the deferral in `docs/DECISION_LOG.md`.
 
-| Optional item | Rationale | Est. |
-|---|---|---|
-| GPG-signed git tags | Orthogonal to Sigstore `.spl` signing — some FOSS users verify tag signatures as well as artifact signatures. Requires GPG key setup + uploaded public key on GitHub. | 30 min including key generation |
-| `.github/FUNDING.yml` | Enables sponsor links (GitHub Sponsors, Ko-fi, etc.) on the repo sidebar. Zero cost to add; trivial to remove. | 5 min |
-| Continuous secret scanning (`gitleaks-action` or equivalent) | Phase 0.10 was a one-shot scan of historical commits. A scheduled / on-push action catches future regressions before they hit the public branch. | 15 min |
-| Custom domain for the hosted docs site | Phase 2.8 currently uses `https://relativisticjet.github.io/wl_manager/`. A custom domain (`<name>.dev` or similar) is more brandable and future-proof if the GitHub handle ever changes. Requires owning the domain. | 30 min plus domain ownership |
+**Status update 2026-05-16**: three of the four items were pulled forward to pre-Phase-1 work because they are small, additive, and unblock follow-on Phase 2 work. The remaining item (custom docs domain) is genuinely deferred.
+
+| Optional item | Status | Rationale | Est. |
+|---|---|---|---|
+| Tag signing (SSH or GPG) | ⏳ procedure landed 2026-05-16 (`docs/RUNBOOKS.md` "Tag Signing — SSH or GPG"); awaiting user key generation + GitHub upload + path-A-or-B decision | Orthogonal to Sigstore `.spl` signing — some FOSS users verify tag signatures as well as artifact signatures. Two paths documented: SSH (simpler, reuses GitHub SSH key) and GPG (traditional, needs Gpg4win on Windows because the Git-bundled GPG 2.4.9 is keyboxd-broken). Locked-decision row TBD in `docs/DECISION_LOG.md` once the user picks a path and uploads a public key. | 30 min including key generation (after Gpg4win install if path B) |
+| `.github/FUNDING.yml` | ✅ stub landed 2026-05-16 (`.github/FUNDING.yml`, all platforms commented out) | Enables sponsor links (GitHub Sponsors, Ko-fi, etc.) on the repo sidebar. Zero cost to add; trivial to remove. Stub renders no Sponsor button until at least one platform is uncommented; uncommenting requires the maintainer to have onboarded with that platform first (an empty handle would 404 the Sponsor button). | 5 min |
+| Continuous secret scanning (`gitleaks-action`) | ✅ landed 2026-05-16 (`.github/workflows/secret-scan.yml` + `.gitleaks.toml`) | Phase 0.10 was a one-shot scan of historical commits. The CI gate catches future regressions on push to main + every PR + weekly schedule + manual dispatch. The `.gitleaks.toml` allowlist encodes the Phase-0.10-accepted false-positives (`Chang3d!` dev container password + `audit.xml` SimpleXML dashboard tokens) so recurring runs don't refire on them. | 15 min |
+| Custom domain for the hosted docs site | (deferred to Phase 2.8 — per-item decision pending) | Phase 2.8 currently uses `https://relativisticjet.github.io/wl_manager/`. A custom domain (`<name>.dev` or similar) is more brandable and future-proof if the GitHub handle ever changes. Requires owning the domain. Pre-Phase-1 was the wrong time to decide: the docs site doesn't exist yet (Phase 2.8 stands it up), so the domain question can wait until then. | 30 min plus domain ownership |
 
 ---
 

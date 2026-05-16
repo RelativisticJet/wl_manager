@@ -421,3 +421,90 @@ docker exec -u 0 wl_manager_test rm -f /tmp/Splunk.License
 - The Splunk Enterprise trial expired AND you want to keep using Enterprise-only features (custom roles, scheduled searches, distributed search, etc.) locally.
 - License file rotated (rare — you would get a new file from dev.splunk.com when the current one expires).
 
+### Tag Signing — SSH or GPG (pick one path)
+
+**Use when**: cutting a release tag for the repo. Tag signatures let downstream users verify the tag was created by the maintainer, not an attacker who pushed a malicious commit + tag with the same name. This is the third-leg complement to Sigstore `.spl` artifact signing — Sigstore proves the artifact was built by the right workflow; the tag signature proves the workflow ran on the right input.
+
+Two paths produce GitHub-verified tags. Pick the one whose key material you already have or are willing to set up.
+
+#### Path A — SSH-key signing (simpler, fewer dependencies)
+
+Requires: Git ≥ 2.34, an SSH key pair you control. If you already use SSH for GitHub auth, reuse that key.
+
+```bash
+# 1. If you don't have an SSH key, generate one (skip if you do):
+ssh-keygen -t ed25519 -C "communicate.oleh@gmail.com"
+
+# 2. Upload the PUBLIC key to GitHub:
+#    https://github.com/settings/keys -> "New SSH key" -> paste
+#    ~/.ssh/id_ed25519.pub. For signing specifically: the SAME key
+#    can be uploaded twice with different "Key type" selections
+#    (Authentication vs Signing) so GitHub can use it both ways.
+
+# 3. Configure git to use SSH for signing:
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
+git config --global tag.gpgsign true
+
+# 4. (Optional but recommended) Tell git which signers are "trusted"
+#    so `git verify-tag` works locally without internet:
+echo "communicate.oleh@gmail.com $(cat ~/.ssh/id_ed25519.pub)" > ~/.ssh/allowed_signers
+git config --global gpg.ssh.allowedSignersFile ~/.ssh/allowed_signers
+
+# 5. Cut a tag — git auto-signs because tag.gpgsign=true:
+git tag -m "v1.0.0-rc1" v1.0.0-rc1
+git verify-tag v1.0.0-rc1   # confirms signature locally
+
+# 6. After pushing, GitHub's tag page shows "Verified" badge.
+git push origin v1.0.0-rc1
+```
+
+#### Path B — GPG-key signing (traditional, more setup)
+
+Requires: a working GPG installation. **The Git-for-Windows-bundled GPG 2.4.9 is keyboxd-broken on Windows and is NOT usable as-is** (it tries to start `/usr/lib/gnupg/keyboxd` which the Git bundle does not ship). Install Gpg4win or use winget/scoop.
+
+```powershell
+# 1. Install Gpg4win (one-time, ~5 min):
+#    Either: https://gpg4win.org/download.html -> Gpg4win-4.x.x.exe
+#    Or:     winget install --id GnuPG.Gpg4win
+
+# 2. Generate a 4096-bit RSA key (or ed25519 if you prefer):
+gpg --full-generate-key
+#    Choose: RSA and RSA (default) or ed25519 (Curve 25519)
+#    Real name: Oleh Bezsonov
+#    Email:     communicate.oleh@gmail.com
+#    Passphrase: pick a strong one, store in your password manager
+#                alongside the Splunk Developer account credential.
+
+# 3. Get the key ID:
+gpg --list-secret-keys --keyid-format=long
+#    Look for: "sec   rsa4096/<KEYID> ..."
+
+# 4. Export the PUBLIC key and upload to GitHub:
+gpg --armor --export <KEYID> | clip   # copies to clipboard
+#    Paste the ASCII-armored block at:
+#    https://github.com/settings/keys -> "New GPG key"
+
+# 5. Configure git:
+git config --global user.signingkey <KEYID>
+git config --global tag.gpgsign true
+# If gpg is not on default PATH (typical on Windows), point git at it:
+git config --global gpg.program "C:\Program Files\GnuPG\bin\gpg.exe"
+
+# 6. Cut a tag — git auto-signs:
+git tag -m "v1.0.0-rc1" v1.0.0-rc1
+git verify-tag v1.0.0-rc1
+git push origin v1.0.0-rc1
+```
+
+**Decision criteria:**
+
+- **Pick SSH** if you already have an SSH key for GitHub or want minimal setup. Output: GitHub-verified tags, no new software install. Disadvantage: SSH signing is newer (Git 2.34+, late 2021); some older verification tooling (pre-2022) doesn't support it yet.
+- **Pick GPG** if you want broader downstream tool support, S/MIME-compatible pipelines, or web-of-trust scenarios. Disadvantage: more setup, key management is more involved, requires Gpg4win install on Windows.
+
+For wl_manager specifically (downstream is Splunk Enterprise admins running `git verify-tag`), SSH is sufficient — Git ≥ 2.34 has been the norm since late 2021, well before any plausible production-Splunk install date.
+
+**Don't sign commits in addition to tags unless you have a reason.** Tag signing is the FOSS expectation; per-commit signing adds noise to the log and rarely adds security value when tags are signed.
+
+**When the first signed tag fails verification**: most likely causes are (a) the public key wasn't uploaded to GitHub yet, (b) the email on the GitHub key doesn't match the git committer email, or (c) on Windows, `gpg.program` points at the broken Git-bundled gpg.exe instead of the Gpg4win install. `git verify-tag --verbose v1.0.0-rc1` shows the specific failure mode.
+
