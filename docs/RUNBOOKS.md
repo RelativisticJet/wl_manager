@@ -374,3 +374,50 @@ curl -sk -u superadmin1:token -X POST \
 
 **After GUID rotation / DR restore:** Run `bootstrap_csv_hashes` after `reset_cooldowns.sh` and FIM baseline rebuild to re-sign the CSV hash registry with the new GUID-derived key.
 
+### Dev Environment — Install Splunk Developer License
+
+**Use when**: a local dev/test container's 60-day Splunk trial has expired (or you want to run E2E tests past the 60-day mark) and you have a personal Splunk Developer license from dev.splunk.com.
+
+**The license is private to your dev.splunk.com account. Never commit it to the repo.** Keep it on your host machine (e.g. `~/Desktop` or a secrets directory) and copy it into the container only at install time. CI does not need a license — every workflow run spins up a fresh `splunk/splunk:9.3.1` container which gets a fresh 60-day Enterprise trial that lasts longer than any CI job.
+
+```bash
+# 1. Copy the license into the container (NOT into the repo workspace)
+docker cp ~/Desktop/Splunk.License wl_manager_test:/tmp/Splunk.License
+
+# 2. Install (the CLI auto-files it under /opt/splunk/etc/licenses/enterprise/)
+docker exec -u splunk wl_manager_test \
+  /opt/splunk/bin/splunk add licenses /tmp/Splunk.License \
+  -auth admin:Chang3d!
+
+# 3. Restart (CLAUDE.md convention: stop + start, no -auth; the `!` in the
+#    password is a bash history-expansion trigger).
+docker exec -u splunk wl_manager_test /opt/splunk/bin/splunk stop
+docker exec -u splunk wl_manager_test /opt/splunk/bin/splunk start --answer-yes
+
+# 4. Verify (look for type=enterprise + the expected quota)
+docker exec -u splunk wl_manager_test \
+  curl -sk -u admin:Chang3d! \
+  "https://localhost:8089/services/licenser/licenses?output_mode=json" \
+  | python3 -m json.tool | grep -E '"label"|"type"|"quota"'
+
+# 5. Clean up the temp copy in /tmp (the install already filed it under
+#    /opt/splunk/etc/licenses/enterprise/). docker cp created /tmp file as
+#    root, so the cleanup needs -u 0.
+docker exec -u 0 wl_manager_test rm -f /tmp/Splunk.License
+```
+
+**Caveats:**
+
+- **License is keyed to the Splunk GUID at install time.** Rebuilding the container (`docker rm` + recreate) generates a new GUID and the license must be re-installed. The cooldown / FIM / CSV-hash recovery procedures earlier in this section also need to run after a rebuild — license install is one more step in that DR runbook.
+- **Splunk Free + Splunk Forwarder licenses stay listed alongside the Developer license** after install — that is normal. Enterprise takes precedence; Free is the fallback if Enterprise expires or its daily quota is breached.
+- **Quota**: a Personal Dev license is typically 10 GB/day. The full E2E suite consumes a few hundred MB/day at most, so quota is not a real constraint for a single-developer dev container.
+- **Expiry**: Dev licenses ship with a built-in expiry (usually 6-12 months from issue). Watch the `expiration_time` field in the verify command above; rotate before it lapses.
+
+**Smoke-test after install:** run `node tests/e2e/test_ratelimit_per_worker.cjs` (or any representative E2E test). A green run confirms no licensing-mode regression (custom roles still work, KV access still works, scheduled inputs still fire).
+
+**When to re-install:**
+
+- Container rebuilt from image (new GUID).
+- The Splunk Enterprise trial expired AND you want to keep using Enterprise-only features (custom roles, scheduled searches, distributed search, etc.) locally.
+- License file rotated (rare — you would get a new file from dev.splunk.com when the current one expires).
+
