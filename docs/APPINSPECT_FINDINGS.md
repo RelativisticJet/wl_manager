@@ -337,6 +337,56 @@ so they are lost when the runner is torn down. **Phase 1.7 follow-up**:
 add an artifact upload step so future runs preserve the JSON for
 diffing.
 
+### 5.7 Phase 1.7 closure (2026-05-17)
+
+Phase 1.7 ("Fix all error-severity findings") closed with workflow
+run `26002056326` passing both profiles green. Outcome per F-finding:
+
+| # | Finding | Outcome | Commit |
+|---|---------|---------|--------|
+| F1 | manifest `Enterprise` version requirement | partial — manifest now `"9.3"` (operationally honest; only Splunk-supported version as of 2026-05-17), but SLIM still rejects it. Suppressed via expect.yaml. | `5757ade` + `628a2b3` |
+| F2–F11 | SLIM spec drift on `python.version` / `python.required` | unchanged in source (still required by static AppInspect); suppressed at the dynamic-API layer via expect.yaml. | `628a2b3` |
+| F12 | redundant `[id].check_for_updates` | **fixed in source** by removing the redundant line; `[package]` is now the sole home. | `d40e1b9` |
+
+Three CI iterations confirmed SLIM rejects every Enterprise version
+format we can produce without Splunk-private documentation:
+`">=9.0.0"`, `">=9.0,<10.0"`, `"9.3"`. The error wording in each case
+is identical ("includes no supported version") and the value is
+echoed back literally, suggesting SLIM intersects against a literal
+allowlist rather than parsing a range. Reference Splunk-published
+apps on GitHub use multiple formats (`"*"`, `">=9.0"`, `">=9.2"`)
+that work for their submissions but not ours; the difference is
+opaque without access to the dev.splunk.com signed-in manifest
+schema docs.
+
+Workflow result, run `26002056326` (`628a2b3`):
+
+| Profile | Total | error | failure | warning | success |
+|---------|-------|-------|---------|---------|---------|
+| Cloud Vetting (`cloud`)              | 247 | 0 | 1 (expected) | 5 | 161 |
+| Self-Service Cloud (`private_app`)   | 242 | 0 | 0            | 5 | 159 |
+
+The single Cloud-profile failure matches the expect.yaml allowlist
+key exactly; the action's `compare_against_known_failures` (set
+equality on check names) passes and the workflow exits 0.
+
+**Re-evaluation triggers** for the expect.yaml suppression (mirrored
+in the file itself):
+
+1. Every quarterly Splunk Version Pinning Audit (next due
+   2026-07-18 per CLAUDE.md).
+2. First human-reviewer feedback from Splunkbase Cloud Vetting on
+   the actual submission — they may dictate the format SLIM accepts.
+3. Any update to `splunk/appinspect-api-action` past v3.0.5 that
+   alters the expect.yaml schema.
+
+**Phase 1.8 ("Per-finding triage on warnings + manual_checks") is
+unblocked**: warnings have been triaged unchanged at §3 above
+(byte-identical between local CLI Phase 1.3 and hosted-API Phase
+1.6 numbers); no manual_check items emerged in either profile.
+Phase 1.8 work is therefore primarily a doc-organization step
+rather than new triage.
+
 ---
 
 ## 6. Re-runnable command
@@ -386,3 +436,19 @@ The CI variant of this command lives in
   config edits (F1–F12 in §5.2). Phase 1.5 workflow path-doubling
   drift fixed in commit `027014a` during the same session. §5
   replaced with the actual Phase 1.6 results (was placeholder).
+- 2026-05-17 — Phase 1.7 closed (run `26002056326`, HEAD `628a2b3`).
+  Both profiles passing. F12 fixed in source by deleting redundant
+  `[id].check_for_updates` (commit `d40e1b9`). F1 manifest tried
+  three formats (`">=9.0,<10.0"`, `"9.3"`) — SLIM rejected each
+  with identical wording. Kept `"9.3"` as the operationally honest
+  value (only Splunk version still in vendor support as of
+  2026-05-17) and added `.appinspect_api.expect.yaml` to suppress
+  `check_that_app_passes_slim_validation_for_cloud` (commit
+  `628a2b3`) — F2–F11 spec drift cannot be removed in source
+  without breaking static AppInspect's
+  `check_python_version_correctness_for_splunk_enterprise`. See
+  §5.7 for the full closure narrative + three re-evaluation triggers
+  (quarterly Splunk Version Pinning Audit, first Splunkbase human-
+  review feedback, any action version bump past v3.0.5). Phase 1.8
+  (warning/manual_check triage) is unblocked; warnings already
+  triaged in §3 byte-identical to Phase 1.3 local-CLI baseline.
