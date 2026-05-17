@@ -377,8 +377,16 @@ in the file itself):
    2026-07-18 per CLAUDE.md).
 2. First human-reviewer feedback from Splunkbase Cloud Vetting on
    the actual submission — they may dictate the format SLIM accepts.
-3. Any update to `splunk/appinspect-api-action` past v3.0.5 that
-   alters the expect.yaml schema.
+3. Any SLIM allowlist update that makes
+   `check_that_app_passes_slim_validation_for_cloud` start passing
+   again. The action's `compare_against_known_failures` is
+   set-equality between actual and expected failure names; a
+   spontaneously-passing check produces a "yaml lists a failure
+   that didn't occur" mismatch and FAILS the workflow until this
+   entry is removed. Watch for the cloud profile's `Report info`
+   line showing `failure: 0` while this file still exists.
+4. Any update to `splunk/appinspect-api-action` past v3.0.5 that
+   alters the expect.yaml schema itself.
 
 **Phase 1.8 ("Per-finding triage on warnings + manual_checks") is
 unblocked**: warnings have been triaged unchanged at §3 above

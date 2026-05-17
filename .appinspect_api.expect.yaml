@@ -74,8 +74,17 @@ check_that_app_passes_slim_validation_for_cloud: |
        narrative needs an update.
     2. The first human-reviewer feedback from Splunkbase Cloud Vetting
        — they may tell us the exact manifest format SLIM accepts.
-    3. Any update to `splunk/appinspect-api-action` past v3.0.5 that
-       changes the expect.yaml schema.
+    3. Any SLIM allowlist update that makes
+       `check_that_app_passes_slim_validation_for_cloud` start
+       PASSING again. The action's
+       `compare_against_known_failures` uses set-equality between
+       actual and expected failures, so a spontaneously-passing
+       check creates a yaml-lists-a-failure-that-didn't-occur
+       mismatch and FAILS the workflow until this entry is deleted.
+       Watch for the cloud profile's "Report info" line showing
+       `failure: 0` despite this file existing.
+    4. Any update to `splunk/appinspect-api-action` past v3.0.5
+       that changes the expect.yaml schema itself.
 
   Phase 1.6 dynamic-stage findings record: docs/APPINSPECT_FINDINGS.md
   §5.1 (headline numbers) + §5.2 (per-finding triage).
