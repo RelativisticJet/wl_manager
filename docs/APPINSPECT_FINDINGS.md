@@ -491,7 +491,7 @@ manual triage outstanding.
 
 | Criterion | Status |
 |-----------|--------|
-| `appinspect.yml` CLI workflow green | ✅ Phase 1.2 — initial green flagged in error during Phase 1.7 closure (the workflow had been RED with an `actions/setup-python@v5` `cache: pip` config bug from 17:12 onward; the bug was a missing `requirements.txt`/`pyproject.toml` for the cache key, fixed 2026-05-18 in commit `<TBD>`. The local CLI's content findings — 0 error / 0 failure on both profiles in `.planning/appinspect/appinspect-*-phase1.json` (Phase 1.3 baseline) — were always correct; only the GHA wiring was broken.) |
+| `appinspect.yml` CLI workflow green | ✅ Phase 1.2 — initial green flagged in error during Phase 1.7 closure (the workflow had been RED with an `actions/setup-python@v5` `cache: pip` config bug from 17:12 onward; the bug was a missing `requirements.txt`/`pyproject.toml` for the cache key, fixed 2026-05-18 in commit `632615a`. The local CLI's content findings — 0 error / 0 failure on both profiles in `.planning/appinspect/appinspect-*-phase1.json` (Phase 1.3 baseline) — were always correct; only the GHA wiring was broken.) |
 | `appinspect-api.yml` API workflow green | ✅ Phase 1.7 (run `26002056326`) |
 | 0 error-severity findings — `cloud` | ✅ (§5.1: 0 error / 1 failure suppressed via expect.yaml / 0 future_failure) |
 | 0 error-severity findings — `splunk-platform-standalone` | ✅ (§1) |
