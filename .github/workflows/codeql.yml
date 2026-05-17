@@ -45,6 +45,14 @@ concurrency:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
+    # CodeQL requires "Code scanning" enabled at the repo level. For
+    # PRIVATE repos that gate is GitHub Advanced Security (a paid
+    # feature this project does not have); for PUBLIC repos it is free
+    # and enables automatically. This `if:` guard skips the job
+    # cleanly until the repo flips public in PUBLIC_RELEASE_PLAN.md
+    # Phase 3.4. After that the guard evaluates true and the job runs
+    # without any further config change.
+    if: github.event.repository.private == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
 

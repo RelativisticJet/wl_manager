@@ -491,7 +491,7 @@ manual triage outstanding.
 
 | Criterion | Status |
 |-----------|--------|
-| `appinspect.yml` CLI workflow green | ✅ Phase 1.2 |
+| `appinspect.yml` CLI workflow green | ✅ Phase 1.2 — initial green flagged in error during Phase 1.7 closure (the workflow had been RED with an `actions/setup-python@v5` `cache: pip` config bug from 17:12 onward; the bug was a missing `requirements.txt`/`pyproject.toml` for the cache key, fixed 2026-05-18 in commit `<TBD>`. The local CLI's content findings — 0 error / 0 failure on both profiles in `.planning/appinspect/appinspect-*-phase1.json` (Phase 1.3 baseline) — were always correct; only the GHA wiring was broken.) |
 | `appinspect-api.yml` API workflow green | ✅ Phase 1.7 (run `26002056326`) |
 | 0 error-severity findings — `cloud` | ✅ (§5.1: 0 error / 1 failure suppressed via expect.yaml / 0 future_failure) |
 | 0 error-severity findings — `splunk-platform-standalone` | ✅ (§1) |
@@ -548,3 +548,20 @@ checkpoint at week 4) is **not applicable**. Next milestone per
   Note: the revision log was renumbered from §7 to §8 to accommodate
   the new Phase 1.8 closure section without breaking the sequential
   numbering (§1–§8). Internal cross-references updated.
+- 2026-05-18 — **correction to §7.5 row 1**. The Phase 1.8 closure
+  claimed `appinspect.yml` CLI workflow was green; in fact the GHA
+  job had been failing since 2026-05-17 17:12 with an
+  `actions/setup-python@v5` `cache: pip` configuration bug — the
+  cache key requires `requirements.txt` or `pyproject.toml` and this
+  repo has only `requirements-dev.txt`. The bug was not in
+  AppInspect content (Phase 1.3 baseline `.planning/appinspect/*-phase1.json`
+  was always 0 error / 0 failure) but in CI wiring. Fix: removed
+  `cache: pip` from the setup-python step (the only `pip install` in
+  this workflow uses `--no-cache-dir` so caching was a no-op anyway).
+  This row's status fixed in the same commit. **Lesson logged in
+  `~/.claude/state/qa-findings.jsonl` as
+  `false-completion-claim-without-ci-verification`** — Phase 1
+  acceptance was declared complete without spot-checking every
+  workflow's actual run status; the QA process must include a `gh
+  run list` cross-check on every claimed-green workflow at
+  phase-closure boundaries.

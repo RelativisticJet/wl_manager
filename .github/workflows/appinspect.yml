@@ -52,11 +52,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # `cache: pip` was removed 2026-05-18 — actions/setup-python@v5
+      # requires `requirements.txt` or `pyproject.toml` to compute the
+      # cache key, and this repo has neither (only requirements-dev.txt,
+      # not a name setup-python globs for). The single `pip install` in
+      # this job uses `--no-cache-dir` anyway so caching was a no-op.
+      # Specifying `cache-dependency-path: requirements-dev.txt` would
+      # restore the cache, but with a single one-line install of a pinned
+      # package the cache hit is worthless. Keep simple.
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: pip
 
       # libmagic1 is required by splunk-appinspect's `python-magic`
       # transitive dep. Without it the install succeeds but every
