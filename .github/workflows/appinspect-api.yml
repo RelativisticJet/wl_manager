@@ -1,0 +1,107 @@
+name: AppInspect (API)
+
+# Phase 1.5 deliverable (added 2026-05-17, Phase 1 work).
+#
+# Calls the hosted AppInspect HTTP API at appinspect.splunk.com via
+# the official splunk/appinspect-api-action wrapper, authenticated
+# with the SPLUNK_DEV_USERNAME + SPLUNK_DEV_PASSWORD secrets registered
+# in Phase 1.4 (see docs/PUBLIC_RELEASE_PLAN.md §1 D18 for the re-scope
+# decision; docs/RUNBOOKS.md "AppInspect API — Credential Setup" for
+# the secret-registration procedure).
+#
+# Two tag profiles run sequentially as independent action invocations:
+#
+#   - `cloud` tag — Splunk Cloud Vetting (the primary cert target per D2).
+#   - `private_app` tag — Self-Service Cloud (alternate fast-track path;
+#     covers the modern Victoria stack which all current Splunk Cloud
+#     tenants are on).
+#
+# `if: always()` on the second step ensures both profiles get exercised
+# even when the first reports errors — important so Phase 1.6 triage has
+# both reports to compare.
+#
+# Phase 1.5 acceptance is "API workflow fires, dynamic checks complete".
+# The action's exit code IS the gate — there is NO custom JSON-summary
+# enforcement step (unlike appinspect.yml's local-CLI workflow). If the
+# first run surfaces errors, that's Phase 1.6 triage + Phase 1.7 fix
+# work, NOT a Phase 1.5 problem.
+#
+# Implementation note on the action wrapper choice (mirrors the rationale
+# documented in appinspect.yml for the OPPOSITE choice on the local CLI):
+#
+# The local splunk-appinspect 4.2.0 CLI does NOT talk to the hosted API
+# at all (verified: its only commands are `inspect`, `list`, `mcp-server`,
+# `update-trusted-libraries`, and `documentation` — no `submit`/remote
+# command). The hosted API uses an undocumented auth handshake against
+# api.splunk.com/2.0/rest/login/splunk that the action wraps correctly.
+# Reimplementing it via curl would couple this workflow to a private auth
+# contract Splunk can change without notice. So: action wrapper here,
+# direct pip-install for the local CLI in appinspect.yml. That asymmetry
+# is intentional, not a drift.
+#
+# Action pinned to v3.0.5 (latest tagged release as of 2026-05-17,
+# published 2023-10-05). The action's underlying Docker image is
+# ghcr.io/splunk/appinspect-api-action/appinspect-api-action:v3.0.5.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel in-flight runs on the same ref. Each API submission takes
+# 2–5 minutes per profile; coalescing prevents queue pileup on rapid
+# pushes.
+concurrency:
+  group: appinspect-api-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  appinspect-api:
+    name: AppInspect (API)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build .spl
+        run: bash scripts/package.sh
+
+      # The .spl filename is derived from default/app.conf:[launcher] version
+      # by scripts/package.sh. Glob it so this workflow survives RC bumps
+      # (e.g. 1.0.0-rc1 → 1.0.0-rc2) without an edit.
+      - name: Locate .spl
+        id: spl
+        run: |
+          set -euo pipefail
+          SPL_FILE="$(ls -1 dist/wl_manager-*.spl | head -1)"
+          if [[ -z "$SPL_FILE" ]]; then
+            echo "ERROR: no .spl produced under dist/"
+            exit 1
+          fi
+          echo "spl_file=$SPL_FILE" >> "$GITHUB_OUTPUT"
+          echo "Built: $SPL_FILE ($(du -h "$SPL_FILE" | cut -f1))"
+
+      - name: AppInspect API — Cloud Vetting profile (cloud tag)
+        uses: splunk/appinspect-api-action@v3.0.5
+        with:
+          username: ${{ secrets.SPLUNK_DEV_USERNAME }}
+          password: ${{ secrets.SPLUNK_DEV_PASSWORD }}
+          app_path: ${{ steps.spl.outputs.spl_file }}
+          included_tags: cloud
+          log_level: INFO
+
+      - name: AppInspect API — Self-Service Cloud profile (private_app tag)
+        if: always()
+        uses: splunk/appinspect-api-action@v3.0.5
+        with:
+          username: ${{ secrets.SPLUNK_DEV_USERNAME }}
+          password: ${{ secrets.SPLUNK_DEV_PASSWORD }}
+          app_path: ${{ steps.spl.outputs.spl_file }}
+          included_tags: private_app
+          log_level: INFO
