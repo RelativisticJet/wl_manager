@@ -190,10 +190,57 @@ how Semgrep taint mode handles function boundaries, and why the non-taint
 
 ### Pull Requests
 
-1. Create a feature branch from `main`
+1. Create a feature branch from `main` (any name; `feat/`, `fix/`,
+   `docs/` prefixes are encouraged but not enforced)
 2. Make your changes with clean commits
 3. Run `make validate` and `make test`
-4. Open a PR with a description of what and why
+4. Open a PR with a description of what and why; the
+   [PR template](.github/PULL_REQUEST_TEMPLATE.md) walks through the
+   sections that need to be filled in (test plan, verification,
+   audit-trail impact)
+5. CI must be green before merge — `appinspect.yml`,
+   `appinspect-api.yml`, `semgrep.yml`, `secret-scan.yml`,
+   `e2e-smoke.yml`, and the integration test suite. Maintainers may
+   waive specific failures with documented rationale.
+
+## Response Expectations
+
+This project is maintained by a single individual on a best-effort
+basis — there is no paid support contract behind it. The targets
+below are what the maintainer aims for, not a contractual SLA.
+
+### Non-security issues
+
+| Stage | Target |
+|-------|--------|
+| First acknowledgement | 5 business days |
+| Triage + initial response | 14 business days |
+| Fix shipped (P0 — blocker: data loss / RBAC bypass / install failure) | Best effort, typically within 14 days of triage |
+| Fix shipped (P1 — high-impact bug) | Best effort, typically within 30 days of triage |
+| Fix shipped (P2 — cosmetic / minor) | Next regular release |
+
+### Pull requests
+
+| Stage | Target |
+|-------|--------|
+| First reaction (comment / questions) | 5 business days |
+| Full review | 14 business days |
+| Merge decision (accept / request-changes / decline) | Within one review round of the full review |
+
+### Security reports
+
+Security reports follow a separate, faster SLA — see
+[SECURITY.md](SECURITY.md) ("Coordinated Disclosure Timeline" section).
+**Do not open public issues for security findings**; use GitHub
+Security Advisories (private) or follow the SECURITY.md guidance.
+
+### What slows things down
+
+The maintainer's day job, travel, and occasional sabbaticals will
+push individual response times beyond these targets. If an issue
+hasn't received a reaction within 2× the listed target, a friendly
+ping ("any update?") is welcome and helps surface the issue if it
+was lost in a notification pile.
 
 ## Reporting Issues
 

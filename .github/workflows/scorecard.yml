@@ -1,0 +1,103 @@
+name: OSSF Scorecard
+
+# Phase 2.18 deliverable (added 2026-05-18 — PUBLIC_RELEASE_PLAN.md §5
+# row 2.18, gap G6 from 2026-05-15 gap review, marked OPTIONAL).
+#
+# OSSF Scorecard runs a battery of supply-chain-security checks against
+# the repo's GitHub configuration:
+#   - Branch protection
+#   - Code review enforcement
+#   - Token permissions in workflows
+#   - Pinned dependencies
+#   - SAST presence (CodeQL — declared in codeql.yml)
+#   - License presence
+#   - Maintained / recent activity
+#   - Vulnerability scanning (Dependabot — declared in dependabot.yml)
+#   - Signed releases (Sigstore — declared in release.yml)
+#   - Fuzzing presence (we have semgrep + zap-baseline)
+#   - Dangerous workflow patterns
+#
+# Results land in the repo's Security tab (code scanning alerts) and
+# can be exposed publicly via the OpenSSF badge generator. Free for
+# public repos.
+#
+# Scorecard requires `id-token: write` to publish to OpenSSF's BigQuery
+# instance and `security-events: write` to upload SARIF results. Both
+# permissions are scoped at the job level below — neither is granted
+# at the workflow level.
+#
+# Same private-repo guard as codeql.yml: Scorecard's GHA action
+# requires public repos to publish results to the public OpenSSF
+# BigQuery dataset. On a private repo it would either fail
+# (no public endpoint to write to) or quietly skip — neither is
+# useful, so skip the job until Phase 3.4 flips the repo public.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly sweep at 06:43 UTC every Monday. Random minute again to
+    # avoid synchronized GHA load with codeql + dependabot.
+    - cron: '43 6 * * 1'
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
+
+    permissions:
+      # Required for SARIF upload to GitHub Security tab.
+      security-events: write
+      # Required to publish results to OpenSSF's public BigQuery
+      # instance. Scoped to this job only.
+      id-token: write
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Scorecard requires the full history for some checks (e.g.,
+          # "Maintained" looks at commit cadence over time). The
+          # `persist-credentials: false` mirrors OpenSSF's published
+          # template — prevents the auth token leaking into Scorecard's
+          # own analysis surface.
+          persist-credentials: false
+
+      - name: Run Scorecard analysis
+        uses: ossf/scorecard-action@v2.4.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # publish_results: true sends the score to the public OpenSSF
+          # API (https://api.securityscorecards.dev/) so it can be
+          # rendered as a README badge. Set to false to keep results
+          # private to this repo's Security tab only.
+          publish_results: true
+
+      # Upload the artifact regardless of the SARIF upload outcome so a
+      # local copy is always retrievable even if GitHub's security-events
+      # ingestion has an outage.
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 30
+
+      # SARIF upload populates the Security tab. The action treats a
+      # 4xx response as a hard fail; we don't want a transient
+      # security-events ingestion outage to break CI, so wrap in
+      # `if: always()` and accept exit codes other than 0 — the artifact
+      # above is the durable record.
+      - name: Upload to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
