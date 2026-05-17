@@ -508,3 +508,80 @@ For wl_manager specifically (downstream is Splunk Enterprise admins running `git
 
 **When the first signed tag fails verification**: most likely causes are (a) the public key wasn't uploaded to GitHub yet, (b) the email on the GitHub key doesn't match the git committer email, or (c) on Windows, `gpg.program` points at the broken Git-bundled gpg.exe instead of the Gpg4win install. `git verify-tag --verbose v1.0.0-rc1` shows the specific failure mode.
 
+### AppInspect API — Credential Setup
+
+Phase 1.4 setup procedure (see `docs/PUBLIC_RELEASE_PLAN.md` §1 D18 for the
+re-scope decision). Phase 1.5 will wire `splunk/appinspect-api-action` in a
+new workflow that reads two GitHub Actions secrets to authenticate against
+the hosted AppInspect HTTP API (`appinspect.splunk.com/v1/app/validate`).
+
+**Prerequisites:**
+
+- A splunk.com Developer account (Phase 1.1 / D15; account `Oleh Bezsonov` /
+  `communicate.oleh@gmail.com`, created 2026-05-13)
+- Credentials accessible (Phase 1.1.1 / DECISION_LOG.md followups —
+  password manager + TOTP recovery codes)
+- `gh` CLI authenticated against the `RelativisticJet` GitHub account
+  (`gh auth status` should show that account)
+
+**Step 1 — Confirm API endpoint is reachable.** This is anonymous and
+requires no credentials; it verifies the network path:
+
+```bash
+curl -s https://appinspect.splunk.com/v1/info
+# expected: {"api_version": "v1", "appinspect_version": "4.2.0"}
+```
+
+The `appinspect_version` returned MUST match the pin in
+`.github/workflows/appinspect.yml` (Phase 1.2). If Splunk has bumped
+the hosted version, see the bump procedure inside the workflow's
+"Install splunk-appinspect" step comment — same version on both sides
+keeps Phase 1.6 dynamic findings comparable to Phase 1.3 local
+findings.
+
+**Step 2 — Store the splunk.com Developer credentials as GitHub
+Actions secrets.** Run these against the upstream repo; `gh secret set`
+prompts for the value interactively (does NOT take it as a CLI arg —
+that would put the password in shell history):
+
+```bash
+gh secret set SPLUNK_DEV_USERNAME --repo RelativisticJet/wl_manager
+#   <paste the Developer-account username when prompted>
+
+gh secret set SPLUNK_DEV_PASSWORD --repo RelativisticJet/wl_manager
+#   <paste the password when prompted>
+```
+
+**Step 3 — Verify both secrets are registered.** Names + last-updated
+timestamps only; values are not retrievable after creation:
+
+```bash
+gh secret list --repo RelativisticJet/wl_manager
+# expect to see both SPLUNK_DEV_USERNAME and SPLUNK_DEV_PASSWORD listed
+```
+
+**Step 4 — End-to-end auth validation.** Deferred to Phase 1.5's first
+workflow run. `splunk/appinspect-api-action` does the splunk.com JWT
+exchange internally; if either secret is wrong, that workflow fails
+with a clear 401 on the login call. There is no benefit to a separate
+hand-run round-trip from the local shell — the action's auth flow is
+the canonical path.
+
+**Secret naming convention:** `SPLUNK_DEV_*` covers both the AppInspect
+API (Phase 1.5/1.6) and any future Splunkbase publishing API call
+(Phase 3) — both use the same splunk.com Developer credential. Do NOT
+introduce a separate `APPINSPECT_*` or `SPLUNKBASE_*` namespace.
+
+**Rotation:** if the password is rotated upstream (suspected exposure
+or scheduled refresh), re-run Step 2 with the new value. GitHub
+Actions secret-set is overwrite-safe; the previous value is replaced
+atomically and downstream workflows pick up the new value on their
+next run with no further action.
+
+**Scope (re-scope per D18):** this section does NOT cover provisioning
+a Splunk Cloud Sandbox or paid Splunk Cloud Platform trial. Those are
+separate artifacts needed only if Phase 1.6 dynamic checks surface
+issues that require hands-on Cloud-tenant runtime probing. If that
+need arises, a follow-up Phase 1.4b row will be added to the plan
+documenting the Sandbox provisioning steps.
+
