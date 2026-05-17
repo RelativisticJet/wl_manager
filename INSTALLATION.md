@@ -330,3 +330,12 @@ When upgrading from an older version:
 3. Check the Audit dashboard's "File Integrity Monitor Alerts" panel
    for any `fim_scripted_input_no_session_key` events — upgrades
    sometimes reset `inputs.conf` if you were using `local/` overrides.
+
+---
+
+## Trademark Notice
+
+Splunk, Splunk Enterprise, and Splunk Enterprise Security are
+registered trademarks of Splunk LLC in the United States and other
+countries. This project is an independent community tool — it is not
+affiliated with, endorsed by, or sponsored by Splunk LLC.

@@ -1,0 +1,33 @@
+# Issue template configuration
+#
+# `blank_issues_enabled: false` forces contributors to pick a template,
+# which keeps issues structured. The `contact_links` block redirects
+# off-template intents (security, support questions) to the right
+# channel — security goes private, general questions go to Discussions
+# once they are enabled, and "I just want to chat" goes nowhere
+# unintended.
+#
+# See `.github/ISSUE_TEMPLATE/bug_report.md`,
+# `feature_request.md`, and `question.md` for the three available
+# public templates.
+
+blank_issues_enabled: false
+
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/RelativisticJet/wl_manager/security/advisories/new
+    about: >-
+      DO NOT open a public issue for security reports. Use GitHub Security
+      Advisories (private). Full policy + scope + safe-harbor terms in
+      SECURITY.md.
+  - name: Splunk Enterprise core bug
+    url: https://www.splunk.com/en_us/product-security.html
+    about: >-
+      Bugs in Splunk Enterprise itself (not this app) should be reported
+      directly to Splunk LLC.
+  - name: Discussion / general question
+    url: https://github.com/RelativisticJet/wl_manager/discussions
+    about: >-
+      Open-ended questions, design discussion, or "is this the right tool
+      for my use case" should go to Discussions, not Issues. (If
+      Discussions isn't enabled yet, use a "question" issue instead.)

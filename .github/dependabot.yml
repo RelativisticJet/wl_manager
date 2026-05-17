@@ -1,0 +1,61 @@
+# Dependabot configuration
+#
+# Phase 2.17 deliverable (added 2026-05-18 — see PUBLIC_RELEASE_PLAN.md
+# §5 row 2.17, gap G5 from 2026-05-15 gap review).
+#
+# Ecosystems we declare:
+#   - pip (root)           → requirements-dev.txt at repo root
+#                            (only Python manifest in this repo today;
+#                            Splunk-bundled Python provides runtime
+#                            stdlib, no runtime requirements.txt yet)
+#   - github-actions       → all .github/workflows/*.yml
+#
+# Not declaring a separate `/tests` pip block: there is no
+# tests/requirements*.txt — the test extras live in the same root
+# requirements-dev.txt that Dependabot already picks up via the pip
+# block above.
+#
+# Not declaring npm because the frontend uses Splunk-bundled AMD
+# modules (jQuery + RequireJS shipped with Splunk Enterprise) — there
+# is no package.json with first-party runtime dependencies. The
+# package.json that exists at the repo root holds Playwright/Jest
+# devDependencies for tests/ only and is gitignored from the .spl; if
+# we ever add a frontend bundler, add an `npm` block here.
+#
+# Weekly cadence on Mondays at 07:00 UTC — same scheduling window as
+# CodeQL so the maintainer sees both reports in one batch.
+
+version: 2
+
+updates:
+  # Python — root requirements-dev.txt
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    labels:
+      - dependencies
+      - python
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(pip)"
+      include: scope
+
+  # GitHub Actions — pinned action versions in workflows
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    labels:
+      - dependencies
+      - ci
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(actions)"
+      include: scope

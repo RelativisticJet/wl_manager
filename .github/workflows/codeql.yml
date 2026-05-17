@@ -1,0 +1,78 @@
+name: CodeQL
+
+# Phase 2.16 deliverable (added 2026-05-18 — see PUBLIC_RELEASE_PLAN.md §5
+# row 2.16, gap G4 from 2026-05-15 gap review).
+#
+# Free static-analysis workflow for public repos. Runs GitHub's CodeQL
+# analyzers across Python (backend + scripts) and JavaScript (frontend
+# modules) on every push to main, every PR, and weekly on schedule.
+# Findings surface in the repo's "Security" tab and are cross-referenced
+# by Dependabot for known-vulnerability matches.
+#
+# Languages declared:
+#   - python      → bin/*.py + scripts/*.py + tests/**/*.py
+#   - javascript  → appserver/static/*.js + appserver/static/modules/*.js
+#
+# The Splunk-bundled Python is 3.x only (Splunk 9.x dropped Python 2);
+# CodeQL's `python` analyzer auto-detects the runtime so no extra
+# configuration is needed.
+#
+# This workflow consumes a default CodeQL `security-and-quality` query
+# pack — i.e. CWE-coverage + maintainability hints — not just security.
+# If signal-to-noise becomes a problem, narrow to `security-extended`
+# via the `queries:` input on the init step (commented out below).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly sweep at 06:17 UTC every Monday. Random minute to avoid
+    # synchronized load with other GitHub-hosted workflows.
+    - cron: '17 6 * * 1'
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+# Cancel in-flight CodeQL runs on the same ref (PR pushes can stack).
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # Default query pack: security-and-quality.
+          # Narrow to security-only via the line below if noise grows.
+          # queries: security-extended
+
+      # Python is interpreted; JavaScript has no build step in this
+      # repo (frontend uses Splunk-bundled AMD modules, no bundler).
+      # autobuild is a no-op for both but harmless to leave in — it's
+      # the documented step for compiled-language matrices.
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

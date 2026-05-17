@@ -248,3 +248,11 @@ Semgrep rules that gate against SSRF, command injection, and path traversal.
 If you add a new validation wrapper (e.g. a path or URL sanitizer), update the
 corresponding `tests/semgrep/*-splunk.yaml` `pattern-sanitizers` list in the
 same PR, or legitimate callers of your wrapper will trip the rule.
+
+## Trademark Notice
+
+Splunk, Splunk Enterprise, and Splunk Enterprise Security are registered
+trademarks of Splunk LLC in the United States and other countries. This
+project is an independent community tool — it is not affiliated with,
+endorsed by, or sponsored by Splunk LLC. All other product names, logos,
+and brands are property of their respective owners.
