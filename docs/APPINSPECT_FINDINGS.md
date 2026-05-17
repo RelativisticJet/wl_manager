@@ -196,30 +196,140 @@ before the migration).
 
 ---
 
-## 5. Open items for Phase 1.5 / 1.6 (Cloud API + dynamic checks)
+## 5. Cloud API + dynamic checks (Phase 1.6 first API run)
 
-Static AppInspect (this run) is the input to Phase 1.5
-(`splunk/appinspect-api-action` wiring) and Phase 1.6 (first API run).
-The API stage performs container boot + runtime checks the local CLI
-cannot do. Expected surfaces of concern, in order of likelihood:
+> **Status**: Phase 1.6 first API run executed 2026-05-17 against
+> `wl_manager-1.0.0-rc1.spl` via `.github/workflows/appinspect-api.yml`.
+> Run ID: `26000914082` (GHA `appinspect-api.yml`, HEAD `027014a`).
+> The dynamic stage reproduced the Phase 1.3 local-CLI warning set
+> exactly and surfaced ONE additional **failure** that the local CLI
+> does not run — the SLIM packager validator. See §5.4 below for the
+> escalation assessment.
 
-1. **Persistent scripted inputs**. `bin/wl_fim_watch.py` runs with
-   `interval = 0` (long-running daemon). Cloud Vetting historically
-   has restrictions on persistent processes. This is the single biggest
-   remaining unknown — call it out explicitly in the Phase 1.6 triage
-   pass.
-2. **Outbound network calls**. The handler talks to `localhost:8089`
-   for the audit-emission `simpleRequest` call. Loopback is normally
-   permitted, but Cloud Vetting may treat `splunk.rest.simpleRequest`
-   differently than direct socket usage. Confirm in 1.6.
-3. **CycloneDX SBOM file (`*.cdx.json`)** sits next to the .spl, not
-   inside it. Splunkbase upload accepts it as a sibling. Phase 1.5
-   workflow may need an explicit upload step.
+### 5.1 Headline numbers (API stage)
 
-None of these are *expected* to fail; they are the surfaces where
-expected and actual could plausibly diverge. The plan-doc D7 escalation
-clause (Phase 1 week 4) governs if any of these turn out to be hard
-blockers.
+| Result class    | Cloud Vetting (`cloud`) | Self-Service Cloud (`private_app`) |
+|-----------------|-------------------------|-----------------------------------|
+| **error**       | **0**                   | **0**                             |
+| **failure**     | **1**                   | **0**                             |
+| **future_failure** | **0**                | **0**                             |
+| skipped         | 0                       | 0                                 |
+| not_applicable  | 80                      | 78                                |
+| warning         | 5                       | 5                                 |
+| manual_check    | 0                       | 0                                 |
+| success         | 161                     | 159                               |
+
+The hosted API runs 4 more checks than the local CLI on the cloud
+profile (161 success vs 157 in §1) — those additions are SLIM-related
+dynamic checks the local CLI does not invoke. The 5 warnings on each
+profile are byte-identical to the §3 triage above (`check_for_splunk_js`,
+`check_for_python_script_existence`, `check_for_scripted_inputs`,
+`check_for_gratuitous_cron_scheduling`, `check_collections_conf`); no
+new warnings were introduced by the dynamic stage.
+
+The `private_app` profile passed cleanly — Self-Service Cloud is
+already a valid distribution path for the current build.
+
+### 5.2 The one failure — `check_that_app_passes_slim_validation_for_cloud`
+
+The hosted API embeds the Splunk Packaging Toolkit (SLIM) and runs
+its `slim validate` step against the unpacked .spl. SLIM rejected the
+package with a single hard error plus eleven secondary "undefined
+setting" observations:
+
+| # | Class | File | Stanza | Setting / message |
+|---|-------|------|--------|------------------|
+| **F1** | **HARD ERROR** | `app.manifest` | `platformRequirements.splunk` | "Version requirement includes no supported version of Splunk Enterprise: `>=9.0.0`" |
+| F2 | Undefined setting | `default/inputs.conf` | `[script://...wl_expiration_cleanup.py]` | `python.version` |
+| F3 | Undefined setting | `default/inputs.conf` | `[script://...wl_expiration_cleanup.py]` | `python.required` |
+| F4 | Undefined setting | `default/inputs.conf` | `[script://...wl_fim.py]` | `python.version` |
+| F5 | Undefined setting | `default/inputs.conf` | `[script://...wl_fim.py]` | `python.required` |
+| F6 | Undefined setting | `default/inputs.conf` | `[script://...wl_fim_watch.py]` | `python.version` |
+| F7 | Undefined setting | `default/inputs.conf` | `[script://...wl_fim_watch.py]` | `python.required` |
+| F8 | Undefined setting | `default/restmap.conf` | `[script:wl_manager_handler]` | `python.version` |
+| F9 | Undefined setting | `default/restmap.conf` | `[script:wl_manager_handler]` | `python.required` |
+| F10 | Undefined setting | `default/commands.conf` | `[wlexpiringsoon]` | `python.version` |
+| F11 | Undefined setting | `default/commands.conf` | `[wlexpiringsoon]` | `python.required` |
+| F12 | Undefined setting | `default/app.conf` | `[id]` | `check_for_updates` |
+
+**F1 (HARD ERROR) — root cause analysis**: SLIM expects a closed-range
+or specific-version constraint, not the open lower bound `>=9.0.0`.
+The current manifest declares only a floor, which SLIM reads as "no
+upper bound = no concrete Splunk version is in range". Fix in Phase 1.7
+is a one-line manifest edit — e.g., `">=9.0.0,<11.0.0"` or the
+Splunkbase-recommended form. Documented for Phase 1.7.
+
+**F2–F11 — root cause analysis**: SLIM is using an older `.conf.spec`
+catalog than current AppInspect. The settings `python.version` and
+`python.required` ARE declared at the source (`default/inputs.conf:16-17`,
+`:43-44`, `:61-62`; `default/restmap.conf:22-23`; `default/commands.conf:8-9`)
+because static AppInspect's `check_python_version_correctness_for_splunk_enterprise`
+requires them. SLIM does not recognize them in its spec and flags
+both as undefined. This is the spec-drift between AppInspect and SLIM
+that the existing source-comments (e.g., `inputs.conf:12-15`)
+predicted. Two valid remediations for Phase 1.7:
+
+1. Live with the SLIM noise; document it in `.appinspect_api.expect.yaml`
+   so the workflow stops failing on these. The settings stay (static
+   AppInspect needs them).
+2. Engage Splunk on the SLIM/AppInspect spec divergence. Likely too
+   slow to be a Phase 1.7 fix.
+
+Option (1) is the intended Phase 1.7 path; option (2) is for the
+roadmap.
+
+**F12 — root cause analysis**: `default/app.conf [id]` is missing
+`check_for_updates`. The setting is optional in static AppInspect but
+SLIM treats its absence as undefined (vs. the explicit
+`check_for_updates = false` Splunk recommends for Cloud apps that
+should not auto-update via the in-product update mechanism). One-line
+fix in Phase 1.7.
+
+### 5.3 Pre-flagged surfaces — outcome
+
+The pre-Phase-1.6 `§5` (this section in its previous form) listed
+three surfaces of concern. Outcome from the actual run:
+
+| # | Pre-flagged surface | Outcome |
+|---|---------------------|---------|
+| 1 | **Persistent scripted inputs** (`bin/wl_fim_watch.py` `interval = 0`, "single biggest remaining unknown") | **NOT rejected.** The Cloud profile accepted the stanza's presence; the only flag on `wl_fim_watch.py` was the spec-drift `python.version`/`python.required` noise (F6/F7) shared with every other script stanza. The R1.1 / D7 escalation surface (refactor `wl_fim_watch.py` to non-persistent) did **NOT** materialize. |
+| 2 | **Outbound network calls** (handler → `localhost:8089` via `splunk.rest.simpleRequest`) | **Not flagged.** Loopback to splunkd is implicit-allow on both profiles. |
+| 3 | **CycloneDX SBOM** as a `.spl` sibling | **Not flagged by the validator.** Splunkbase upload step (Phase 4) will exercise this separately. |
+
+### 5.4 R1.1 / D7 escalation assessment — **NOT triggered**
+
+The Phase 1 plan (`docs/PUBLIC_RELEASE_PLAN.md` §1) escalates to D7
+(architectural refactor) if Cloud Vetting categorically rejects the
+persistent scripted input. That did not happen — see §5.3 row 1.
+
+All twelve sub-findings (F1–F12) are config / manifest edits, not
+architectural changes. Total estimated Phase 1.7 effort: **≤2 hours**
+for the manifest + `.appinspect_api.expect.yaml` + `[id]` edits,
+versus the **>2 week** budget the escalation clause assumes for a
+`wl_fim_watch.py` refactor.
+
+Phase 1.7 ("Fix all error-severity findings") can proceed within its
+original scope on the original schedule.
+
+### 5.5 Phase 1.5 workflow drift discovered and fixed during this run
+
+The first Phase 1.5 push (run ID `25998624960`, commit `ee0d449`)
+failed before any AppInspect check ran, due to a path-doubling bug in
+the action wrapper's entrypoint (`splunk/appinspect-api-action@v3.0.5`
+entrypoint.sh runs `ls $INPUT_APP_PATH` and joins it onto the input;
+the workflow passed the .spl file directly instead of a single-file
+directory). Fix landed in the same Phase 1.6 session, commit `027014a`:
+stage the .spl into a clean `dist/appinspect/` directory and point the
+action at that dir. Re-run (`26000914082`) progressed past the entry
+step and produced the numbers in §5.1.
+
+### 5.6 Raw outputs
+
+The hosted API's HTML and JSON reports are downloaded inside the
+action's container but no `actions/upload-artifact` step exists yet,
+so they are lost when the runner is torn down. **Phase 1.7 follow-up**:
+add an artifact upload step so future runs preserve the JSON for
+diffing.
 
 ---
 
@@ -259,3 +369,14 @@ The CI variant of this command lives in
 - 2026-05-17 — initial Phase 1.3 baseline. App.manifest version drift
   caught + fixed in same run; §3.5 pre-flight extended to cover it.
   All warnings re-triaged. Zero delta vs Phase 0.0 build-660 baseline.
+- 2026-05-17 — Phase 1.6 first hosted-API run (run ID `26000914082`,
+  HEAD `027014a`). Cloud profile surfaced 1 failure
+  (`check_that_app_passes_slim_validation_for_cloud`); Self-Service
+  Cloud profile clean. R1.1 / D7 escalation assessed and **NOT
+  triggered** — persistent scripted input (`wl_fim_watch.py`) was
+  accepted by Cloud Vetting; the failure is a SLIM-spec issue
+  (manifest version range + spec-drift undefined-setting noise on
+  `python.version` / `python.required`) that decomposes into 12
+  config edits (F1–F12 in §5.2). Phase 1.5 workflow path-doubling
+  drift fixed in commit `027014a` during the same session. §5
+  replaced with the actual Phase 1.6 results (was placeholder).
