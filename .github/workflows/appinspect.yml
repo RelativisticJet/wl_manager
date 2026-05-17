@@ -1,0 +1,149 @@
+name: AppInspect
+
+# Phase 1.2 deliverable (added 2026-05-17, Phase 1 work).
+#
+# Runs Splunk's static AppInspect against the .spl built by
+# scripts/package.sh, against both target profiles:
+#   - splunk-platform-standalone (on-prem Splunk Enterprise)
+#   - cloud (Splunk Cloud Vetting — static stage only)
+#
+# The acceptance gate per PUBLIC_RELEASE_PLAN.md Phase 1.2 is:
+# zero errors AND zero failures AND zero future_failures on both
+# profiles. Warnings are allowed and triaged per docs/APPINSPECT_FINDINGS.md.
+#
+# Implementation note: the Phase 1.2 task in PUBLIC_RELEASE_PLAN.md
+# named `splunk/appinspect-cli-action` as the suggested wiring. That
+# action is a thin wrapper around `pip install splunk-appinspect` +
+# `splunk-appinspect inspect ...` (the same call our local Docker
+# image runs). Using the underlying CLI directly avoids being pinned
+# to a specific action version + lets the workflow stay aligned with
+# the local re-run command documented in docs/APPINSPECT_FINDINGS.md
+# §6 byte-for-byte. To swap in the official action wrapper later,
+# replace the "Run AppInspect" steps below with a `splunk/appinspect-cli-action@<ver>` step.
+#
+# Python pin: Python 3.11 is required because splunk-appinspect 4.2.0's
+# transitive deps (pillow, lxml) lack pre-built wheels for 3.14+ and
+# source-build fails in pip's dep resolver. This is the exact pin called
+# out in `.planning/go-public/PHASE_0_0_APPINSPECT_FINDINGS.md` §2.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel in-flight runs on the same ref when a new commit lands.
+# AppInspect against the whole .spl takes ~1-2 minutes per profile;
+# coalescing prevents queue pileup on rapid pushes.
+concurrency:
+  group: appinspect-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  appinspect:
+    name: AppInspect (CLI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      # libmagic1 is required by splunk-appinspect's `python-magic`
+      # transitive dep. Without it the install succeeds but every
+      # MIME-type check in AppInspect raises.
+      - name: Install libmagic
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libmagic1
+
+      - name: Install splunk-appinspect
+        run: pip install --no-cache-dir splunk-appinspect
+
+      - name: Build .spl
+        run: bash scripts/package.sh
+
+      # Locate the built artifact. scripts/package.sh derives the
+      # filename from default/app.conf:[launcher] version, so we
+      # don't hardcode it here — keeps the workflow alive across RC
+      # bumps without an edit.
+      - name: Locate .spl
+        id: spl
+        run: |
+          set -euo pipefail
+          SPL_FILE="$(ls -1 dist/wl_manager-*.spl | head -1)"
+          if [[ -z "$SPL_FILE" ]]; then
+            echo "ERROR: no .spl produced under dist/"
+            exit 1
+          fi
+          echo "spl_file=$SPL_FILE" >> "$GITHUB_OUTPUT"
+          echo "Built: $SPL_FILE ($(du -h "$SPL_FILE" | cut -f1))"
+
+      - name: Run AppInspect — splunk-platform-standalone profile
+        run: |
+          mkdir -p .planning/appinspect
+          splunk-appinspect inspect "${{ steps.spl.outputs.spl_file }}" \
+            --mode test \
+            --data-format json \
+            --output-file .planning/appinspect/appinspect-standalone-ci.json
+          # Surface the summary in the run log for at-a-glance review.
+          splunk-appinspect inspect "${{ steps.spl.outputs.spl_file }}" \
+            --mode test \
+            --data-format human 2>&1 | tail -20 || true
+
+      - name: Run AppInspect — cloud profile
+        run: |
+          splunk-appinspect inspect "${{ steps.spl.outputs.spl_file }}" \
+            --mode test \
+            --data-format json \
+            --included-tags cloud \
+            --output-file .planning/appinspect/appinspect-cloud-ci.json
+          splunk-appinspect inspect "${{ steps.spl.outputs.spl_file }}" \
+            --mode test \
+            --data-format human \
+            --included-tags cloud 2>&1 | tail -20 || true
+
+      # Hard gate: any error / failure / future_failure on either
+      # profile fails the workflow. Warnings are allowed (per
+      # docs/APPINSPECT_FINDINGS.md triage). Uses Python rather than
+      # jq so we don't have to install extra packages.
+      - name: Enforce gate (0 errors / 0 failures / 0 future_failures)
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          fatal = 0
+          for profile, path in [
+              ("standalone", ".planning/appinspect/appinspect-standalone-ci.json"),
+              ("cloud",      ".planning/appinspect/appinspect-cloud-ci.json"),
+          ]:
+              with open(path) as f:
+                  data = json.load(f)
+              summary = data["summary"]
+              err = summary.get("error", 0)
+              fail = summary.get("failure", 0)
+              fut = summary.get("future_failure", 0)
+              warn = summary.get("warning", 0)
+              succ = summary.get("success", 0)
+              print(f"[{profile}] error={err} failure={fail} future_failure={fut} warning={warn} success={succ}")
+              if err or fail or fut:
+                  fatal += err + fail + fut
+          if fatal:
+              print(f"\nGATE FAILED: {fatal} blocker(s) across both profiles. See artifact JSON for details.")
+              sys.exit(1)
+          print("\nGATE PASSED: 0 errors / 0 failures / 0 future_failures on both profiles.")
+          PY
+
+      - name: Upload AppInspect JSON reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appinspect-reports
+          path: .planning/appinspect/appinspect-*-ci.json
+          retention-days: 30
