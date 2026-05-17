@@ -159,3 +159,7 @@ tests/zap-reports/
 # Same shape for a11y reports — JSON per-page output is scratch.
 # The baseline.json contract is committed; the raw reports are not.
 tests/a11y/reports/
+
+# MemPalace per-project files (issue #185)
+mempalace.yaml
+entities.json
