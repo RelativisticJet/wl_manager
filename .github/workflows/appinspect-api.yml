@@ -75,7 +75,18 @@ jobs:
       # The .spl filename is derived from default/app.conf:[launcher] version
       # by scripts/package.sh. Glob it so this workflow survives RC bumps
       # (e.g. 1.0.0-rc1 → 1.0.0-rc2) without an edit.
-      - name: Locate .spl
+      #
+      # The splunk/appinspect-api-action v3.0.5 entrypoint runs
+      # `ls $INPUT_APP_PATH` and joins the result back onto $INPUT_APP_PATH,
+      # so app_path must be a DIRECTORY containing exactly one file
+      # (the .spl). dist/ also holds the .spl.sha256 and the .spl.cdx.json
+      # SBOM siblings, so we stage the .spl into a dedicated single-file
+      # dir to avoid the entrypoint's `ls` glob emitting multiple lines.
+      # See action source v3.0.5 entrypoint.sh — the first run (ID
+      # 25998624960, 2026-05-17) failed with NotADirectoryError on
+      # 'dist/wl_manager-1.0.0-rc1.spl/dist/wl_manager-1.0.0-rc1.spl'
+      # because we passed the file path directly.
+      - name: Locate .spl + stage for AppInspect
         id: spl
         run: |
           set -euo pipefail
@@ -84,15 +95,21 @@ jobs:
             echo "ERROR: no .spl produced under dist/"
             exit 1
           fi
+          APPINSPECT_DIR="dist/appinspect"
+          rm -rf "$APPINSPECT_DIR"
+          mkdir -p "$APPINSPECT_DIR"
+          cp "$SPL_FILE" "$APPINSPECT_DIR/"
           echo "spl_file=$SPL_FILE" >> "$GITHUB_OUTPUT"
+          echo "appinspect_dir=$APPINSPECT_DIR" >> "$GITHUB_OUTPUT"
           echo "Built: $SPL_FILE ($(du -h "$SPL_FILE" | cut -f1))"
+          echo "Staged for AppInspect: $APPINSPECT_DIR/$(basename "$SPL_FILE")"
 
       - name: AppInspect API — Cloud Vetting profile (cloud tag)
         uses: splunk/appinspect-api-action@v3.0.5
         with:
           username: ${{ secrets.SPLUNK_DEV_USERNAME }}
           password: ${{ secrets.SPLUNK_DEV_PASSWORD }}
-          app_path: ${{ steps.spl.outputs.spl_file }}
+          app_path: ${{ steps.spl.outputs.appinspect_dir }}
           included_tags: cloud
           log_level: INFO
 
@@ -102,6 +119,6 @@ jobs:
         with:
           username: ${{ secrets.SPLUNK_DEV_USERNAME }}
           password: ${{ secrets.SPLUNK_DEV_PASSWORD }}
-          app_path: ${{ steps.spl.outputs.spl_file }}
+          app_path: ${{ steps.spl.outputs.appinspect_dir }}
           included_tags: private_app
           log_level: INFO
