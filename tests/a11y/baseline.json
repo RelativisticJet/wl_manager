@@ -15,5 +15,10 @@
   "region": [
     "#wl-notif-badge"
   ],
-  "_region-rationale": "The notification badge is injected by appserver/static/notifications.js into Splunk's chrome header. There is no Splunk-provided landmark wrapper at that insertion point and wrapping the badge in our own <aside role='complementary'> would visually drift from Splunk's chrome layout. Acceptable to leave — the badge has aria-label and is keyboard reachable. Added 2026-05-12."
+  "_region-rationale": "The notification badge is injected by appserver/static/notifications.js into Splunk's chrome header. There is no Splunk-provided landmark wrapper at that insertion point and wrapping the badge in our own <aside role='complementary'> would visually drift from Splunk's chrome layout. Acceptable to leave — the badge has aria-label and is keyboard reachable. Added 2026-05-12.",
+
+  "aria-progressbar-name": [
+    "re:^#view\\d+$"
+  ],
+  "_aria-progressbar-name-rationale": "Splunk's SimpleXML framework emits transient <div class='progress-animation' role='progressbar' id='viewNNNNN'> elements while panels search the audit index. The progressbar has aria-valuemin/max/now plus a meaningful aria-valuetext ('0.0% of the time range scanned.', 'Parsing job...') but no aria-label / aria-labelledby — those are not exposed by the Splunk MVC progressbar component, and the IDs are auto-generated per render. The audit dashboard surfaces this more than whitelist_manager/control_panel because its searches are heavier (audit index lookback) so panels are in the searching state at scan time. Fixing in our XML is not possible (Splunk framework emits the DOM); a MutationObserver shim to inject aria-label is queued for the v1.1 a11y sweep alongside the P2 span clear-button work. Same posture as the 3 prior Splunk-framework suppressions above. Added 2026-05-18 (Phase 2.15)."
 }
