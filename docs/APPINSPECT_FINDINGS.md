@@ -278,12 +278,18 @@ predicted. Two valid remediations for Phase 1.7:
 Option (1) is the intended Phase 1.7 path; option (2) is for the
 roadmap.
 
-**F12 — root cause analysis**: `default/app.conf [id]` is missing
-`check_for_updates`. The setting is optional in static AppInspect but
-SLIM treats its absence as undefined (vs. the explicit
-`check_for_updates = false` Splunk recommends for Cloud apps that
-should not auto-update via the in-product update mechanism). One-line
-fix in Phase 1.7.
+**F12 — root cause analysis**: same spec-drift class as F2–F11, NOT a
+missing-setting bug. `check_for_updates = false` IS present at
+`default/app.conf:22` inside the `[id]` stanza (and again at line 30
+inside `[package]`). SLIM only flags the `[id]` occurrence — the
+`[package]` one is recognized and silent. SLIM's spec doesn't allow
+`check_for_updates` in the `[id]` stanza; the canonical home is
+`[package]` (which we already have). Phase 1.7 fix is to **delete** the
+redundant `[id].check_for_updates = false` line, not add a new
+setting. The defensive duplication referenced by the in-file comment at
+`app.conf:24-27` was over-cautious — `check_for_updates_disabled`
+(the AppInspect check) only inspects `[package]`, per that same
+comment.
 
 ### 5.3 Pre-flagged surfaces — outcome
 
