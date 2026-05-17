@@ -428,7 +428,84 @@ The CI variant of this command lives in
 
 ---
 
-## 7. Revision log
+## 7. Per-finding disposition (Phase 1.8 closure)
+
+> **Status**: Phase 1.8 ("Per-finding triage on `warning` + `manual_check`")
+> closed 2026-05-17. All warning and manual_check items across the three
+> AppInspect profiles (`splunk-platform-standalone`, `cloud`,
+> `private_app`) have a documented disposition under the Phase 1
+> plan-doc taxonomy from `docs/PUBLIC_RELEASE_PLAN.md` §1 row 1.8:
+> **fix / accept-with-justification / defer-to-v1.1**.
+
+### 7.1 Disposition summary
+
+| Profile | warnings | manual_check | fix | accept-with-justification | defer-to-v1.1 |
+|---------|---------:|-------------:|----:|--------------------------:|--------------:|
+| `splunk-platform-standalone` (local CLI, §1) | 6 | 0 | 0 | 6 | 0 |
+| `cloud` (local CLI §1 + hosted-API §5.1)     | 5 | 0 | 0 | 5 | 0 |
+| `private_app` (hosted-API §5.1)              | 5 | 0 | 0 | 5 | 0 |
+
+Every warning maps to **accept-with-justification**; the per-finding
+analysis is at §3.1–§3.6 above. The `private_app` warning set is the
+`cloud` set (§3.2–§3.6) — `check_for_indexer_synced_configs` (§3.1)
+is standalone-only and does not apply.
+
+### 7.2 Why no `fix` dispositions
+
+Every warning is either:
+
+- an INFO-only enumeration that AppInspect surfaces regardless of
+  severity (§3.4 scripted-input list, §3.6 collections.conf
+  declaration);
+- a Splunk-internal telemetry warning the platform itself marks
+  "no impact" (§3.2 SplunkJS);
+- a Python-2 compatibility note moot for a Splunk 9.x-only app
+  (§3.3 `python_script_existence`);
+- a Cloud-Victoria-only consideration auto-derived from the
+  manifest's `targetWorkloads` and inapplicable to the Cloud profile
+  itself (§3.1 indexer-synced configs);
+- detection-critical low-latency scheduling that AppInspect's
+  generic 12/hr heuristic cannot reason about (§3.5 cron frequency
+  on 4 saved searches; full per-search security justification in
+  the table at §3.5).
+
+No fix would improve the app for users; some "fixes" (e.g.,
+back-throttling §3.5 schedules to 12/hr) would weaken security
+guarantees.
+
+### 7.3 Why no `defer-to-v1.1` dispositions
+
+`defer-to-v1.1` would apply if a warning revealed real tech debt or a
+non-trivial change worth shipping but not blocking on. None of the
+current warnings fall in that category — each is either operationally
+correct as-shipped or fundamentally outside the heuristic
+AppInspect uses (§3.5's cron-frequency case).
+
+### 7.4 `manual_check` items
+
+Both hosted-API profiles report `manual_check: 0` (run `26002056326`,
+§5.1). The local CLI Phase 1.3 baseline also reports 0 (§1). No
+manual triage outstanding.
+
+### 7.5 Phase 1 acceptance check (from `docs/PUBLIC_RELEASE_PLAN.md`)
+
+| Criterion | Status |
+|-----------|--------|
+| `appinspect.yml` CLI workflow green | ✅ Phase 1.2 |
+| `appinspect-api.yml` API workflow green | ✅ Phase 1.7 (run `26002056326`) |
+| 0 error-severity findings — `cloud` | ✅ (§5.1: 0 error / 1 failure suppressed via expect.yaml / 0 future_failure) |
+| 0 error-severity findings — `splunk-platform-standalone` | ✅ (§1) |
+| All `warning` + `manual_check` items documented disposition | ✅ §3 + §7.1 |
+| Refactor documented if R1.1/D7 triggered | N/A — escalation not triggered (§5.4) |
+
+**Phase 1 is COMPLETE.** Phase 1.9 (architectural refactor — only if
+1.6 required) is **not applicable**. Phase 1.10 (soft escalation
+checkpoint at week 4) is **not applicable**. Next milestone per
+`docs/PUBLIC_RELEASE_PLAN.md` is Phase 2.
+
+---
+
+## 8. Revision log
 
 - 2026-05-17 — initial Phase 1.3 baseline. App.manifest version drift
   caught + fixed in same run; §3.5 pre-flight extended to cover it.
@@ -444,6 +521,17 @@ The CI variant of this command lives in
   config edits (F1–F12 in §5.2). Phase 1.5 workflow path-doubling
   drift fixed in commit `027014a` during the same session. §5
   replaced with the actual Phase 1.6 results (was placeholder).
+- 2026-05-17 — Phase 1.8 closed. Per-finding disposition documented
+  in new §7. Every warning across the three AppInspect profiles
+  (`splunk-platform-standalone`, `cloud`, `private_app`) maps to
+  **accept-with-justification**; 0 `fix` and 0 `defer-to-v1.1`
+  dispositions. Both API profiles report `manual_check: 0` so no
+  manual triage outstanding. §7.5 acceptance-check table records
+  Phase 1 as **complete**; Phase 1.9 (architectural refactor) and
+  Phase 1.10 (week-4 escalation checkpoint) are not applicable.
+  Note: the revision log was renumbered from §7 to §8 to accommodate
+  the new Phase 1.8 closure section without breaking the sequential
+  numbering (§1–§8). Internal cross-references updated.
 - 2026-05-17 — Phase 1.7 closed (run `26002056326`, HEAD `628a2b3`).
   Both profiles passing. F12 fixed in source by deleting redundant
   `[id].check_for_updates` (commit `d40e1b9`). F1 manifest tried
