@@ -521,17 +521,6 @@ checkpoint at week 4) is **not applicable**. Next milestone per
   config edits (F1–F12 in §5.2). Phase 1.5 workflow path-doubling
   drift fixed in commit `027014a` during the same session. §5
   replaced with the actual Phase 1.6 results (was placeholder).
-- 2026-05-17 — Phase 1.8 closed. Per-finding disposition documented
-  in new §7. Every warning across the three AppInspect profiles
-  (`splunk-platform-standalone`, `cloud`, `private_app`) maps to
-  **accept-with-justification**; 0 `fix` and 0 `defer-to-v1.1`
-  dispositions. Both API profiles report `manual_check: 0` so no
-  manual triage outstanding. §7.5 acceptance-check table records
-  Phase 1 as **complete**; Phase 1.9 (architectural refactor) and
-  Phase 1.10 (week-4 escalation checkpoint) are not applicable.
-  Note: the revision log was renumbered from §7 to §8 to accommodate
-  the new Phase 1.8 closure section without breaking the sequential
-  numbering (§1–§8). Internal cross-references updated.
 - 2026-05-17 — Phase 1.7 closed (run `26002056326`, HEAD `628a2b3`).
   Both profiles passing. F12 fixed in source by deleting redundant
   `[id].check_for_updates` (commit `d40e1b9`). F1 manifest tried
@@ -548,3 +537,14 @@ checkpoint at week 4) is **not applicable**. Next milestone per
   review feedback, any action version bump past v3.0.5). Phase 1.8
   (warning/manual_check triage) is unblocked; warnings already
   triaged in §3 byte-identical to Phase 1.3 local-CLI baseline.
+- 2026-05-17 — Phase 1.8 closed. Per-finding disposition documented
+  in new §7. Every warning across the three AppInspect profiles
+  (`splunk-platform-standalone`, `cloud`, `private_app`) maps to
+  **accept-with-justification**; 0 `fix` and 0 `defer-to-v1.1`
+  dispositions. Both API profiles report `manual_check: 0` so no
+  manual triage outstanding. §7.5 acceptance-check table records
+  Phase 1 as **complete**; Phase 1.9 (architectural refactor) and
+  Phase 1.10 (week-4 escalation checkpoint) are not applicable.
+  Note: the revision log was renumbered from §7 to §8 to accommodate
+  the new Phase 1.8 closure section without breaking the sequential
+  numbering (§1–§8). Internal cross-references updated.
