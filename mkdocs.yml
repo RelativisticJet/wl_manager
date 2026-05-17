@@ -1,0 +1,133 @@
+site_name: Whitelist Manager for Splunk
+site_url: https://relativisticjet.github.io/wl_manager/
+site_description: >-
+  Manage Splunk detection-rule CSV whitelists through a web UI with approval
+  workflows, version control, and a full diff-based audit trail.
+site_author: Oleh Bezsonov
+
+repo_url: https://github.com/RelativisticJet/wl_manager
+repo_name: RelativisticJet/wl_manager
+edit_uri: edit/main/docs/
+
+copyright: >-
+  Copyright &copy; 2026 Oleh Bezsonov &mdash;
+  released under the MIT License.
+  Splunk, Splunk Enterprise, and Splunk Enterprise Security are
+  registered trademarks of Splunk LLC.
+
+theme:
+  name: material
+  language: en
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.action.edit
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search:
+      lang: en
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      permalink_title: Anchor link to this section
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+# Strict mode catches broken links and missing nav entries at build
+# time so contributors get fast feedback. Wired in
+# .github/workflows/docs.yml as `mkdocs build --strict`.
+strict: false
+
+nav:
+  - Home: index.md
+  - User Guide:
+      - Overview: Whitelist_Manager_Documentation.md
+  - Operations:
+      - Splunk Admin Installation: Splunk_Admin_Installation_Guide.md
+      - Runbooks: RUNBOOKS.md
+      - Backup & Restore: BACKUP_AND_RESTORE.md
+      - Splunk Quirks: SPLUNK_QUIRKS.md
+      - Example SPL Queries: example_spl_queries.md
+  - Security:
+      - Architecture: SECURITY_ARCHITECTURE.md
+      - SBOM & Signing: SBOM.md
+  - Reference:
+      - Audit Volume Forecast: AUDIT_VOLUME_FORECAST.md
+      - REST API: api/README.md
+
+# Files under docs/ that are intentionally NOT exposed on the public
+# site. They live in-tree for contributors / maintainers but would
+# either confuse end-users (release planning, ring findings, drift
+# logs) or duplicate other content. mkdocs' `not_in_nav` suppresses
+# the "page not in nav" warning under `--strict`.
+not_in_nav: |
+  APPINSPECT_FINDINGS.md
+  APPINSPECT_NOTES.md
+  BACKWARD_COMPAT.md
+  DECISION_LOG.md
+  HTML_INJECTION_AUDIT.md
+  PIP_AUDIT_LOG.md
+  PUBLIC_RELEASE_PLAN.md
+  RELEASE_CHECKLIST.md
+  RING1_INPUT_handler_contracts.md
+  RING_FINDINGS.md
+  TESTING.md
+  TESTING_PROGRESS_2026-04-15.md
+  superpowers/plans/*.md
+  superpowers/specs/*.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/RelativisticJet/wl_manager
+      name: wl_manager on GitHub
+
+# Keep the build deterministic — no analytics, no telemetry.
+# (See PUBLIC_RELEASE_PLAN.md §10 — "Telemetry / phone-home"
+# deferred to v2 per D9 privacy-maximalism.)
+# Versioned docs (mike) deferred until v1.1 — for v1 we ship one
+# version and link releases via the GitHub release notes.

@@ -7,12 +7,22 @@
 -->
 [![Version](https://img.shields.io/github/v/release/RelativisticJet/wl_manager?label=version&color=blue)](https://github.com/RelativisticJet/wl_manager/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Splunk](https://img.shields.io/badge/Splunk-8.x%20%7C%209.x-orange.svg)](https://www.splunk.com/)
+[![Splunk](https://img.shields.io/badge/Splunk-9.3-orange.svg)](https://www.splunk.com/)
 [![Python](https://img.shields.io/badge/Python-3.9+-yellow.svg)](https://www.python.org/)
+[![Docs](https://img.shields.io/badge/docs-relativisticjet.github.io%2Fwl__manager-blue?logo=readthedocs&logoColor=white)](https://relativisticjet.github.io/wl_manager/)
 
-Manage detection-rule CSV whitelists through a web UI with inline editing, approval workflows, version control, and a full diff-based audit trail.
+A web UI for managing Splunk Enterprise Security detection-rule CSV
+whitelists — with inline editing, approval workflows, version control,
+and a full diff-based audit trail.
 
-Built for SOC teams who need to manage detection rule exceptions without touching raw CSV files or Splunk configs.
+Built for SOC teams who need to manage detection-rule exceptions
+without touching raw CSV files, Splunk configs, or the filesystem.
+
+> **Documentation:** the full user guide, security architecture, runbooks,
+> and SBOM live on the hosted docs site at
+> [**relativisticjet.github.io/wl_manager**](https://relativisticjet.github.io/wl_manager/)
+> (deploys at Phase 3.4 public flip; until then, read directly from
+> [`docs/`](docs/) in this repo).
 
 ## Screenshots
 
@@ -230,8 +240,8 @@ make package          # Outputs dist/wl_manager-VERSION.spl
 
 ## Requirements
 
-- Splunk Enterprise 8.x or 9.x (tested on 9.3.1)
-- Python 3 (bundled with Splunk 8+)
+- Splunk Enterprise **9.3** (the only version on Splunk's currently-supported list as of 2026-05; tested on 9.3.1)
+- Python 3 (bundled with Splunk 9)
 - ~10 MB disk space for the app + audit data
 
 ## License

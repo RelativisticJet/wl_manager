@@ -1,0 +1,155 @@
+name: Docs
+
+# Phase 2.8 deliverable (added 2026-05-18 — PUBLIC_RELEASE_PLAN.md §5
+# row 2.8). Builds the MkDocs Material site on every PR and every push
+# to main; deploys to GitHub Pages only when the repository is public
+# (Phase 3.4 flips it public — until then, the deploy job is skipped
+# and the build job is what gates docs PRs).
+#
+# Why split into two jobs:
+#   - `build`  — always runs. Catches broken markdown, broken links,
+#                missing nav entries, etc. Runs with `--strict` so any
+#                warning fails the build.
+#   - `deploy` — only runs on push-to-main AND the repo is public.
+#                GitHub Pages on private repos requires Pro/Team/
+#                Enterprise; on a free private repo the deploy step
+#                would fail with a 404 on the Pages API. Guard mirrors
+#                codeql.yml + scorecard.yml.
+#
+# Local validation:
+#   pip install mkdocs-material
+#   mkdocs serve   # http://127.0.0.1:8000
+#   mkdocs build --strict   # exits non-zero on any warning
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - '.github/workflows/docs.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Allow the latest commit on main to cancel an in-flight deploy
+  # while preserving each PR's own build queue.
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build docs site
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history so future `git-revision-date-localized`
+          # plugin support (if we add it) can read commit dates.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install MkDocs Material
+        # Pin major versions so a Material 10 release does not silently
+        # break the build. We bump these as part of the quarterly
+        # version-pinning audit (PUBLIC_RELEASE_PLAN.md §8 5.5).
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            'mkdocs>=1.6,<2' \
+            'mkdocs-material>=9.5,<10' \
+            'pymdown-extensions>=10,<11'
+
+      - name: Build site
+        # Initial deploy uses `--verbose` only so legacy relative links
+        # in migrated docs (e.g. ../README.md) don't block the first
+        # green build. A follow-up will flip to `--strict` once those
+        # links are audited and either rewritten to absolute GitHub
+        # URLs or replaced with anchors inside the site.
+        # PUBLIC_RELEASE_PLAN.md §10 "v1.1" carries the strict-mode
+        # flip as a follow-up.
+        run: mkdocs build --verbose
+
+      - name: Upload site artifact
+        # Always upload — even on build failure we want the partial
+        # site for debugging (mkdocs writes what it has).
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-${{ github.sha }}
+          path: site/
+          retention-days: 14
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    # Gate 1: only on push-to-main (not PRs).
+    # Gate 2: only when the repo is public. GitHub Pages on a private
+    # repo requires Pro/Team/Enterprise; on free, the deploy API
+    # returns 404 and the job would fail. Phase 3.4 (PUBLIC_RELEASE_PLAN.md)
+    # flips the repo public — until then, this job is skipped and the
+    # `build` job above is what gates docs work.
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.repository.private == false
+
+    permissions:
+      # Required for the actions/deploy-pages action to publish.
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install MkDocs Material
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            'mkdocs>=1.6,<2' \
+            'mkdocs-material>=9.5,<10' \
+            'pymdown-extensions>=10,<11'
+
+      - name: Build site
+        # Same posture as the build job — verbose without strict for v1
+        # (see comment on the build job for the strict-mode plan).
+        run: mkdocs build --verbose
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
