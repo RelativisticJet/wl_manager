@@ -119,9 +119,23 @@ ID_VER=$(awk -F= '/^\[id\]/{flag=1; next} /^\[/{flag=0} flag && /^version/{gsub(
 ID_NAME=$(awk -F= '/^\[id\]/{flag=1; next} /^\[/{flag=0} flag && /^name/{gsub(/[[:space:]]/,""); print $2}' default/app.conf)
 PKG_ID=$(awk -F= '/^\[package\]/{flag=1; next} /^\[/{flag=0} flag && /^id/{gsub(/[[:space:]]/,""); print $2}' default/app.conf)
 
+# Added 2026-05-17 (Phase 1.3 follow-up): app.manifest:info.id.version
+# is the third source-of-truth AppInspect's check_version_is_valid_semver
+# reads. Phase 0.8 demoted app.conf to 1.0.0-rc1 but missed app.manifest
+# (still at 2.0.0), and the original §3.5 didn't catch it. Phase 1.3
+# baseline run reproduced the failure; that gap is now closed.
+MANIFEST_VER=$(python3 -c "import json,sys; print(json.load(open('app.manifest'))['info']['id']['version'])")
+
 if [[ "$LAUNCHER_VER" != "$INTENDED_VERSION" || "$ID_VER" != "$INTENDED_VERSION" ]]; then
   echo "VERSION DRIFT: tag=$INTENDED_TAG app.conf[launcher]=$LAUNCHER_VER app.conf[id]=$ID_VER"
   echo "Fix app.conf before cutting the tag."
+  exit 1
+fi
+
+if [[ "$MANIFEST_VER" != "$INTENDED_VERSION" ]]; then
+  echo "VERSION DRIFT: tag=$INTENDED_TAG app.manifest.info.id.version=$MANIFEST_VER"
+  echo "AppInspect's check_version_is_valid_semver requires this to match app.conf."
+  echo "Fix app.manifest before cutting the tag."
   exit 1
 fi
 
@@ -130,20 +144,21 @@ if [[ "$ID_NAME" != "$PKG_ID" ]]; then
   echo "AppInspect 4.2.0 (check_for_valid_package_id) requires these to match."
   exit 1
 fi
-echo "OK: app.conf version matches tag $INTENDED_TAG; [package].id == [id].name == $ID_NAME"
+echo "OK: app.conf + app.manifest match tag $INTENDED_TAG; [package].id == [id].name == $ID_NAME"
 ```
 
 **Expected:** the script exits 0 with `OK: ...`. Any non-zero exit means
-both `[launcher].version` and `[id].version` in `default/app.conf` need
-to be edited to match `${INTENDED_TAG#v}` BEFORE you run `git tag` /
-`gh release create`.
+`[launcher].version` and `[id].version` in `default/app.conf` AND
+`info.id.version` in `app.manifest` need to be edited to match
+`${INTENDED_TAG#v}` BEFORE you run `git tag` / `gh release create`.
 
 **Maintenance note:** keep this check in sync with `package.sh:33`
 (the grep that reads `^version` from app.conf). If `package.sh` ever
 switches to reading from `$GITHUB_REF` instead, retire the
-version-drift portion of this section — the `[package].id == [id].name`
-check stays regardless, since it's an AppInspect rule independent of
-how the tag is derived.
+app.conf-version-drift portion of this section — the
+`[package].id == [id].name` check and the `app.manifest` version check
+stay regardless, since both are AppInspect rules independent of how
+the tag is derived.
 
 ---
 
