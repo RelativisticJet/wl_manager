@@ -144,6 +144,77 @@ def _docker_ls(path: str) -> list:
     )
 
 
+@pytest.fixture
+def _seed_chaos_csv(docker_available, _restore_canonical_demo_state):
+    """Seed ``DR_VERSION_TEST.csv`` + its mapping row inside the
+    container before the chaos test runs.
+
+    F-C2 (Phase 3.1 audit, 2026-05-18) removed all test-fixture
+    CSVs (``DR_VERSION_TEST.csv``, ``DR_BROWSER_TEST.csv``, etc.)
+    from the repo's canonical demo state, because they were
+    accidentally GitHub-public test debris. The chaos test still
+    needs a dedicated low-traffic target with a known clean
+    schema (``user,src_ip,Comment``) and no prior versions, so
+    the manifest assertions start from zero.
+
+    Resolution: bootstrap the CSV INSIDE the container at test
+    start via ``docker exec``. No host file added, no .spl
+    pollution, no GitHub visibility. The next session's
+    ``_restore_canonical_demo_state`` overwrites whatever this
+    fixture left behind with the host's clean state.
+
+    Depends on ``_restore_canonical_demo_state`` so the seed
+    lands AFTER the canonical-state copy (otherwise the copy
+    would wipe our seed).
+    """
+    seed_content = (
+        b"user,src_ip,Comment\n"
+        b"seed_user,10.0.0.1,initial chaos seed row\n"
+    )
+    csv_path = f"{LOOKUPS_DIR}/{CHAOS_CSV}"
+    map_path = f"{LOOKUPS_DIR}/rule_csv_map.csv"
+    env = {**os.environ, "MSYS_NO_PATHCONV": "1"}
+
+    # 1. Write seed CSV via stdin pipe (avoids quoting issues).
+    write_proc = subprocess.run(  # noqa: S603 — list form
+        ["docker", "exec", "-i", "-u", "0", CONTAINER_NAME,
+         "sh", "-c", f"cat > {csv_path}"],
+        input=seed_content,
+        capture_output=True, timeout=15, check=False, env=env,
+    )
+    assert write_proc.returncode == 0, (
+        f"failed to seed {csv_path}: "
+        f"{write_proc.stderr.decode('utf-8', 'replace')}")
+
+    # 2. Append mapping row only if missing (idempotent).
+    map_line = f"{CHAOS_RULE},{CHAOS_CSV},{APP_CONTEXT}"
+    map_proc = subprocess.run(  # noqa: S603 — list form
+        ["docker", "exec", "-u", "0", CONTAINER_NAME,
+         "sh", "-c",
+         f"grep -q '^{CHAOS_RULE},' {map_path} || echo '{map_line}' >> {map_path}"],
+        capture_output=True, timeout=15, check=False, env=env,
+    )
+    assert map_proc.returncode == 0, (
+        f"failed to update {map_path}: "
+        f"{map_proc.stderr.decode('utf-8', 'replace')}")
+
+    # 3. Chown both files to splunk so the handler can read them.
+    chown_proc = subprocess.run(  # noqa: S603 — list form
+        ["docker", "exec", "-u", "0", CONTAINER_NAME,
+         "chown", "splunk:splunk", csv_path, map_path],
+        capture_output=True, timeout=10, check=False, env=env,
+    )
+    assert chown_proc.returncode == 0, (
+        f"chown failed: "
+        f"{chown_proc.stderr.decode('utf-8', 'replace')}")
+
+    yield
+    # No explicit teardown — the next session's
+    # ``_restore_canonical_demo_state`` (autouse, session-scope
+    # in conftest.py) overwrites these files with the host's
+    # clean state at the next session start.
+
+
 def _capture_state() -> dict:
     """Snapshot the on-disk + KV state for the chaos
     target. Returns a dict with the five fields the
@@ -269,7 +340,7 @@ def _state_implies_commit(pre: dict, post: dict) -> bool:
     return pre["csv_hash"] != post["csv_hash"]
 
 
-def test_save_csv_chain_chaos_consistency(docker_available):
+def test_save_csv_chain_chaos_consistency(docker_available, _seed_chaos_csv):
     """Submit save_csv, kill mid-write, verify post-
     recovery state is fully consistent.
 
