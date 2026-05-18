@@ -691,9 +691,90 @@ observation, not a release-blocker:
 
 **Phase B summary**: 23 pass, 0 findings.
 
-#### Phase C — Bucket A directories (ship in .spl) — pending
+#### Phase C — Bucket A directories (ship in `.spl`, completed 2026-05-18)
 
-#### Phase C — Bucket A directories (ship in .spl) — pending
+**Scope walked:** `appserver/static/` (12 top-level files + `modules/` 13 files + `tests/` 5 files), `bin/` (24 Python modules), `default/` (12 `.conf` files + 4 dashboard XMLs + nav XML + viewstates), `lookups/` (19 demo `DR*.csv` + `rule_csv_map.csv` + `_versions/` excluded from `.spl`), `metadata/default.meta`. 78 files inspected directly + bulk grep across 13,317 LOC of JS / ~24 KLOC of Python.
+
+**Mechanical checks run across the bucket:**
+
+- `Oleh|Bezsonov|wildleo|RelativisticJet|c:\\Users|/Users/PC|/home/[a-z]+|point72|@gmail` against `appserver/`, `bin/`, `default/` — only legitimate `author = Oleh Bezsonov` in `default/app.conf:11` (intentional per D5/D17).
+- `TODO|FIXME|XXX|HACK` against `bin/*.py` and `appserver/static/**/*.js` — zero matches.
+- RFC1918-vs-public IP regex against `appserver/` — zero matches (no embedded customer infra).
+- `partnercorp\.com|Carlos Rodriguez|David Kim|Jose Martinez` against `default/data/ui/views/audit.xml` (the largest dashboard, 1098 LOC) — zero matches.
+- All embedded URLs in dashboards / JS confined to `code.jquery.com` (CDN) and Splunk-internal paths.
+
+**Per-area PASS notes:**
+
+- `bin/` (24 Python modules covering handler / approval / audit / FIM / RBAC / replay / trash / versions / HMAC / limits / migration / etc.): no maintainer paths, no debug `print()` left behind, no `TODO`. `wl_hmac_key.py` derives the runtime key from the Splunk server GUID (per D-2026-04-12 decision-log entry) — no static keys.
+- `default/*.conf`: every `cron_schedule` above the AppInspect 12/hr threshold carries an inline "AppInspect note (check_for_gratuitous_cron_scheduling)" justification keyed to the attack window it defends (see `savedsearches.conf:87-94, 168-178, 213-222, 244-253`). Documented openly so a hostile reviewer sees the reasoning.
+- `default/data/ui/views/{whitelist_manager,control_panel,audit}.xml`: minimal SimpleXML wrappers around JS-rendered UI; no embedded customer data; no `<form>`-leaked default tokens.
+- `appserver/static/{whitelist_manager,control_panel,audit_trail,audit_tz,notifications,application}.js` + 13 `modules/wl_*.js`: clean.
+- `metadata/default.meta`: ACLs match the four-tier RBAC scheme (`wl_superadmin` / `wl_admin` / `wl_analyst_editor` / `wl_analyst_viewer`); saved searches locked to `admin`/`sc_admin`. No exported objects beyond what the dashboards need.
+- `lookups/rule_csv_map.csv`: 19 production-rule rows (post-F-C2 cleanup, see `lookups/rule_csv_map.csv:1-20`). `scripts/package.sh:103` swaps to a header-only file before `tar`, so customers receive an empty mapping — confirmed in the existing F-C2 closure.
+
+**New Phase C findings:**
+
+##### F-L4 (LOW): `test_runner.xml` QUnit dashboards ship in `.spl` payload
+
+Two test-runner dashboards exist and BOTH ship to customers:
+
+1. **`default/data/ui/views/test_runner.xml` (112 LOC)** — registers as a Splunk view at `https://<host>:8000/app/wl_manager/test_runner` (see `default/data/ui/views/test_runner.xml:2` `<form hideSplunkBar="true" hideTitle="true">`). It is NOT in `default/data/ui/nav/default.xml` (the nav menu only exposes Whitelist Manager / Audit Trail / Control Panel), but the URL is still reachable by anyone who guesses or scrapes it. The dashboard:
+   - Loads QUnit from external CDN: `https://code.jquery.com/qunit/qunit-2.19.4.{css,js}` (lines 18, 36)
+   - Tries to load nine test files via relative paths under `../../app/wl_manager/tests/qunit/...` (lines 54-57) and `../../app/wl_manager/appserver/static/tests/...` (lines 58-62)
+   - The first four resolve into `tests/qunit/` which is **excluded by `scripts/package.sh`** (the `tests/` directory is repo-only, never ships). So in a customer install they 404 silently. The last five resolve into `appserver/static/tests/` which DOES ship (see F-L5 below).
+   - Net effect: a customer who navigates to `/app/wl_manager/test_runner` sees a half-broken QUnit page calling an external CDN — unprofessional for a security app.
+2. **`appserver/static/test_runner.xml` (70 LOC)** — orphan duplicate, NOT registered as a view (Splunk only registers XMLs under `default/data/ui/views/`). Lives in the static-asset tree so the file is web-served at `/static/app/wl_manager/test_runner.xml`. References a non-existent `wl_state.js` module (file deleted during Wave-3 extraction per `MEMORY.md` notes) and the same broken `tests/qunit/` paths.
+
+**Risk lens:** L5 (stale — both files predate Wave-3 module extraction) + L8 (unprofessional — broken paths in production) + L1 (customer-visible, even if URL-only).
+
+**Recommended fix (batch with Phase G):** add `default/data/ui/views/test_runner.xml` and `appserver/static/test_runner.xml` to the `EXCLUDES` block in `scripts/package.sh:140-160`. Both files can stay in the repo for developer use, but they should not ship. Verify post-fix by extracting the `.spl` and confirming neither path is present.
+
+##### F-L5 (LOW): `appserver/static/tests/` QUnit test files ship in `.spl` payload
+
+Five QUnit test files (`test_wl_cp_admin_limits.js`, `test_wl_cp_limits.js`, `test_wl_cp_queue.js`, `test_wl_cp_trash.js`, `test_wl_cp_usage.js`) live under `appserver/static/tests/` and are NOT excluded by `scripts/package.sh` (the package script excludes top-level `tests/`, not `appserver/static/tests/`).
+
+They are not registered as views and are reachable only via direct URL (`/static/app/wl_manager/tests/test_wl_cp_*.js`), so the exposure surface is low. But:
+
+- They contain `QUnit.module(...)` test-setup code that exposes the internal shape of the Control Panel tabs (mock DOM templates, expected response shapes, edge-case names) — useful intel for an attacker mapping out the surface.
+- Adds ~test-only bytes to every customer install for zero customer value.
+
+**Risk lens:** L5 (test debris) + L8 (unprofessional). Mirror finding to F-L4.
+
+**Recommended fix:** add `appserver/static/tests/` to the `EXCLUDES` block in `scripts/package.sh`. Optionally move the files to `tests/qunit/cp/` so they're co-located with the rest of the QUnit suite (already repo-only).
+
+##### F-L6 (LOW): Demo CSVs in `lookups/` carry realistic-looking PII-shaped narratives
+
+The `lookups/DR*.csv` files (19 demo whitelists, GitHub-public but excluded from `.spl` per `scripts/package.sh:145`) contain demo rows with:
+
+- Name-shaped strings with backstories. Spot-checked rows:
+  - `lookups/DR310_impossible_travel.csv:2` — `c.rodriguez,US,Carlos Rodriguez - commutes between NYC and Miami offices weekly,2026-12-31`
+  - `lookups/DR310_impossible_travel.csv:3` — `d.kim,KRTES,David Kim - based in Seoul but uses US VPN for corp access,2026-06-30`
+  - `lookups/DR71_data_exfil_users.csv:4` — `j.martinez,Jose Martinez - video editor uploads raw footage to cloud storage daily`
+  - `lookups/DR520_anomalous_logon_time.csv:4` — `n.williams,22-06,Night shift NOC analyst - works 10pm to 6am`
+- One real-world domain: `lookups/DR630_email_exfiltration.csv:2` — `l.thompson,partnercorp.com,50,Legal team sharing contracts with external counsel,`. `partnercorp.com` resolves to a real registered domain (Partner Corp — a real entity per public WHOIS). Other demo domains (`vendor-xyz.co.jp`, `boardmembers.org`) are RFC-2606-safe-ish patterns but `partnercorp.com` is not in the reserved-example space.
+
+**Risk lens:** L2 (PII-shape — though the names are common enough to plausibly be synthetic, a casual GitHub viewer cannot tell at a glance) + L9 (branding / professional appearance — real domain in a demo dataset implies sloppy curation).
+
+**Recommended fix:** in a batch with Phase G, rewrite person-narratives to use **reserved example names** (`alice`, `bob`, `carol`, `dave`, `eve`) and replace `partnercorp.com` with `example.com` / `example.net` / `example.org` (RFC 2606 reserved). The narrative strings stay (they're useful demo context), only the identifiers change.
+
+##### F-L7 (LOW): Demo CSVs contain obvious E2E-run debris
+
+Same files as F-L6, but separate finding because the fix is a content-curation pass rather than a name-replacement:
+
+- `lookups/DR102_whitelist.csv:2` — `E2E-EDITED-HOST,analyst2,1774751458` (E2E test artifact left behind after a verification run)
+- `lookups/DR88_whitelist.csv:2` — `EDITED_AFTER_LAZY_INIT,SRV-FILE01,Approved file share access` (clearly a test marker)
+- `lookups/DR88_whitelist.csv:3` — `SECOND_EDIT,Station_2,Test comment for DR88`
+- `lookups/DR20_whitelist.csv:3` — `TEST_2,,` and `TEST_3,,` (sparse test rows)
+
+These rows tell a casual viewer "this is dev debris, not a curated demo set." They are not customer-shipped (excluded from `.spl`), so the audit lens is L8 (unprofessional / dev-debris on GitHub-public) + L5 (stale — accumulated from prior E2E runs that didn't clean up).
+
+**Recommended fix:** curate each `lookups/DR*.csv` down to ~5 realistic synthetic rows. Pair with F-L6 (rename to `alice`/`bob`/`carol`) and F-C2 lessons (the `lookups/` dir already had 29 unrelated test CSVs pulled — these are the surviving residue).
+
+##### Bucket A summary
+
+- **F-L4, F-L5** — block on `.spl` payload hygiene; fix in Phase G batch.
+- **F-L6, F-L7** — GitHub-public hygiene only (customers never see these CSVs); fix in same batch.
+- No CRITICAL / HIGH / MEDIUM findings in this bucket. Bucket A is in better shape than Buckets B or C will likely be — handler / dashboard / module code is professional and well-defended.
 
 #### Phase D — Bucket B directories (repo-only) — pending
 
@@ -710,3 +791,4 @@ observation, not a release-blocker:
 | 2026-05-18 | claude-opus-4-7 (Phase 3.1) | Initial audit. 1 CRITICAL + 1 HIGH fixed in-turn; 1 LOW fixed in-turn; 2 LOW + 1 git-history question surfaced for user decision. |
 | 2026-05-18 | claude-opus-4-7 + user | Follow-up: F-C1 history rewritten + force-pushed per user authorization; F-L2 superpowers moved to .planning/; F-L3 deferred to v1.1. |
 | 2026-05-18 | claude-opus-4-7 + user | Post-audit catch — F-C2 (`lookups/` test-artifact pollution) raised by user during public-flip readiness review. 29 tracked test CSVs + 18 `_trash/` items removed; `rule_csv_map.csv` trimmed 33→19 rows; `.gitignore` extended. Lesson recorded: future pre-public sweeps must explicitly ask "does every file in each .spl-payload directory belong in the product." |
+| 2026-05-18 | claude-opus-4-7 + user | Audit V2 Phase C closed — 78 files inspected across `appserver/`, `bin/`, `default/`, `lookups/`, `metadata/`. Four LOW findings recorded: F-L4 (test_runner.xml dashboards ship), F-L5 (`appserver/static/tests/` QUnit files ship), F-L6 (demo CSVs name-shaped narratives + one real domain `partnercorp.com`), F-L7 (demo CSV E2E debris). No CRITICAL/HIGH/MEDIUM in this bucket. All four queued for Phase G batch fix. |
