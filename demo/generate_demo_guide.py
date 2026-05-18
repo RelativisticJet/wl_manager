@@ -70,7 +70,6 @@ class DemoGuide(FPDF):
         self.ln(40)
         self.set_font("Helvetica", "", 10)
         self.cell(0, 8, "Security Engineering Team", align="C", new_x="LMARGIN", new_y="NEXT")
-        self.cell(0, 8, "Version 2.0.0", align="C", new_x="LMARGIN", new_y="NEXT")
 
     def section(self, number, title):
         self._check_space(20)
