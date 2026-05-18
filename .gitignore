@@ -135,6 +135,15 @@ backups/
 # committed.
 tests/e2e/visual_artifacts/
 
+# Screenshot output from the manual E2E scripts at tests/ root.
+# Both test_e2e_realworld.py and test_e2e_manual_browser.py write
+# e2e_phase*.png + screenshot_debug.png to their own dir at runtime.
+# Phase 3.1 audit V2 finding F-L8 (2026-05-18) — 6 of these were
+# previously tracked from an old March-29 run; they were dev debris,
+# not pixel-diff baselines.
+tests/e2e_phase*.png
+tests/screenshot_debug.png
+
 # Playwright MCP output (interactive ad-hoc browser drives). Stores
 # session-local screenshots, snapshots, and console logs from
 # mcp__playwright-iso__* tool calls. Local-only by design.

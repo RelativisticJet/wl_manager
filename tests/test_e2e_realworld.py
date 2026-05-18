@@ -11,10 +11,17 @@ import json
 import time
 import sys
 import os
+from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 BASE = "http://localhost:8000"
 SPLUNK_API = "http://localhost:8089"
+
+# Screenshot output dir resolves relative to this test file so the
+# script is portable across machines / OSes. Was a hardcoded
+# C:/Users/PC/wl_manager/tests/... path before Audit V2 F-M5
+# (2026-05-18).
+SCREENSHOT_DIR = Path(__file__).resolve().parent
 
 bugs = []
 passes = []
@@ -262,7 +269,7 @@ def phase1_analyst_operations(page):
         rows_310 = get_row_count(page)
         ok(acct, "Switch Rule", f"Switched to DR310 ({rows_310} rows)")
 
-    page.screenshot(path="C:/Users/PC/wl_manager/tests/e2e_phase1.png", full_page=True)
+    page.screenshot(path=str(SCREENSHOT_DIR / "e2e_phase1.png"), full_page=True)
 
 
 # =====================================================================
@@ -436,7 +443,7 @@ def phase2_admin_operations(page):
     time.sleep(2)
     ok(acct, "Usage Tab", "Analyst Usage loaded")
 
-    page.screenshot(path="C:/Users/PC/wl_manager/tests/e2e_phase2.png", full_page=True)
+    page.screenshot(path=str(SCREENSHOT_DIR / "e2e_phase2.png"), full_page=True)
 
 
 # =====================================================================
@@ -509,7 +516,7 @@ def phase3_approval_workflows(page):
         ok(acct, "Notifications", f"analyst2 has {items.count()} notifications")
         page.keyboard.press("Escape")
 
-    page.screenshot(path="C:/Users/PC/wl_manager/tests/e2e_phase3.png", full_page=True)
+    page.screenshot(path=str(SCREENSHOT_DIR / "e2e_phase3.png"), full_page=True)
 
 
 # =====================================================================
@@ -599,7 +606,7 @@ def phase4_superadmin_operations(page):
     panels = page.locator(".dashboard-panel")
     ok(acct, "Audit Trail", f"Audit trail loaded ({panels.count()} panels)")
 
-    page.screenshot(path="C:/Users/PC/wl_manager/tests/e2e_phase4.png", full_page=True)
+    page.screenshot(path=str(SCREENSHOT_DIR / "e2e_phase4.png"), full_page=True)
 
 
 # =====================================================================
@@ -647,8 +654,8 @@ def phase5_cross_account(browser):
             else:
                 ok("wladmin2", "Presence", f"Presence bar: {text2[:60]}")
 
-        pg1.screenshot(path="C:/Users/PC/wl_manager/tests/e2e_phase5_analyst.png", full_page=True)
-        pg2.screenshot(path="C:/Users/PC/wl_manager/tests/e2e_phase5_admin.png", full_page=True)
+        pg1.screenshot(path=str(SCREENSHOT_DIR / "e2e_phase5_analyst.png"), full_page=True)
+        pg2.screenshot(path=str(SCREENSHOT_DIR / "e2e_phase5_admin.png"), full_page=True)
 
     finally:
         ctx1.close()

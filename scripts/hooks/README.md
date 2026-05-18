@@ -77,7 +77,7 @@ Add this entry to your project-local `.claude/settings.json`:
 
 Claude Code does not expand `${workspaceFolder}` in the `command`
 string today, so use the absolute path to your checkout, e.g.
-`node c:/Users/PC/wl_manager/scripts/hooks/block-synthetic-fixtures.js`.
+`node <your-checkout>/scripts/hooks/block-synthetic-fixtures.js`.
 This is the reason the wiring is per-developer rather than a single
 shared config.
 

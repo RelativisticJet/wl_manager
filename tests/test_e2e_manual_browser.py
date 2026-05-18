@@ -7,10 +7,17 @@ import json
 import time
 import sys
 import io
+from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 # Fix Windows console encoding
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+
+# Screenshot output dir resolves relative to this test file so the
+# script is portable across machines / OSes. Was a hardcoded
+# C:/Users/PC/wl_manager/tests/... path before Audit V2 F-M5
+# (2026-05-18).
+SCREENSHOT_DIR = Path(__file__).resolve().parent
 
 BASE = "http://localhost:8000"
 bugs = []
@@ -103,7 +110,7 @@ def row_count(page):
     return page.locator("#csv-table-container table tbody tr").count()
 
 def screenshot(page, name):
-    page.screenshot(path=f"C:/Users/PC/wl_manager/tests/e2e_{name}.png", full_page=True)
+    page.screenshot(path=str(SCREENSHOT_DIR / f"e2e_{name}.png"), full_page=True)
 
 
 # =====================================================================
