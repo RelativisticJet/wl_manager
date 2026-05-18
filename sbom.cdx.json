@@ -5,7 +5,7 @@
   "serialNumber": "urn:uuid:03c7e7d1-8c0b-498e-aa8b-9047da384b84",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-04-29T00:00:00Z",
+    "timestamp": "2026-05-18T00:00:00Z",
     "tools": [
       {
         "vendor": "wl_manager",
@@ -15,9 +15,9 @@
     ],
     "component": {
       "type": "application",
-      "bom-ref": "pkg:splunk/wl_manager@2.0.0",
+      "bom-ref": "pkg:splunk/wl_manager@1.0.0-rc1",
       "name": "wl_manager",
-      "version": "2.0.0",
+      "version": "1.0.0-rc1",
       "description": "Manage detection-rule CSV whitelists with inline editing, approval workflows, version control, and diff-based audit trail",
       "publisher": "Oleh Bezsonov",
       "licenses": [
@@ -27,11 +27,11 @@
           }
         }
       ],
-      "purl": "pkg:splunk/wl_manager@2.0.0",
+      "purl": "pkg:splunk/wl_manager@1.0.0-rc1",
       "properties": [
         {
           "name": "splunk:build",
-          "value": "627"
+          "value": "660"
         },
         {
           "name": "splunk:app_id",
@@ -43,7 +43,7 @@
   "components": [],
   "dependencies": [
     {
-      "ref": "pkg:splunk/wl_manager@2.0.0",
+      "ref": "pkg:splunk/wl_manager@1.0.0-rc1",
       "dependsOn": []
     }
   ],
@@ -51,7 +51,7 @@
     {
       "aggregate": "complete",
       "assemblies": [
-        "pkg:splunk/wl_manager@2.0.0"
+        "pkg:splunk/wl_manager@1.0.0-rc1"
       ]
     }
   ]
