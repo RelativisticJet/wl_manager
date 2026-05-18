@@ -1,9 +1,0 @@
-src_ip,dest_ip,dest_port,threshold,Comment,user,_added_by,_added_at
-10.0.0.1,192.168.1.1,443,100,XSS payload removed during security audit,jsmith,,
-10.0.0.2,192.168.1.2,8080,200,Server B,jdoe,,
-10.0.0.3,192.168.1.3,22,50,SSH host,admin1,,
-10.0.0.4,192.168.1.4,3389,75,RDP access,analyst1,,
-10.0.0.5,192.168.1.5,80,150,Web server,svc_http,,
-10.0.0.6,192.168.1.6,53,60,DNS relay,svc_dns,,
-10.0.0.7,192.168.1.7,25,90,Mail server,mailsvc,,
-10.0.0.8,192.168.1.8,636,120,LDAP host,ldapsvc,,

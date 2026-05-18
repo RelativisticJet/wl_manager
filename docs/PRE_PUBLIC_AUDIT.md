@@ -101,6 +101,80 @@ pre-rewrite state until the explicit force-push.
 
 ---
 
+### CRITICAL — fixed in-turn (added post-audit, 2026-05-18)
+
+**F-C2: `lookups/` polluted with E2E test artifacts that would ship to customers.**
+
+The initial Phase 3.1 sweep checked `lookups/DR*.csv` for "real IPs vs
+synthetic" (the RFC1918 lens) and confirmed all hostnames/IPs were
+synthetic. It did NOT check "is every CSV here legitimate seed data
+vs leftover test fixture." User raised the concern during the
+public-flip readiness discussion, and a targeted recheck found
+significant pollution.
+
+**Why this would have been actively user-facing**: files in `lookups/`
+are packaged into the `.spl` and installed onto every customer's
+Splunk instance. `DR_BROWSER_TEST.csv` / `DR_TEST_2.csv` /
+`DR_E2E_ADMIN.csv` would have shown up as real whitelist dropdown
+options in the customer's UI. That's not "weird stuff in source"; that's
+visible product pollution.
+
+**Removed (tracked, 29 files)**:
+
+- 11 root-level test CSVs that match the
+  `DR_(TEST|STRESS|VERSION|TRASH|APPROVAL|E2E|BROWSER|LONG)_*.csv`
+  or `AL_(test|super)_*` patterns:
+  `DR_TEST_2.csv`, `DR_TEST_3.csv`, `DR_E2E_ADMIN.csv`,
+  `DR_BROWSER_TEST.csv`, `DR_VERSION_TEST.csv`, `DR_TRASH_TEST.csv`,
+  `DR_APPROVAL_TEST_1_v2.csv`, `DR_LONG_NOTIFICATION_TEST_2.csv`,
+  `DR_STRESS_2000x100.csv`, `AL_test_1775974555656.csv`,
+  `AL_super_1775974555731.csv`.
+- 18 files in `lookups/_trash/` — runtime soft-delete state captured
+  from past test sessions. The `_trash/` directory is the running
+  app's recycle-bin storage, not source-of-truth.
+
+**Removed (working-tree only, 6 files, never tracked)**: the
+DR777 / DR778 / DR998 test artifacts that the existing `.gitignore`
+patterns at `lookups/DR777_*.csv` / `DR778_*.csv` / `DR998_*.csv`
+already covered. These were untracked but visible in `ls`; cleaned
+up for tidiness.
+
+**`rule_csv_map.csv` trimmed from 33 rows → 19 rows**. The 14 removed
+rows split into two groups:
+
+- 10 mappings that pointed at the test CSVs above (now orphaned).
+- 4 mappings that pointed at CSVs which never existed in the working
+  tree at all: `DR_TEST_4.csv`, `test_gated_csv.csv`,
+  `AL13_test_limits.csv`, `AL15_super_exempt.csv`. These were a
+  pre-existing "ghost map entry" bug — the map was already
+  internally inconsistent. Removing them is a net improvement
+  regardless of public release.
+
+**`.gitignore` updated**: `lookups/_trash/` is now ignored alongside
+the already-ignored `lookups/_versions/`, `lookups/_detection_rules.json`,
+and the runtime `_*.json` state files. Future test runs that exercise
+the trash feature will not re-track its state.
+
+**Test-impact verification before deletion**: every test referencing
+the deleted CSV names (`tests/test_e2e_api.py`,
+`tests/e2e/test_admin_limits.cjs`, `tests/test_e2e_advanced.py`,
+`tests/unit/test_approval_queue_state_machine.py`,
+`tests/integration/test_chaos_save_csv_chain.py`,
+`tests/test_e2e_manual_browser.py`) creates the CSV at runtime via the
+REST API as part of test setup. None depend on the tracked file
+pre-existing on disk. Deletion is safe.
+
+**Why the initial audit missed it**: the "outsider would find this
+embarrassing" lens has multiple orthogonal sub-lenses (real-data
+leaks, branding inconsistency, legal/license issues, product
+pollution, dev cruft, ...). The initial pass exercised four of them
+strongly but skipped product-pollution-via-tracked-data. F-C2
+extends the audit lens; future pre-public sweeps should explicitly
+ask "does every file in a directory that ships to customers belong
+in the product" for each directory under the .spl payload.
+
+---
+
 ### HIGH — fixed in-turn
 
 **F-H1: License inconsistency — LICENSE/NOTICE say Apache 2.0; README, mkdocs.yml, docs/index.md, app.manifest, sbom.cdx.json claimed MIT.**
@@ -289,3 +363,5 @@ All three items have been decided. Phase 3.1 is closed.
 | Date | Auditor | Notes |
 |------|---------|-------|
 | 2026-05-18 | claude-opus-4-7 (Phase 3.1) | Initial audit. 1 CRITICAL + 1 HIGH fixed in-turn; 1 LOW fixed in-turn; 2 LOW + 1 git-history question surfaced for user decision. |
+| 2026-05-18 | claude-opus-4-7 + user | Follow-up: F-C1 history rewritten + force-pushed per user authorization; F-L2 superpowers moved to .planning/; F-L3 deferred to v1.1. |
+| 2026-05-18 | claude-opus-4-7 + user | Post-audit catch — F-C2 (`lookups/` test-artifact pollution) raised by user during public-flip readiness review. 29 tracked test CSVs + 18 `_trash/` items removed; `rule_csv_map.csv` trimmed 33→19 rows; `.gitignore` extended. Lesson recorded: future pre-public sweeps must explicitly ask "does every file in each .spl-payload directory belong in the product." |

@@ -1,4 +1,0 @@
-src_ip,dest_ip,reason,Comment,_added_by,_added_at,severity
-10.0.1.1,192.168.1.1,Bulk updated via E2E,Approved by SOC,wladmin2,1774751459,high
-10.0.1.2,192.168.1.2,Bulk updated via E2E,Standard access,wladmin2,1774751459,medium
-10.0.1.3,192.168.1.3,Bulk updated via E2E,Nagios probe,wladmin2,1774751459,medium
