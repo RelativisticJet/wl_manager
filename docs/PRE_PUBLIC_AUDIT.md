@@ -1061,6 +1061,37 @@ User picked **option 2 (fix-everything)** with `.planning/` untrack, `git tag -d
 - **F-M4** (`app.manifest` releaseDate) — release-time task; updates at Phase 3.2 rc1 cut alongside `build` + `version` bumps.
 - **F-L11** (re-capture screenshots `02-inline-editing.png` + `03-audit-trail.png`) — requires a live Splunk container running the curated demo CSVs. Will run after Phase 3.4 flip / before Phase 3.2 rc1 cut.
 
+**Scope note for F-M6 (raised by 2026-05-18 QA second-pass review):**
+the `.planning/` directory is now `.gitignore`'d (so 152 tracked files
+left the repo and future contributors won't see maintainer paths), but
+the directory path is still **read+written at CI runtime** by
+`.github/workflows/appinspect.yml`. The workflow does
+`mkdir -p .planning/appinspect`, writes
+`appinspect-{standalone,cloud}-ci.json` outputs, then uploads them via
+`actions/upload-artifact` (`path: .planning/appinspect/appinspect-*-ci.json`).
+Removing tracking does NOT remove this runtime usage — it's a
+write-only scratch path, no pre-existing baseline file is read.
+Documented here so future readers don't mistake "F-M6 closed" as
+"`.planning/` is fully unused." A future cleanup that wants to remove
+the path entirely would need to either: (a) point the workflow at a
+different scratch dir (e.g., `${{ runner.temp }}`) or (b) leave the
+workflow as-is — both keep F-M6's visibility win intact.
+
+**F-L6/F-L7 scope clarification (raised by 2026-05-18 QA second-pass review):**
+F-L6 specifically targeted the **narrative pattern in Comment fields**
+(`<First Last> - <story>`) plus the one real-world domain
+(`partnercorp.com`). It did NOT target usernames in the
+`<initial>.<surname>` format (e.g., `j.martinez`, `d.kim`,
+`c.rodriguez`, `r.garcia`, etc.) — those are indistinguishable from
+generic abbreviated synthetic names like `j.smith` already used
+throughout the demo. The QA second-pass surfaced 4 `martinez` hits
+as a potential miss; on inspection all 4 are in the `user` column,
+not the `Comment` column, and their Comments contain zero person-name
+strings. Action: none — out of scope for F-L6 as originally framed.
+If a future audit wants to enforce "every column scrubbed of
+plausible-real-surname-shaped strings," that's a new finding (probably
+F-L12) requiring wholesale rename across ~15 demo rows.
+
 **Final V2 status:** 13 of 15 findings closed in this session. 2 deferred with explicit reasons. Zero open at the time of writing.
 
 ---
