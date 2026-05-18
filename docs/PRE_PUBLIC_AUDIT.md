@@ -923,7 +923,46 @@ I recommend (b) — preserves planning value, strips maintainer signal. ~5 min v
 - `.claude/qa-failure-modes.md` and `.zap/rules.tsv` are clean — keep tracked as-is.
 - `.gitignore`-respected exclusion of all other dotdirs verified (.audit/, .firecrawl/, .superpowers/, .playwright-mcp/, etc. — no leaked content).
 
-#### Phase F — Visual review of `docs/screenshots/` — pending
+#### Phase F — Visual review of `docs/screenshots/` (completed 2026-05-18)
+
+**Scope walked:** 4 tracked PNG screenshots under `docs/screenshots/`, all dated 2026-05-06, captured against the dev container `wl_manager_test`:
+
+- `01-main-dashboard.png` (41 KB, 1648 × N)
+- `02-inline-editing.png` (187 KB)
+- `03-audit-trail.png` (356 KB, 1648 × 3341 — the largest, captured at full-page scroll)
+- `04-control-panel.png` (101 KB)
+
+Reviewed via direct read (small screenshots) and via PIL crop-then-read on `03-audit-trail.png` (top counters band + Activity Log mid section) to read individual event rows at full resolution.
+
+**Per-screenshot findings:**
+
+| File | User shown | Visible data | PII/leak risk | Notes |
+|---|---|---|---|---|
+| `01-main-dashboard.png` | `superadmin1` | Empty Whitelist Manager landing — no rule selected, no CSV data. | **None.** | Clean documentation shot. |
+| `02-inline-editing.png` | `superadmin1` | `DR130_priv_escalation` editing view. Visible row data: usernames `ahernandez_dev`, `admin_asmith`, `svc_splunk5`, etc.; hosts `APP-SRV07`, `SRV-SCCM07`, etc.; AD groups (`Print Operators`, `Enterprise Admins`, ...); ServiceNow-style ticket IDs (`CHG554867`, ...); fictional GRC comments. | Coupled to F-L6/F-L7. The same realistic-name demo rows from `lookups/DR130_priv_escalation.csv` are visible. | **Coupling note**: if F-L6/F-L7 demo-CSV curation runs, this screenshot must be re-captured to stay consistent. |
+| `03-audit-trail.png` | `superadmin1` | Full Audit Trail dashboard. Counters: 2 Total Changes / 1 Row Added / 1 Row Edited / 1 CSV Deleted. Activity Log shows real test events: `analyst1` and `wladmin1` events against `DR610_vpn_anomaly`, `DR640_service_account_logon`, `DR45_suspicious_login` rules. Visible reasons: "Rule retired - vendor switched VPN provider", "Hold for GRC sign-off - see ticket SEC-2412" (synthetic), "Approval requested for remove csv". One top-edge value `user_row_4: r.thomas` visible (demo data from a CSV row). | **None real.** All names are synthetic role-accounts (`analyst1`, `wladmin1`) or demo CSV data (`r.thomas`). | Coupling to F-L6/F-L7 same as `02`. |
+| `04-control-panel.png` | `superadmin1` | Control Panel Approval Queue. 1 Pending request (analyst1, `DR130_privilege_escalation`, "column removal", reason "Field deprecated by GRC team"). 2 Recent History rows with admin responses "Hold for GRC sign-off - see ticket SEC-2412" / "Approved - vendor change confirmed". UUID request IDs. | **None.** | Clean — same fictional GRC narrative style as `03`. |
+
+**Mechanical metadata check:** PNG files do not embed EXIF data with maintainer machine/username (verified by reading PIL `.info` and PNG textual chunks — all four screenshots are plain RGB PNGs with no metadata strings).
+
+**New Phase F finding:**
+
+##### F-L11 (LOW): Documentation screenshots coupled to demo CSV content (F-L6/F-L7)
+
+`docs/screenshots/02-inline-editing.png` and `03-audit-trail.png` display rows and audit events sourced from the demo `lookups/DR*.csv` files. If F-L6 (rename demo names to `alice`/`bob`/`carol`) and/or F-L7 (curate E2E debris) are accepted in Phase G, these two screenshots must be re-captured after the curation lands, otherwise the docs site will show data that doesn't match the demo CSVs anyone clones.
+
+**Risk lens:** L9 (branding / documentation consistency) — cosmetic, but visible to every reader of the GitHub repo and the MkDocs site.
+
+**Recommended fix:** add a post-curation step to the Phase G batch — after `lookups/DR*.csv` are rewritten, re-run the screenshot-capture playbook (presumably `tests/test_e2e_realworld.py` or equivalent manual capture) to refresh `02-inline-editing.png` and `03-audit-trail.png`. Diff the resulting PNGs against current to confirm the realistic-looking names are gone.
+
+##### Bucket F summary
+
+- **F-L11** is the only Phase F finding, and it is a coupling note for F-L6/F-L7 — not an independent issue.
+- All four screenshots themselves are professional, on-brand, and show NO real PII (no real names, no real IPs, no real customer references).
+- The fictional GRC narratives ("SEC-2412" ticket, "vendor switched VPN provider", "Approved - vendor change confirmed") are well-crafted documentation examples; keep them.
+- Screenshots use the `wl_manager_test` container's `superadmin1`/`wladmin1`/`analyst1` synthetic accounts correctly — matches the CLAUDE.md `feedback_use_role_specific_accounts.md` policy.
+
+
 
 ---
 
@@ -937,3 +976,4 @@ I recommend (b) — preserves planning value, strips maintainer signal. ~5 min v
 | 2026-05-18 | claude-opus-4-7 + user | Audit V2 Phase C closed — 78 files inspected across `appserver/`, `bin/`, `default/`, `lookups/`, `metadata/`. Four LOW findings recorded: F-L4 (test_runner.xml dashboards ship), F-L5 (`appserver/static/tests/` QUnit files ship), F-L6 (demo CSVs name-shaped narratives + one real domain `partnercorp.com`), F-L7 (demo CSV E2E debris). No CRITICAL/HIGH/MEDIUM in this bucket. All four queued for Phase G batch fix. |
 | 2026-05-18 | claude-opus-4-7 + user | Audit V2 Phase D closed — ~252 files inspected across `tests/`, `scripts/`, `demo/`, `docs/`, `bench_results/`. One MEDIUM (F-M5: 7 hardcoded `C:/Users/PC/...` paths in `test_e2e_realworld.py` + `test_e2e_manual_browser.py`) and three LOW (F-L8: 6 stale tests/ root PNGs; F-L9: scripts/hooks/README.md maintainer-path example; F-L10: audit-doc drift on `wildleo91@gmail.com` location claim). All four queued for Phase G. |
 | 2026-05-18 | claude-opus-4-7 + user | Audit V2 Phase E closed — 154 files inspected in `.planning/` + `.claude/qa-failure-modes.md` + `.zap/rules.tsv`. One MEDIUM (F-M6: 170 `c:/Users/PC/wl_manager/...` and `c:/Users/PC/.claude/...` path occurrences across 30 tracked planning docs). No CRITICAL/HIGH/LOW. Decision needed in Phase G: untrack `.planning/` entirely vs bulk-replace paths in place vs leave as-is. |
+| 2026-05-18 | claude-opus-4-7 + user | Audit V2 Phase F closed — visual review of all 4 `docs/screenshots/*.png`. Read each at full resolution (PIL crop-then-read for the largest, `03-audit-trail.png` 1648×3341). No real PII in any screenshot — all visible names are synthetic role accounts (`superadmin1`/`wladmin1`/`analyst1`) or demo CSV data; all fictional GRC narratives are well-crafted. One LOW recorded: F-L11 (screenshots `02-inline-editing.png` + `03-audit-trail.png` are coupled to demo CSV content — re-capture if F-L6/F-L7 curation runs). |
