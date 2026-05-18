@@ -107,7 +107,7 @@ Navigate to **Apps > Whitelist Manager** to start using the app.
 
 ### Install on Existing Splunk
 
-Download the latest `.spl` from the [Releases](https://github.com/RelativisticJet/wl_manager/releases) page. Replace `<VERSION>` in the commands below with the release tag you downloaded (e.g., `2.0.0`).
+Download the latest `.spl` from the [Releases](https://github.com/RelativisticJet/wl_manager/releases) page. Replace `<VERSION>` in the commands below with the release tag you downloaded (e.g., `1.0.0-rc1`).
 
 **Option A — Splunk Web UI:**
 
@@ -246,6 +246,10 @@ make package          # Outputs dist/wl_manager-VERSION.spl
 - Splunk Enterprise **9.3** (the only version on Splunk's currently-supported list as of 2026-05; tested on 9.3.1)
 - Python 3 (bundled with Splunk 9)
 - ~10 MB disk space for the app + audit data
+- A modern desktop browser (Chrome, Firefox, Edge) at **1280×720 minimum**.
+  Whitelist Manager is designed for SOC-analyst desktop workflows;
+  Splunk Web itself is not mobile-optimized, so mobile/tablet layouts
+  are out of scope.
 
 ## License
 

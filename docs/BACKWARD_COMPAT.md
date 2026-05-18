@@ -23,7 +23,7 @@ The v3.0 modular rewrite maintains full compatibility with:
 | Audit events | Golden event injection test | `tests/integration/test_backward_compat_audit.py` | Added, Removed, Edited, Revert, Auto-Removed (5 event types) | PASS ✓ |
 | Version manifests | Fixture-based manifest loading test | `tests/integration/test_backward_compat_versions.py` | Manifest parsing, version iteration, field preservation (8 test cases) | PASS ✓ |
 | Approval queue | Fixture-based queue entry test | `tests/integration/test_backward_compat_approval.py` | Queue parsing, action type recognition, payload structure (11 test cases) | PASS ✓ |
-| Full upgrade path | Docker end-to-end test | `scripts/test_upgrade_path.sh` | CSV accessibility, audit queries, dashboard loads, REST API (4 verification checks) | PASS ✓ |
+| Full upgrade path | Docker end-to-end test | _(test pending GA cut; previous upgrade-test script removed 2026-05-18 as stale v2.0->v3.0)_ | CSV accessibility, audit queries, dashboard loads, REST API (4 verification checks) | DEFERRED |
 
 ---
 
@@ -114,9 +114,15 @@ The v3.0 modular rewrite maintains full compatibility with:
 
 **Test Count:** 15 test cases
 
-### 4. Full Upgrade Path Test
+### 4. Full Upgrade Path Test (DEFERRED)
 
-**Test Script:** `scripts/test_upgrade_path.sh`
+**Test Script:** _Removed 2026-05-18._ The previous upgrade-test
+script targeted a v2.0->v3.0 upgrade that no longer matches the
+current version line, and stopped/removed the maintainer's primary
+dev container as a side effect. A replacement script (for
+v1.0.0-rc1 -> v1.0.0 GA -> v1.x point releases) will be written
+when the GA cut is scheduled. Until then, manual upgrade
+verification is documented in `docs/RUNBOOKS.md`.
 
 **What is tested:**
 - Fresh Docker container starts successfully
@@ -258,13 +264,9 @@ python -m pytest tests/integration/test_backward_compat_approval.py -v
 
 ### Run Docker Upgrade Test
 
-```bash
-# Start fresh test environment and perform full upgrade test
-bash scripts/test_upgrade_path.sh
-
-# Check results
-cat upgrade_test_results.txt
-```
+_The automated upgrade test was removed 2026-05-18; see "Full Upgrade
+Path Test (DEFERRED)" above. For manual verification follow the
+upgrade-checklist section in `docs/RUNBOOKS.md`._
 
 ---
 
@@ -322,7 +324,7 @@ For questions about v3.0 upgrade compatibility:
 - ✓ Audit event backward compatibility tests (test_backward_compat_audit.py)
 - ✓ Version manifest backward compatibility tests (test_backward_compat_versions.py)
 - ✓ Approval queue backward compatibility tests (test_backward_compat_approval.py)
-- ✓ End-to-end Docker upgrade test (test_upgrade_path.sh)
+- ✓ End-to-end Docker upgrade test (removed 2026-05-18 — see Test Matrix above for status)
 - ✓ Documentation for administrators (this file)
 
 **Coverage:** 100% of v2.0 data structures tested and verified

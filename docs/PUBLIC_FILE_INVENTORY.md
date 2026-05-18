@@ -312,7 +312,8 @@ All scripts here are **repo-only** — they don't run on the customer's Splunk.
 | `scripts/pre-commit-doc-drift.sh` | Drift guard for the tracked doc set — path-existence + build-number checks. | Repo-only | Yes |
 | `scripts/test_integration.sh` | Local runner for `tests/integration/` against the dev container. | Repo-only | Yes |
 | `scripts/test_backup_restore.sh` | Smoke test for the backup/restore runbook. | Repo-only | Yes |
-| `scripts/test_upgrade_path.sh` | Smoke test for an in-place upgrade from a prior `.spl` version. | Repo-only | Yes |
+<!-- The previous upgrade-test script (under scripts/) was removed 2026-05-18 — targeted a stale v2.0->v3.0 path and would have destroyed the live dev container. A fresh upgrade test will be written when v1.0.0 GA is cut. -->
+
 | `scripts/emergency_unlock.sh` | Out-of-band recovery: clears the emergency-lockdown sentinel. | Repo-only | Yes |
 | `scripts/reset_cooldowns.sh` | Out-of-band recovery: clears the `wl_cooldowns` KV record after tamper detection or GUID rotation. | Repo-only | Yes |
 | `scripts/fim_deploy_window.sh` | Operator helper to open/close a FIM deploy window without using the REST API. | Repo-only | Yes |
