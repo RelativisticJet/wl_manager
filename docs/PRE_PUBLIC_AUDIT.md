@@ -624,7 +624,74 @@ No CRITICAL findings. The HIGH (F-H2) blocks Phase 3.8 but not
 Phase 3.2 or 3.4. The MEDIUM findings should land before Phase 3.2
 to keep the rc1 cut clean. The LOW (F-M4) is a release-time task.
 
-#### Phase B — `.github/` (workflows + templates) — pending
+#### Phase B — `.github/` (23 tracked files, completed 2026-05-18)
+
+**Files audited**:
+
+- `.github/FUNDING.yml`
+- `.github/ISSUE_TEMPLATE/bug_report.md`, `config.yml`,
+  `feature_request.md`, `question.md`
+- `.github/PULL_REQUEST_TEMPLATE.md`
+- `.github/dependabot.yml`
+- 16 workflows in `.github/workflows/`: `a11y-audit.yml`,
+  `appinspect-api.yml`, `appinspect.yml`, `ci.yml`, `codeql.yml`,
+  `docs.yml`, `e2e-full.yml`, `e2e-smoke.yml`, `integration-tests.yml`,
+  `pip-audit.yml`, `release.yml`, `scorecard.yml`, `secret-scan.yml`,
+  `semgrep.yml`, `validate-and-package.yml`, `zap-baseline.yml`.
+
+**Verified clean across all 10 lenses**:
+
+- **L3 (credentials)**: only 3 distinct secrets referenced:
+  `SPLUNK_DEV_USERNAME` + `SPLUNK_DEV_PASSWORD` (in `appinspect-api.yml`,
+  both job-scoped, both registered per Phase 1.4) and the built-in
+  `GITHUB_TOKEN` (in `release.yml` for `gh release upload` and
+  `secret-scan.yml` for gitleaks). No secret VALUES embedded. No
+  third-party tokens (Slack, Datadog, etc.). All secret names are
+  generic enough to not fingerprint internal infrastructure.
+- **L4 (internal refs)**: only `main` branch referenced. No
+  fingerprint of internal branch conventions (`dev/`, `feature/`,
+  `release/`). No internal hostnames or Splunk index names beyond
+  what's documented in code.
+- **L7 (maintainer paths)**: zero `C:\Users\PC\` or `/Users/PC/`
+  matches across all 23 files.
+- **L5 (stale content)**: action versions all pinned to major
+  versions (no `@main` / `@master`). `splunk/appinspect-api-action@v3.0.5`,
+  `ossf/scorecard-action@v2.4.0`, `sigstore/cosign-installer@v3`,
+  `zaproxy/action-baseline@v0.14.0` — all current as of 2026-05.
+- **L6 (orphans)**: every workflow has documented trigger rationale
+  in comments; `codeql.yml`, `scorecard.yml`, `docs.yml` correctly
+  carry `if: github.event.repository.private == false` job-level
+  guards until Phase 3.4 flips public.
+- **L8 (TODO/FIXME/XXX/HACK)**: zero hits across all workflows.
+- **L9 (consistency)**: trigger discipline aligns with
+  PUBLIC_RELEASE_PLAN expectations — heavy workflows (e2e-full,
+  a11y-audit, zap-baseline) are schedule-only + workflow_dispatch,
+  PR-gating workflows (e2e-smoke, ci, integration-tests, semgrep,
+  appinspect, validate-and-package, docs, secret-scan) trigger on
+  push:main + pull_request.
+- **release.yml specifically** — comment block at line 52-58
+  publishes the customer-facing `cosign verify-blob` command with
+  correct `--certificate-identity-regexp` for the
+  `RelativisticJet/wl_manager` workflow identity and correct
+  `--certificate-oidc-issuer https://token.actions.githubusercontent.com`.
+  Sigstore E2E (Phase 3.2) will exercise this exact command.
+
+**Findings: 0 (zero) in Phase B.**
+
+The closest thing to a finding is a minor "future hardening"
+observation, not a release-blocker:
+
+> Action pins use major-version-only (`@v4`, `@v5`, `@v2`) rather
+> than full 40-char SHA pins. OSSF Scorecard's "Pinned Dependencies"
+> check will flag this once we flip public and Scorecard activates
+> in `scorecard.yml`. SHA-pinning is more supply-chain-secure but
+> adds maintenance friction (Dependabot has to bump SHAs instead of
+> tags). Recommend leaving as-is for v1.0.0 and revisiting if
+> Scorecard scores drop the project below a target threshold.
+
+**Phase B summary**: 23 pass, 0 findings.
+
+#### Phase C — Bucket A directories (ship in .spl) — pending
 
 #### Phase C — Bucket A directories (ship in .spl) — pending
 
