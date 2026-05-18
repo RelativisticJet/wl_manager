@@ -196,19 +196,22 @@ queued as v1.1 maintenance work.
 
 ---
 
-## Recommended improvements (queued, not in scope of 2026-05-18 commit)
+## Recommended improvements
 
-These are documented for the next mutation-testing session, not
-required for v1.0.0-rc1:
+### CLOSED (landed in v1.1 prep, 2026-05-19)
 
-1. **Wire the mapping table into `scripts/mutmut.sh`** so
-   `MUTATE_PATH=bin/wl_csv.py` automatically uses the correct
-   `TEST_RUNNER_FILES`. A simple case statement based on the
-   `MUTATE_PATH` value would prevent the misconfiguration that
-   produced the discarded wl_csv survivors above. Keep the env
-   override as escape hatch.
+1. ~~**Wire the mapping table into `scripts/mutmut.sh`**~~ — DONE.
+   The script now auto-derives `TEST_RUNNER_FILES` from `MUTATE_PATH`
+   via the `derive_test_files_for` function, and hard-fails on
+   unknown modules (rather than silently falling back to wl_validation
+   tests). Run `scripts/mutmut.sh mappings` to see the table.
+   `bin/wl_handler.py` is explicitly rejected with a pointer to this
+   doc. Escape hatch: explicit `TEST_RUNNER_FILES` env var still
+   overrides auto-derivation.
 
-2. **Switch the volume mount to read-only.** Replace
+### Open (queued for v1.1 release prep)
+
+1. **Switch the volume mount to read-only.** Replace
    `-v "$REPO_ROOT:/work"` with `-v "$REPO_ROOT:/work:ro"` and have
    mutmut use a tmpfs (or container-local) scratch dir for its
    mutations. This removes the host-tree-corruption hazard entirely.
@@ -216,15 +219,15 @@ required for v1.0.0-rc1:
    stay on a separate writable volume. Estimated effort: 1 hour
    (test the cache-survives-restart property).
 
-3. **Re-run wl_validation with the correct selector** to get a
+2. **Re-run wl_validation with the correct selector** to get a
    fresh survivor count after the 2 new tests above. Expected
    result: ≤8 survivors (the equivalent mutants), down from 12.
 
-4. **Run wl_csv.py with the correct selector**. Expected: real
+3. **Run wl_csv.py with the correct selector**. Expected: real
    survivor count, plausibly 5-20 genuine gaps in CSV diff /
    hash-registry logic.
 
-5. **Add `bin/wl_audit.py` mutation pass.** The 37 reported survivors
+4. **Add `bin/wl_audit.py` mutation pass.** The 37 reported survivors
    on `wl_audit.py` from a prior session need the same re-validation
    under the correct selector before deciding what to do with them.
 
