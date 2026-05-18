@@ -358,6 +358,284 @@ All three items have been decided. Phase 3.1 is closed.
 
 ---
 
+## Audit V2 — comprehensive walk (in progress, started 2026-05-18)
+
+### Why V2
+
+After the Audit V1 work above closed (`F-C1`/`F-H1`/`F-L1`/`F-L2`/`F-L3`),
+user pointed out `lookups/` contained obvious test-fixture pollution
+that V1 had missed. Targeted cleanup landed as `F-C2`. Subsequent QA
+also caught that the `F-C2` commit message overclaimed test-impact
+("every test creates the CSV at runtime") without tracing through
+`tests/integration/test_chaos_save_csv_chain.py`, which broke CI.
+
+The pattern: V1 applied audit lenses opportunistically rather than
+exhaustively. Each new finding was a fresh lens that V1 hadn't
+explicitly enumerated up front. V2 fixes this methodology problem.
+
+### V2 methodology
+
+**Ten lenses applied to EVERY tracked file**:
+
+| # | Lens | Question |
+|---|------|----------|
+| L1 | Customer-visible (.spl payload) | Does this ship onto customer Splunk installs? If so, is it product-appropriate? |
+| L2 | PII / personal | Real names, emails, internal handles, scraped content from unrelated sessions? |
+| L3 | Credentials / secrets | API keys, tokens, dev passwords beyond documented `Chang3d!`? |
+| L4 | Internal infrastructure | Real IPs/hostnames/Splunk indexes/Slack/Jira refs? |
+| L5 | Out-of-date / stale | Content match current code? Old version strings, dead links? |
+| L6 | Orphaned / dead | File actually used? Test fixtures with no test, scripts referenced nowhere? |
+| L7 | Maintainer-specific | Hardcoded `C:\Users\PC\`, machine-specific assumptions? |
+| L8 | Unprofessional / embarrassing | Profanity, dev frustration, `XXX:`, internal jokes, draft markers? |
+| L9 | Branding / consistency | License, version, copyright, project name align with locked decisions? |
+| L10 | Legal / IP | Third-party content embedded without attribution? Someone else's IP? |
+
+**Three buckets**:
+
+The packaging script `scripts/package.sh` excludes a substantial set
+of paths from the `.spl` archive that ships to customers. So
+"in the GitHub repo" ≠ "on customer's Splunk." Audit must ask both
+questions.
+
+- **Bucket A — ships in `.spl` (customer-visible)**:
+  - `app.manifest`
+  - `appserver/static/` (JS, CSS, XML)
+  - `bin/` (Python source)
+  - `default/` (Splunk configs, dashboards)
+  - `lookups/rule_csv_map.csv` (swapped to header-only at package time)
+  - `metadata/default.meta`
+  - Root `.md` files: `ARCHITECTURE.md`, `CHANGELOG.md`,
+    `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALLATION.md`,
+    `LICENSE`, `NOTICE`, `README.md`, `SECURITY.md`
+  - `mkdocs.yml` ← currently not excluded; may or may not be
+    intentional (audit-level question — see Phase A)
+  - Strict on ALL ten lenses.
+
+- **Bucket B — GitHub-visible but NOT in `.spl`**:
+  - All dot-dirs (`*/.*` exclude in package.sh): `.github/`,
+    `.planning/`, `.claude/`, `.zap/`, `.appinspect_api.expect.yaml`,
+    `.gitignore`, `.gitleaks.toml`, `.mcp.json.example`
+  - `bench_results/`, `dist/`, `demo/`, `docs/`, `scripts/`, `tests/`
+  - `docker-compose.yml`, `Makefile`, `package.json`,
+    `package-lock.json`, `requirements-dev.txt`, `sbom.cdx.json`
+  - `lookups/DR*.csv`, `lookups/_*` (all the seed/test CSVs)
+  - Lenient on L1, strict on L2-L10.
+
+- **Bucket C — should be gitignored entirely**: runtime state, build
+  output, transient state never appropriate for tracking.
+
+**Per-directory walk**:
+
+V2 walks every directory and applies every lens to every file.
+Findings recorded below as they're produced. Severity ranks
+CRITICAL / HIGH / MEDIUM / LOW. Fixes batched at the end after
+user authorization.
+
+### V2 finding registry
+
+#### F-C3 (HIGH, CI-blocker — surfaced during V2 prep, before walk)
+
+**`tests/integration/test_chaos_save_csv_chain.py` requires `DR_VERSION_TEST.csv` to exist on the container; F-C2 deleted it.**
+
+The chaos test exercises save-csv-chain consistency by killing
+splunkd mid-write. It needs a stable pre-test snapshot of an
+existing CSV to measure post-recovery state against. Lines 299-302
+have a hard assertion:
+
+```python
+pre_state = _capture_state()
+assert pre_state["csv_hash"] is not None, (
+    "chaos target CSV missing pre-test — DR_VERSION_TEST.csv "
+    "must exist for this test to run")
+```
+
+`DR_VERSION_TEST.csv` was a tracked test fixture deleted in
+F-C2 (commit `b30c433`) on the rationale that no test depended
+on its tracked presence. That rationale held for
+`tests/test_e2e_api.py` (creates CSV via API at runtime) but
+NOT for this chaos test (assumes pre-existence).
+
+CI integration tests run via `.github/workflows/integration-tests.yml`
+→ `python -m pytest tests/integration/ -q --tb=short` → this
+test is collected. Next run (after June 1 Actions reset) will fail.
+
+**Sibling fallout** — `tests/test_e2e_advanced.py` (manual smoke,
+not in CI) has the same pattern at line 99 with `DR_BROWSER_TEST.csv`,
+also deleted in F-C2. Lower operational severity (not in CI) but
+same structural issue.
+
+**Fix approach (deferred to V2 batch fix)**:
+
+1. **Chaos test**: session-scoped fixture in `tests/integration/conftest.py`
+   that creates `DR_VERSION_TEST.csv` via REST API once before any
+   test in the integration suite runs. Schema per the test docstring:
+   `user, src_ip, Comment`. Cleans up at session end.
+2. **Manual smoke**: add a `_seed_required_csvs()` function called
+   at the top of `main()` in `tests/test_e2e_advanced.py` that
+   creates the CSVs the tests assume to exist. Uses existing
+   `post()` helper and the `create_rule`/`create_csv` REST actions.
+
+**Why not fix in-turn**: per user direction 2026-05-18, V2 audit
+runs to completion FIRST, then batch-fix at the end. Avoids touching
+code mid-audit since other findings may interact (e.g., if V2 finds
+that a related test should itself be deleted, the chaos-test fix
+might be a fixture restructure rather than a seed-and-add).
+
+### Per-directory walk (in progress)
+
+#### Phase A — root files (21 tracked files, completed 2026-05-18)
+
+**Files audited** (all 21 tracked at repo root):
+
+Dotfiles: `.appinspect_api.expect.yaml`, `.gitignore`, `.gitleaks.toml`,
+`.mcp.json.example`.
+Configs: `Makefile`, `app.manifest`, `docker-compose.yml`, `mkdocs.yml`,
+`package.json`, `package-lock.json`, `requirements-dev.txt`,
+`sbom.cdx.json`.
+Docs (also in Bucket A — ship in .spl): `ARCHITECTURE.md`,
+`CHANGELOG.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`,
+`INSTALLATION.md`, `LICENSE`, `NOTICE`, `README.md`, `SECURITY.md`.
+
+**PASS (16 files, no finding)**:
+
+- `.appinspect_api.expect.yaml` — single suppression entry with full
+  re-eval triggers, dated, current. Bucket B.
+- `.gitignore` — every entry justified by inline comment. Bucket B.
+- `.gitleaks.toml` — minimal allowlist (Chang3d! dev password +
+  audit.xml dashboard variables only). Bucket B.
+- `.mcp.json.example` — F-L3 already known (Windows-only paths,
+  deferred to v1.1).
+- `Makefile` — relative paths, documented Splunk dev password.
+  Bucket B.
+- `docker-compose.yml` — relative volume mounts, documented dev
+  password env-var. Bucket B.
+- `package.json`, `package-lock.json`, `requirements-dev.txt` — dev
+  dependency declarations. Bucket B.
+- `ARCHITECTURE.md`, `CHANGELOG.md`, `CODE_OF_CONDUCT.md`,
+  `CONTRIBUTING.md`, `INSTALLATION.md`, `LICENSE`, `NOTICE`,
+  `README.md`, `SECURITY.md` — clean. No maintainer paths
+  (`grep C:\\Users\|/Users/PC` returns 0 across all 9 files).
+  Bucket A (ship in .spl).
+
+**Findings (5 new)**:
+
+##### F-H2 (HIGH — release-blocker for Phase 3.8): git tag namespace collision
+
+`git tag -l` returns:
+
+```
+hardening-v1-complete
+pre-firecrawl-purge-backup-2026-05-18
+v1.0.0
+v2.0.0
+```
+
+`v1.0.0` points at commit `d525bf5` (2026-02-18) — historical
+internal milestone "Fix JS REST URL to use splunkd proxy path".
+`v2.0.0` points at commit `732de19` (2026-03-22) — historical
+internal milestone "docs: add screenshots, community files".
+Both are **lightweight tags** (`git tag -v` errors "cannot
+verify a non-tag object of type commit") — not annotated,
+not signed.
+
+D12 (`docs/PUBLIC_RELEASE_PLAN.md` §1) locks: "Versioning: reset
+to v1.0.0 for first public release." Phase 3.8 (§6 row 3.8)
+plans to `Cut v1.0.0 (GA) release`. Phase 3.2 also references
+`v1.0.0-rc1` which does NOT collide. But Phase 3.8 will fail
+because `v1.0.0` already exists locally AND on origin (these
+tags were pushed historically).
+
+**Fix approach (deferred to V2 batch fix)**:
+- `git tag -d v1.0.0 && git push origin :refs/tags/v1.0.0`
+- `git tag -d v2.0.0 && git push origin :refs/tags/v2.0.0`
+- Both can be deleted because they're lightweight and have no
+  associated GitHub Release (the GitHub Release for v2.0.0 visible
+  in the user's screenshot — verify separately whether deletable).
+- Rename the existing GitHub Release if it must be preserved
+  (e.g., `v2.0.0-internal-2026-03-22`).
+
+##### F-M1 (MEDIUM): mkdocs.yml ships in .spl payload unnecessarily
+
+`scripts/package.sh` exclude list omits `mkdocs.yml`. The docs-site
+build config gets installed onto every customer Splunk instance. Not
+security-sensitive but unnecessary bloat that may confuse customers
+("why is there a Material-theme mkdocs config in my app dir?").
+
+**Fix approach**: add `--exclude="$APP_NAME/mkdocs.yml"` to the
+package.sh tar command.
+
+##### F-M2 (MEDIUM): sbom.cdx.json is stale
+
+```
+sbom.cdx.json:
+  metadata.component.version: "2.0.0"  ← stale; current is "1.0.0-rc1"
+  splunk:build property: "627"          ← stale; current is "660"
+  metadata.timestamp: "2026-04-29T00:00:00Z"  ← stale
+```
+
+The SBOM tool field is `"name": "manual-baseline"` so it's
+hand-maintained. The values were correct at Round 7 baseline
+(2026-04-29) but the app has moved on since.
+
+**Fix approach**: regenerate the SBOM before Phase 3.2 cut. Either
+manually with current version+build, or wire a CI step that
+regenerates on every release-tagged commit.
+
+##### F-M3 (MEDIUM): app.manifest author identity inconsistency
+
+```
+app.manifest:        "author": [{"name": "RelativisticJet", ...}]
+LICENSE line 189:    Copyright 2026 Oleh Bezsonov
+NOTICE line 2:       Copyright 2026 Oleh Bezsonov
+sbom.cdx.json:       "publisher": "Oleh Bezsonov"
+```
+
+Per D5 + D15 + D17 (locked decisions in `docs/DECISION_LOG.md`):
+copyright + Splunkbase publisher + repo-owner identity all unified
+on "Oleh Bezsonov". CHANGELOG explicitly schedules the
+`app.manifest:author.name` update for "Phase 0.7":
+
+> CHANGELOG.md:151-153
+>   `app.manifest:license.name = "MIT"` and `author.name = "RelativisticJet"`
+>   — scheduled for Phase 0.6 (Apache 2.0 switch) and Phase 0.7
+>   (D5/D15 copyright/publisher = Oleh Bezsonov).
+
+Phase 0.6 happened (license fixed, eventually re-fixed in F-H1).
+Phase 0.7 apparently never closed — `app.manifest:author.name`
+is still "RelativisticJet."
+
+**Fix approach**: change to `"name": "Oleh Bezsonov"` and add
+`"email": "communicate.oleh@gmail.com"` (per D15 — the publisher
+email is intentionally public per the locked decision).
+
+##### F-M4 (LOW): app.manifest releaseDate predates actual release
+
+`"releaseDate": "2026-05-17"` was set during Phase 1 planning. Phase
+3.2 hasn't cut `v1.0.0-rc1` yet. The date should be updated to the
+actual rc1 cut date when Phase 3.2 fires.
+
+**Fix approach**: update at Phase 3.2 time, not now. Tracked as a
+release-cut-prep item.
+
+---
+
+**Phase A summary**: 16 pass, 5 findings (1 HIGH, 3 MEDIUM, 1 LOW).
+No CRITICAL findings. The HIGH (F-H2) blocks Phase 3.8 but not
+Phase 3.2 or 3.4. The MEDIUM findings should land before Phase 3.2
+to keep the rc1 cut clean. The LOW (F-M4) is a release-time task.
+
+#### Phase B — `.github/` (workflows + templates) — pending
+
+#### Phase C — Bucket A directories (ship in .spl) — pending
+
+#### Phase D — Bucket B directories (repo-only) — pending
+
+#### Phase E — Internal/process dot-dirs — pending
+
+#### Phase F — Visual review of `docs/screenshots/` — pending
+
+---
+
 ## Revision log
 
 | Date | Auditor | Notes |
