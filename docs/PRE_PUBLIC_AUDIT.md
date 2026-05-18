@@ -863,7 +863,65 @@ Net effect: the full email `wildleo91@gmail.com` is one grep hit, and that hit i
   - `tests/a11y/reports/` correctly stays gitignored — verify `.gitignore:163-164` is preserved in any future cleanup that touches `tests/` ignore patterns.
   - The `Chang3d!` allowlist in `.gitleaks.toml` correctly suppresses ~5 mentions across `demo/` and `docs/`; do NOT widen the allowlist without explicit decision.
 
-#### Phase E — Internal/process dot-dirs — pending
+#### Phase E — Internal/process dot-dirs (completed 2026-05-18)
+
+**Scope walked:** `.planning/` (152 tracked files), `.claude/` (1 tracked file — `qa-failure-modes.md`, the rest is gitignored per `.gitignore:2-5`), `.zap/` (1 tracked file — `rules.tsv`). 154 total.
+
+Other dotdirs already audited in earlier phases: `.github/` (Phase B, 0 findings), `.appinspect_api.expect.yaml` (Phase A, PASS), `.firecrawl/` (Phase A, F-C1 history-rewrite resolved), `.gitleaks.toml` / `.gitignore` / `.markdownlint.json` (Phase A, PASS).
+
+Gitignored-and-confirmed-untracked dotdirs: `.audit/`, `.firecrawl/`, `.graphifyignore`, `.playwright-mcp/`, `.superpowers/`, `.tmp_smoke_*/`, `.tmp_restore_*/`, `.mcp.json`, `.mutmut-cache`, `.coverage`, `.pytest_cache/`. Confirmed via `git ls-files` (zero hits each).
+
+**Mechanical sweeps:**
+
+- Personal-email regex (`@gmail|@yahoo|@hotmail|@outlook|@protonmail|@icloud|point72|wildleo`) — one match: `.planning/go-public/PII_SWEEP_2026_05_14.md:74` references `communicate.oleh@gmail.com` in a documented allowlist of expected-public emails (intentional D15 publisher identity). PASS.
+- Hardcoded-credential sweep — zero hits.
+- RFC1918 IP regex — only documentation-of-pattern references in `.planning/go-public/PII_SWEEP_2026_05_14.md:32` (`RFC 1918 private IPs (10.x, 172.16-31.x, 192.168.x)` — meta-description). No embedded customer IPs.
+- `TODO|FIXME|XXX|HACK` — only documentation-of-pattern references (planning docs saying production code shouldn't have TODO markers, e.g. `.planning/phases/01-backend-foundation/01-VERIFICATION.md:81`). No actual unresolved-work markers.
+- `.claude/qa-failure-modes.md` (70 LOC) — project-specific QA pattern library (Splunk cache claims, role-specific account testing). Clean.
+- `.zap/rules.tsv` (58 LOC) — ZAP baseline-scan rule customizations. Clean.
+
+**New Phase E finding:**
+
+##### F-M6 (MEDIUM): `.planning/` contains 170 maintainer-specific path references across 30 tracked files
+
+Tracked planning docs under `.planning/phases/01-backend-foundation/` through `.planning/phases/08-splunkbase-readiness/` plus `.planning/superpowers/plans/2026-04-05-wave3-entry-point-rewrite.md` embed the maintainer's absolute Windows paths everywhere as Claude Code `@`-context-loading directives and inline shell commands.
+
+Representative samples (170 total occurrences across 30 files):
+
+- `.planning/phases/01-backend-foundation/01-01-PLAN.md:54` — `@c:/Users/PC/.claude/get-shit-done/workflows/execute-plan.md` (references a file in the maintainer's HOME `.claude` dir, NOT in this repo — reveals workflow-system path and home-dir layout)
+- `.planning/phases/01-backend-foundation/01-01-PLAN.md:62` — `@c:/Users/PC/wl_manager/CLAUDE.md`
+- `.planning/phases/01-backend-foundation/01-01-PLAN.md:74` — `Create requirements-dev.txt at the project root (/c/Users/PC/wl_manager/requirements-dev.txt)`
+- `.planning/phases/01-backend-foundation/01-01-PLAN.md:85` — `<automated>grep -E "..." /c/Users/PC/wl_manager/requirements-dev.txt | wc -l ...`
+- `.planning/superpowers/plans/2026-04-05-wave3-entry-point-rewrite.md:30` — `MSYS_NO_PATHCONV=1 docker cp "C:/Users/PC/wl_manager/appserver/static/whitelist_manager.js" wl_manager_test:/opt/splunk/...`
+
+Distribution per file (top hits):
+
+| File | Path occurrences |
+|---|---|
+| `.planning/phases/03-backend-orchestration/03-03-PLAN.md` | 30 |
+| `.planning/phases/01-backend-foundation/01-01-PLAN.md` | 24 |
+| `.planning/phases/01-backend-foundation/01-03-PLAN.md` | 24 |
+| `.planning/phases/01-backend-foundation/01-04-PLAN.md` | 21 |
+| `.planning/phases/01-backend-foundation/01-02-PLAN.md` | 17 |
+| (other 25 files) | 1-6 each |
+
+**What a casual GitHub-repo visitor sees:** The first click into `.planning/phases/01-backend-foundation/01-01-PLAN.md` immediately reveals the maintainer's Windows username (`PC`), working directory layout (`c:/Users/PC/wl_manager`), and home-dir tooling (`c:/Users/PC/.claude/get-shit-done/workflows/`). It signals "this project was developed on one person's laptop and the planning is not generalized for OSS contributors."
+
+**Risk lens:** L7 (maintainer-specific paths at scale) + L8 (unprofessional for OSS — internal planning docs not curated for public visibility). NOT a security/credential issue.
+
+**Decision needed in Phase G** — three plausible directions, all reversible:
+
+- **(a) Untrack `.planning/` entirely.** Add `.planning/` to `.gitignore`, `git rm -r --cached .planning`. The docs become local working artifacts. Trade-off: contributors can't see the project's planning history.
+- **(b) Bulk replace paths in place.** `sed -i 's|c:/Users/PC/wl_manager|${REPO_ROOT}|g'` and `sed -i 's|c:/Users/PC/.claude|~/.claude|g'` across `.planning/`. Tilde-prefixed home is the Claude Code convention. Preserves planning history for contributors; removes maintainer-specific signal.
+- **(c) Leave as-is.** These ARE honest dev artifacts; OSS contributors generally understand internal planning has machine-specific paths. The audit V1 explicitly noted `.planning/` is reviewer-context, not customer-facing.
+
+I recommend (b) — preserves planning value, strips maintainer signal. ~5 min via two sed commands + a regression-test grep that the path count drops to zero. But this is a user decision: surface in Phase G.
+
+##### Bucket E summary
+
+- **F-M6** the only finding. No CRITICAL/HIGH/LOW.
+- `.claude/qa-failure-modes.md` and `.zap/rules.tsv` are clean — keep tracked as-is.
+- `.gitignore`-respected exclusion of all other dotdirs verified (.audit/, .firecrawl/, .superpowers/, .playwright-mcp/, etc. — no leaked content).
 
 #### Phase F — Visual review of `docs/screenshots/` — pending
 
@@ -877,3 +935,5 @@ Net effect: the full email `wildleo91@gmail.com` is one grep hit, and that hit i
 | 2026-05-18 | claude-opus-4-7 + user | Follow-up: F-C1 history rewritten + force-pushed per user authorization; F-L2 superpowers moved to .planning/; F-L3 deferred to v1.1. |
 | 2026-05-18 | claude-opus-4-7 + user | Post-audit catch — F-C2 (`lookups/` test-artifact pollution) raised by user during public-flip readiness review. 29 tracked test CSVs + 18 `_trash/` items removed; `rule_csv_map.csv` trimmed 33→19 rows; `.gitignore` extended. Lesson recorded: future pre-public sweeps must explicitly ask "does every file in each .spl-payload directory belong in the product." |
 | 2026-05-18 | claude-opus-4-7 + user | Audit V2 Phase C closed — 78 files inspected across `appserver/`, `bin/`, `default/`, `lookups/`, `metadata/`. Four LOW findings recorded: F-L4 (test_runner.xml dashboards ship), F-L5 (`appserver/static/tests/` QUnit files ship), F-L6 (demo CSVs name-shaped narratives + one real domain `partnercorp.com`), F-L7 (demo CSV E2E debris). No CRITICAL/HIGH/MEDIUM in this bucket. All four queued for Phase G batch fix. |
+| 2026-05-18 | claude-opus-4-7 + user | Audit V2 Phase D closed — ~252 files inspected across `tests/`, `scripts/`, `demo/`, `docs/`, `bench_results/`. One MEDIUM (F-M5: 7 hardcoded `C:/Users/PC/...` paths in `test_e2e_realworld.py` + `test_e2e_manual_browser.py`) and three LOW (F-L8: 6 stale tests/ root PNGs; F-L9: scripts/hooks/README.md maintainer-path example; F-L10: audit-doc drift on `wildleo91@gmail.com` location claim). All four queued for Phase G. |
+| 2026-05-18 | claude-opus-4-7 + user | Audit V2 Phase E closed — 154 files inspected in `.planning/` + `.claude/qa-failure-modes.md` + `.zap/rules.tsv`. One MEDIUM (F-M6: 170 `c:/Users/PC/wl_manager/...` and `c:/Users/PC/.claude/...` path occurrences across 30 tracked planning docs). No CRITICAL/HIGH/LOW. Decision needed in Phase G: untrack `.planning/` entirely vs bulk-replace paths in place vs leave as-is. |
