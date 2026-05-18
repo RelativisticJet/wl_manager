@@ -776,7 +776,92 @@ These rows tell a casual viewer "this is dev debris, not a curated demo set." Th
 - **F-L6, F-L7** — GitHub-public hygiene only (customers never see these CSVs); fix in same batch.
 - No CRITICAL / HIGH / MEDIUM findings in this bucket. Bucket A is in better shape than Buckets B or C will likely be — handler / dashboard / module code is professional and well-defended.
 
-#### Phase D — Bucket B directories (repo-only) — pending
+#### Phase D — Bucket B directories (repo-only, completed 2026-05-18)
+
+**Scope walked:** `tests/` (199 tracked files across 11 subdirs), `scripts/` (18 files), `demo/` (3 files), `docs/` (29 tracked files), `bench_results/` (3 JSON files). ~252 files total. Audit lens is **public-on-GitHub** only — Bucket B does not ship in the `.spl`, so customer install never sees these.
+
+**Mechanical sweeps:**
+
+- `point72|wildleo|@gmail|@yahoo|@hotmail|@outlook|@protonmail|@icloud` — every match resolved to legitimate intentional content:
+  - `communicate.oleh@gmail.com` in `docs/DECISION_LOG.md:48`, `docs/PUBLIC_RELEASE_PLAN.md` (5 lines), `docs/RUNBOOKS.md:436/451/475/521` → D15 / D17 publisher email, intentionally public per locked decisions.
+  - `wildleo91` (handle, no `@gmail`) in `docs/PUBLIC_RELEASE_PLAN.md:44/215` → D17 historical-attribution context ("commits remain attributed to wildleo91; no history rewrite").
+  - Email mentions in `docs/PRE_PUBLIC_AUDIT.md` are this audit doc's own findings registry (meta-reference, not a leak).
+  - `tests/a11y/reports/*.json` show `DevLicense:communicate.oleh@gmail.com` in 12 places — these are the gitignored raw a11y reports (`.gitignore:163-164`); the file is NOT tracked. `git ls-files tests/a11y/` confirms only `README.md`, `baseline.json`, `lib_a11y.cjs`, `test_a11y_dashboards.cjs` are tracked, and `grep` shows zero email matches in those four.
+- Hardcoded-credential sweep (`password|secret|api_key|bearer|token` with 8+ char value) across all 252 files — only the documented `Chang3d!` dev-container password appears (in `demo/demo.sh`, `demo/generate_demo_guide.py`, `docs/PUBLIC_RELEASE_PLAN.md`, `docs/RING_FINDINGS.md`, `docs/PRE_PUBLIC_AUDIT.md`). Allowlisted in `.gitleaks.toml`. No other secrets.
+- RFC1918 IP regex — every match is intentional demo seed data (`demo/demo.sh:254-256`, `scripts/seed-demo-state.py:130`, `scripts/test_upgrade_path.sh:110/112`, `docs/api/README.md`, `docs/api/openapi.yaml`).
+- `TODO|FIXME|XXX|HACK` — only false positives (UUID placeholder `XXXXXXXX-XXXX-XXXX` in `tests/integration/test_backward_compat_approval.py:166`, `'XXXX'` substring sentinel in `tests/unit/test_validation.py:407/424` and `docs/RING_FINDINGS.md:2090`).
+- `bench_results/` — three JSONs of 838-byte perf data each. Container name `wl_manager_test` is the documented dev container. Clean.
+
+**New Phase D findings:**
+
+##### F-M5 (MEDIUM): Hardcoded maintainer paths in 2 tracked test files
+
+Seven hardcoded absolute Windows paths embedded in two tracked Python E2E tests:
+
+- `tests/test_e2e_manual_browser.py:106` — `page.screenshot(path=f"C:/Users/PC/wl_manager/tests/e2e_{name}.png", full_page=True)`
+- `tests/test_e2e_realworld.py:265` — `e2e_phase1.png`
+- `tests/test_e2e_realworld.py:439` — `e2e_phase2.png`
+- `tests/test_e2e_realworld.py:512` — `e2e_phase3.png`
+- `tests/test_e2e_realworld.py:602` — `e2e_phase4.png`
+- `tests/test_e2e_realworld.py:650` — `e2e_phase5_analyst.png`
+- `tests/test_e2e_realworld.py:651` — `e2e_phase5_admin.png`
+
+Every other contributor running these tests will fail (`FileNotFoundError` on a path that doesn't exist on their machine — Linux/macOS — or silently writes to `C:\Users\PC\` if it exists). This breaks the "any new contributor can run the test suite" contract.
+
+**Risk lens:** L7 (maintainer-specific) + L8 (unprofessional for an OSS project).
+
+**Recommended fix:** replace with `Path(__file__).parent / f"e2e_{name}.png"` (resolves to `tests/e2e_*.png` relative to the test file, portable across machines). Single-line edit per occurrence.
+
+##### F-L8 (LOW): Stale E2E screenshot debris tracked at `tests/` root
+
+Six tracked PNGs at `tests/` top level, all dated 2026-03-29 (~6 weeks before the v1.0.0-rc1 cut):
+
+- `tests/e2e_phase1.png` (111 KB)
+- `tests/e2e_phase3.png` (72 KB) — note: `e2e_phase2.png` does NOT exist on disk despite being written by `test_e2e_realworld.py:439`, indicating the run that produced these terminated before phase 2 screenshot landed
+- `tests/e2e_phase4.png` (446 KB)
+- `tests/e2e_phase5_admin.png` (59 KB)
+- `tests/e2e_phase5_analyst.png` (57 KB)
+- `tests/screenshot_debug.png` (size n/a) — name self-identifies as debug artifact
+
+These are output artifacts of `tests/test_e2e_realworld.py` from one specific manual run on 2026-03-29. The committed-screenshots-as-reference-baseline pattern lives elsewhere (under `tests/e2e/visual_baselines/`, which is the real pixel-diff contract). The root-level PNGs are dev debris.
+
+**Risk lens:** L5 (stale by 6+ weeks) + L8 (unprofessional dev debris) + L6 (orphaned-ish — useful only for the specific 2026-03-29 run).
+
+**Recommended fix:** `git rm` all 6 PNGs and add patterns to `.gitignore` (`tests/e2e_phase*.png`, `tests/screenshot_debug.png`). Pairs with F-M5 — once those paths are made relative, future runs land in the same place but get ignored by git.
+
+##### F-L9 (LOW): `scripts/hooks/README.md:80` embeds maintainer's exact path as example
+
+```text
+80: `node c:/Users/PC/wl_manager/scripts/hooks/block-synthetic-fixtures.js`.
+```
+
+The README explains how to wire the hook into Claude Code settings and recommends an absolute path because Claude Code does not currently expand `${workspaceFolder}`. The example uses the maintainer's literal layout instead of a placeholder.
+
+**Risk lens:** L7 (maintainer-specific in public-facing README) — cosmetic.
+
+**Recommended fix:** replace with `node <your-checkout>/scripts/hooks/block-synthetic-fixtures.js` (matches the surrounding "per-developer" framing).
+
+##### F-L10 (LOW): Drift in Audit V1 claim about `wildleo91@gmail.com` location
+
+`docs/PRE_PUBLIC_AUDIT.md:275` from V1 says:
+
+> `wildleo91@gmail.com` appears only in `docs/PUBLIC_RELEASE_PLAN.md` …
+
+But `git ls-files | xargs grep -l "wildleo91@gmail"` shows the full email is in `docs/PRE_PUBLIC_AUDIT.md` ONLY — `docs/PUBLIC_RELEASE_PLAN.md` contains `wildleo91` (handle, no `@gmail`) but never the full email. Either (a) the V1 audit cited the wrong location, or (b) the email was removed from `PUBLIC_RELEASE_PLAN.md` after V1 closed and the audit doc was not updated.
+
+Net effect: the full email `wildleo91@gmail.com` is one grep hit, and that hit is the audit doc itself documenting (incorrectly) where the email appears. Not a real leak — but the inaccurate claim should be corrected so a future reader doesn't go hunting for the email in `PUBLIC_RELEASE_PLAN.md` and be confused when they don't find it.
+
+**Risk lens:** L8 (audit-doc accuracy / documentation drift).
+
+**Recommended fix:** edit `docs/PRE_PUBLIC_AUDIT.md:271-277` (the "Personal identity" subsection) to reflect the actual location of each email and where it does NOT appear. One paragraph rewrite.
+
+##### Bucket B summary
+
+- **F-M5 (MEDIUM)** — fix together with F-L8 in Phase G batch; both center on tests/ portability.
+- **F-L8, F-L9, F-L10** — cosmetic / hygiene, all batchable.
+- No CRITICAL / HIGH in Bucket B. Two ack notes worth keeping in mind for Phase G:
+  - `tests/a11y/reports/` correctly stays gitignored — verify `.gitignore:163-164` is preserved in any future cleanup that touches `tests/` ignore patterns.
+  - The `Chang3d!` allowlist in `.gitleaks.toml` correctly suppresses ~5 mentions across `demo/` and `docs/`; do NOT widen the allowlist without explicit decision.
 
 #### Phase E — Internal/process dot-dirs — pending
 
