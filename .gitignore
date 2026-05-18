@@ -144,6 +144,17 @@ tests/e2e/visual_artifacts/
 tests/e2e_phase*.png
 tests/screenshot_debug.png
 
+# Internal planning artifacts (GSD-style phase plans, research, ADR
+# drafts, etc.). Phase 3.1 audit V2 finding F-M6 (2026-05-18) — 152
+# tracked files contained 170 hardcoded `c:/Users/PC/wl_manager/...`
+# and `c:/Users/PC/.claude/...` references at the maintainer's local
+# layout, exposing Windows username + working-dir + home-dir tooling
+# layout to any visitor of the public repo. Per user decision (Phase G
+# batch authorization 2026-05-18), the whole directory becomes
+# local-only working artifacts. Contents preserved on disk; just
+# untracked.
+.planning/
+
 # Playwright MCP output (interactive ad-hoc browser drives). Stores
 # session-local screenshots, snapshots, and console logs from
 # mcp__playwright-iso__* tool calls. Local-only by design.
