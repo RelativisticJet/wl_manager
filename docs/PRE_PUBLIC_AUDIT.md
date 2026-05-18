@@ -71,7 +71,10 @@ sanitization ("I do not want anyone know or see that I did research
 on Point72 or anything else not related to the project"). Executed
 `git filter-repo --path .firecrawl --invert-paths` 2026-05-18:
 
-- All 498 commits rewritten.
+- All 498 commits in scope at rewrite time were rewritten
+  (`git log --oneline | wc -l` returns 499 today — that's the
+  498 rewritten plus one follow-up commit `396a9b4` added after
+  the force-push to document closure).
 - Original `15a2250` (which bundled .firecrawl additions with a
   legitimate `wl_pipelines.py` removal) reshaped to `a92af77` —
   same commit message, same legitimate changes, .firecrawl lines
