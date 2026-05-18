@@ -201,6 +201,70 @@ class TestIsSafeFilename:
                 ("permissive regex did not accept a benign name "
                  "— mock setup is wrong")
 
+    def test_is_safe_filename_rejects_multi_dot_stem(self):
+        """Reject filenames with multiple dots before the extension.
+
+        Mutmut survivor (wl_validation mutant 151) — without this
+        test, ``stem = name.rsplit(".", 1)[0]`` could be silently
+        changed to ``rsplit(".", 2)[0]`` and the truncated stem
+        (e.g. "foo" from "foo.bar.csv") would pass the strict
+        ``[A-Za-z0-9_\\-]+`` regex even though the full pre-extension
+        portion ("foo.bar") contains a forbidden dot.
+
+        Defense purpose: filenames with embedded dots can confuse
+        downstream consumers that themselves use rsplit/split (Splunk
+        SPL ``base()``, dashboard drilldown URL parsing, version
+        snapshot naming). The validator MUST reject them at the gate.
+        """
+        from wl_validation import is_safe_filename
+
+        # Mutmut-distinguishing case: stem after rsplit(".", 1) has
+        # a dot in it, so the regex catches it; but rsplit(".", 2)
+        # would split further and give an all-alphanumeric stem
+        # that would slip through.
+        assert not is_safe_filename("foo.bar.csv")
+        assert not is_safe_filename("a.b.c.csv")
+        # Sanity: single-dot stems still accepted.
+        assert is_safe_filename("foo.csv")
+
+
+@pytest.mark.unit
+class TestValidateAsciiTextErrorMessage:
+    """Pin the EXACT error-message string returned by validate_ascii_text.
+
+    Mutmut survivor (wl_validation mutant 116) — without this test,
+    the error string can be silently corrupted (e.g. to
+    ``"XXOnly ASCII characters are allowed in text fieldsXX"``) and
+    callers that surface the message verbatim to the UI would render
+    garbage text. The function's truthy/falsy return is otherwise
+    indistinguishable from a corrupted string.
+    """
+
+    def test_validate_ascii_text_returns_exact_error_string(self):
+        from wl_validation import validate_ascii_text
+
+        # Non-ASCII input MUST return this exact, user-visible string.
+        # Downstream UI displays it as-is; changes here should be a
+        # deliberate UX decision, not a silent regression.
+        assert validate_ascii_text("héllo") == (
+            "Only ASCII characters are allowed in text fields"
+        )
+        assert validate_ascii_text("検") == (
+            "Only ASCII characters are allowed in text fields"
+        )
+
+    def test_validate_ascii_text_returns_none_for_clean_input(self):
+        from wl_validation import validate_ascii_text
+
+        # Clean ASCII input MUST return None (sentinel for "no error").
+        # Anything else (empty string, False, etc.) would break the
+        # error-aggregation pattern at the call site.
+        assert validate_ascii_text("hello") is None
+        assert validate_ascii_text("DR130_priv_escalation") is None
+        # Empty / non-string also returns None (no input → no error).
+        assert validate_ascii_text("") is None
+        assert validate_ascii_text(None) is None
+
 
 @pytest.mark.unit
 class TestSafeRealpath:
