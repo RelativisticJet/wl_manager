@@ -272,9 +272,15 @@ v1.1-backlog candidate when the next polish pass happens.
   `docs/PUBLIC_RELEASE_PLAN.md`, `docs/RUNBOOKS.md` — intentional per
   locked decision D15 (Splunkbase publisher email is publicly visible
   on every Splunkbase listing; trade-off accepted).
-- `wildleo91@gmail.com` appears only in `docs/PUBLIC_RELEASE_PLAN.md`
-  D17 historical entry documenting the identity switch away from this
-  handle — no current attribution. Acceptable.
+- `wildleo91` (the handle, no `@gmail`) appears in
+  `docs/PUBLIC_RELEASE_PLAN.md` lines 44 + 215 — D17 historical-
+  attribution context ("commits remain attributed to wildleo91; no
+  history rewrite"). The full email `wildleo91@gmail.com` is NOT
+  present in `PUBLIC_RELEASE_PLAN.md` at all; the only occurrence in
+  any tracked file is the meta-reference inside this audit doc
+  documenting the (now-corrected) claim itself. Acceptable. Was
+  recorded earlier as F-L10 (audit-doc drift) and self-corrected in
+  the Phase G batch (2026-05-18).
 - All committer emails on commits since D17 (2026-05-17) map to
   `20013626+RelativisticJet@users.noreply.github.com` — GitHub's
   noreply alias, which is correct for a public repo.
@@ -816,18 +822,22 @@ Every other contributor running these tests will fail (`FileNotFoundError` on a 
 
 Six tracked PNGs at `tests/` top level, all dated 2026-03-29 (~6 weeks before the v1.0.0-rc1 cut):
 
-- `tests/e2e_phase1.png` (111 KB)
-- `tests/e2e_phase3.png` (72 KB) — note: `e2e_phase2.png` does NOT exist on disk despite being written by `test_e2e_realworld.py:439`, indicating the run that produced these terminated before phase 2 screenshot landed
-- `tests/e2e_phase4.png` (446 KB)
-- `tests/e2e_phase5_admin.png` (59 KB)
-- `tests/e2e_phase5_analyst.png` (57 KB)
-- `tests/screenshot_debug.png` (size n/a) — name self-identifies as debug artifact
+```text
+tests/e2e_phase1.png             (111 KB)
+tests/e2e_phase3.png             (72 KB)   — e2e_phase2.png missing
+tests/e2e_phase4.png             (446 KB)
+tests/e2e_phase5_admin.png       (59 KB)
+tests/e2e_phase5_analyst.png     (57 KB)
+tests/screenshot_debug.png       (size n/a — name self-identifies as debug)
+```
+
+Note: `e2e_phase2.png` was absent from disk despite being written by the test at the corresponding line in `tests/test_e2e_realworld.py`, indicating the 2026-03-29 run that produced these terminated before phase-2 screenshot landed. All six files removed from tracking in the Phase G batch fix (2026-05-18).
 
 These are output artifacts of `tests/test_e2e_realworld.py` from one specific manual run on 2026-03-29. The committed-screenshots-as-reference-baseline pattern lives elsewhere (under `tests/e2e/visual_baselines/`, which is the real pixel-diff contract). The root-level PNGs are dev debris.
 
 **Risk lens:** L5 (stale by 6+ weeks) + L8 (unprofessional dev debris) + L6 (orphaned-ish — useful only for the specific 2026-03-29 run).
 
-**Recommended fix:** `git rm` all 6 PNGs and add patterns to `.gitignore` (`tests/e2e_phase*.png`, `tests/screenshot_debug.png`). Pairs with F-M5 — once those paths are made relative, future runs land in the same place but get ignored by git.
+**Recommended fix:** `git rm` all 6 PNGs and add patterns to `.gitignore` (`tests/e2e_phase*.png` plus a `screenshot_debug.png` pattern). Pairs with F-M5 — once those paths are made relative, future runs land in the same place but get ignored by git.
 
 ##### F-L9 (LOW): `scripts/hooks/README.md:80` embeds maintainer's exact path as example
 
@@ -982,7 +992,7 @@ Reviewed via direct read (small screenshots) and via PIL crop-then-read on `03-a
 | F-L5 | LOW | `appserver/static/tests/` 5 QUnit JS files ship in `.spl` | `appserver/static/tests/test_wl_cp_*.js` (×5) | C | No |
 | F-L6 | LOW | Demo CSVs have realistic-name narratives + one real domain `partnercorp.com` | `lookups/DR310_impossible_travel.csv`, `DR71_data_exfil_users.csv`, `DR630_email_exfiltration.csv`, etc. | C | No — GitHub-public hygiene |
 | F-L7 | LOW | Demo CSVs contain obvious E2E test debris | `lookups/DR102_whitelist.csv:2`, `DR88_whitelist.csv:2-3`, `DR20_whitelist.csv:3-4` | C | No — same |
-| F-L8 | LOW | 6 stale E2E screenshot debris PNGs tracked at `tests/` root (~745 KB) | `tests/e2e_phase*.png` (×5) + `tests/screenshot_debug.png` | D | No |
+| F-L8 | LOW | 6 stale E2E screenshot debris PNGs tracked at `tests/` root (~745 KB) | `tests/e2e_phase*.png` (×5) plus a `screenshot_debug.png` artifact | D | No |
 | F-L9 | LOW | `scripts/hooks/README.md:80` embeds maintainer's exact path as example | `scripts/hooks/README.md:80` | D | No |
 | F-L10 | LOW | Audit V1 stale claim — `wildleo91@gmail.com` location | `docs/PRE_PUBLIC_AUDIT.md:271-277` | D | No — self-correct |
 | F-L11 | LOW | Doc screenshots coupled to demo CSV content (F-L6/F-L7) | `docs/screenshots/02-inline-editing.png`, `03-audit-trail.png` | F | No — re-capture after curation |
@@ -1028,7 +1038,7 @@ I recommend **option 2 (fix-everything-visible)** — none of the V2 fixes are r
 | F-L5 | Add `appserver/static/tests/` to EXCLUDES in `scripts/package.sh`. | Low |
 | F-L6 | Replace `Carlos Rodriguez`/`David Kim`/`Jose Martinez`-style names with `alice`/`bob`/`carol`; replace `partnercorp.com` with `example.com`. Re-capture screenshots after (F-L11). | Low |
 | F-L7 | Curate each `lookups/DR*.csv` to ~5 realistic synthetic rows; remove `E2E-EDITED-HOST`/`EDITED_AFTER_LAZY_INIT`/`SECOND_EDIT`/`TEST_*` rows. | Low |
-| F-L8 | `git rm tests/e2e_phase*.png tests/screenshot_debug.png` + add `tests/e2e_phase*.png` and `tests/screenshot_debug.png` to `.gitignore`. | Low |
+| F-L8 | `git rm tests/e2e_phase*.png` plus the `screenshot_debug.png` artifact, then add `tests/e2e_phase*.png` plus a `screenshot_debug.png` pattern to `.gitignore`. | Low |
 | F-L9 | Edit `scripts/hooks/README.md:80` to `<your-checkout>/scripts/hooks/...`. | Low |
 | F-L10 | Edit `docs/PRE_PUBLIC_AUDIT.md` "Personal identity" subsection (lines 269-277) to remove inaccurate claim about `wildleo91@gmail.com` location. | Low |
 | F-L11 | After F-L6/F-L7 land, re-run screenshot-capture playbook for `02-inline-editing.png` + `03-audit-trail.png`. | Low |

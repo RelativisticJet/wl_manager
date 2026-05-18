@@ -1,6 +1,6 @@
 user,Comment
 svc_backup,Backup agent service account - transfers large volumes nightly
 svc_replication,Database replication service - cross-site sync
-j.martinez,Jose Martinez - video editor uploads raw footage to cloud storage daily
-a.chen,Alice Chen - data engineer running scheduled ETL exports
+j.martinez,Video editor uploads raw footage to cloud storage daily
+a.chen,Data engineer running scheduled ETL exports
 svc_sftp,Automated SFTP transfer service account
