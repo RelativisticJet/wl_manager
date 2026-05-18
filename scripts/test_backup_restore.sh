@@ -62,10 +62,22 @@ mkdir -p "$TMPDIR_LIVE"
 TMPDIR_RESTORE=""
 trap 'rm -rf "$TMPDIR_LIVE" "$TMPDIR_RESTORE"' EXIT
 
+# Inventory every customer-meaningful CSV under lookups/, regardless of
+# naming convention. Excludes match the backup_data.sh exclude list so
+# the comparison only spans files the archive is expected to contain.
 LIVE_INVENTORY="$TMPDIR_LIVE/live_inventory.txt"
 MSYS_NO_PATHCONV=1 docker exec -u 0 "$CONTAINER" sh -c \
     "cd $APP_PATH/lookups && \
-     find . -type f \\( -name 'DR*.csv' -o -name 'rule_csv_map.csv' \\) | sort" \
+     find . -type f \
+       ! -name '_*.json' ! -name '_*.jsonl' \
+       ! -name '*.lock' ! -name '*.bak' \
+       ! -name '.approval_queue.sig' \
+       ! -name '.csv_expected_hashes.json' \
+       ! -name '.fim_*.json' \
+       ! -name '.presence.json' \
+       ! -path './_versions/_*.json' ! -path './_versions/_*.jsonl' \
+       ! -path './_versions/.*' \
+       | sort" \
     > "$LIVE_INVENTORY"
 
 LIVE_FILE_COUNT=$(wc -l < "$LIVE_INVENTORY" | tr -d ' ')
@@ -124,7 +136,16 @@ mkdir -p "$TMPDIR_RESTORE"
 tar -xzf "$ARCHIVE" -C "$TMPDIR_RESTORE"
 
 RESTORED_INVENTORY="$TMPDIR_LIVE/restored_inventory.txt"
-(cd "$TMPDIR_RESTORE" && find . -type f \( -name 'DR*.csv' -o -name 'rule_csv_map.csv' \) | sort) \
+(cd "$TMPDIR_RESTORE" && find . -type f \
+   ! -name '_*.json' ! -name '_*.jsonl' \
+   ! -name '*.lock' ! -name '*.bak' \
+   ! -name '.approval_queue.sig' \
+   ! -name '.csv_expected_hashes.json' \
+   ! -name '.fim_*.json' \
+   ! -name '.presence.json' \
+   ! -path './_versions/_*.json' ! -path './_versions/_*.jsonl' \
+   ! -path './_versions/.*' \
+   | sort) \
     > "$RESTORED_INVENTORY"
 
 if ! diff -q "$LIVE_INVENTORY" "$RESTORED_INVENTORY" >/dev/null 2>&1; then

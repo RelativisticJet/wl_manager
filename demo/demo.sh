@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # ═══════════════════════════════════════════════════════════════════════
-# Whitelist Manager v2.0 — Quick Demo
+# Whitelist Manager — Quick Demo
 # ═══════════════════════════════════════════════════════════════════════
 #
 # Spins up a standalone Splunk instance in Docker, installs the
@@ -110,7 +110,7 @@ fi
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
-echo "  Whitelist Manager v2.0 — Quick Demo"
+echo "  Whitelist Manager — Quick Demo"
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
 

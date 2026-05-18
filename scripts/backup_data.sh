@@ -12,17 +12,24 @@
 # any host other than the original.
 #
 # What gets backed up:
-#   - lookups/DR*.csv                    (active whitelist CSVs)
-#   - lookups/rule_csv_map.csv           (rule↔CSV mapping)
-#   - lookups/_versions/*.csv            (version snapshots)
-#   - lookups/_versions/*_versions.json  (version manifests)
+#   - lookups/*.csv                       (every customer whitelist CSV,
+#                                          regardless of naming convention)
+#   - lookups/rule_csv_map.csv            (rule↔CSV mapping)
+#   - lookups/_versions/*.csv             (version snapshots)
+#   - lookups/_versions/*_versions.json   (version manifests)
 #
 # What does NOT get backed up (rebuild on restore):
-#   - HMAC-signed state (`_action_cooldowns.json`, `wl_cooldowns` KV)
+#   - Top-level runtime JSON state (_approval_queue.json, _daily_limits.json,
+#     _notifications.json, _emergency_lockdown.json, _trash_config.json,
+#     _action_cooldowns.json, _fim_deploy_window.json, _detection_rules.json,
+#     _limit_config.json) — HMAC-signed and/or transient
+#   - Atomic-RMW lock artifacts (*.lock)
+#   - HMAC signatures and host-bound state (.approval_queue.sig,
+#     .csv_expected_hashes.json, .fim_*.json, .presence.json)
+#   - HMAC-signed cooldown state (`wl_cooldowns` KV)
 #   - FIM baselines (`.fim_baseline.json`, `wl_fim_baseline` KV)
-#   - Hash registry (`.csv_expected_hashes.json`) — re-bootstrap
-#   - Lockdown / presence / deploy-window files
-#   - Recovery log (it's append-only; archive separately if needed)
+#   - Recovery log (`_recovery_log.jsonl` — append-only; archive separately
+#     if you need its history)
 #
 # What this script does NOT capture (out of scope):
 #   - The `wl_audit` Splunk index — back up via Splunk's standard
@@ -67,9 +74,12 @@ fi
 mkdir -p "$OUTPUT_DIR"
 
 # ── Step 1: Inventory ─────────────────────────────────────────────────
+# Count every customer-meaningful CSV (any name, not just DR*). Exclude
+# rule_csv_map.csv from this count so the "Mapping file:" line below
+# is unambiguous, and exclude any *.lock files (RMW lock artifacts).
 echo "Step 1/4: Inventorying lookups..."
 CSV_COUNT=$(MSYS_NO_PATHCONV=1 docker exec -u 0 "$CONTAINER" \
-    sh -c "ls $APP_PATH/lookups/DR*.csv 2>/dev/null | wc -l" | tr -d '\r')
+    sh -c "find $APP_PATH/lookups -maxdepth 1 -type f -name '*.csv' ! -name 'rule_csv_map.csv' 2>/dev/null | wc -l" | tr -d '\r')
 VERSION_COUNT=$(MSYS_NO_PATHCONV=1 docker exec -u 0 "$CONTAINER" \
     sh -c "ls $APP_PATH/lookups/_versions/*.csv 2>/dev/null | wc -l" | tr -d '\r')
 echo "  CSVs:               $CSV_COUNT"
@@ -77,6 +87,17 @@ echo "  Version snapshots:  $VERSION_COUNT"
 echo "  Mapping file:       rule_csv_map.csv"
 
 # ── Step 2: Tar inside the container ─────────────────────────────────
+# Excludes cover both runtime state and the HMAC-signed snapshots that
+# would fail signature verification when restored on a different host:
+#   - _versions/_*.json|jsonl   — runtime state inside _versions/
+#   - _*.json|jsonl             — top-level runtime state (approval queue,
+#                                 daily limits, notifications, etc.)
+#   - *.lock                    — atomic-RMW lock artifacts (transient)
+#   - .approval_queue.sig       — HMAC signature, host-bound
+#   - .csv_expected_hashes.json — HMAC-signed registry, host-bound
+#   - .fim_*.json               — FIM baseline / alert state, host-bound
+#   - .presence.json            — runtime presence cache
+#   - *.bak                     — editor backups
 echo ""
 echo "Step 2/4: Creating archive inside container..."
 TMP_INSIDE="/tmp/${BACKUP_NAME}.tar.gz"
@@ -86,6 +107,13 @@ MSYS_NO_PATHCONV=1 docker exec -u 0 "$CONTAINER" \
     --exclude='_versions/.*' \
     --exclude='_versions/_*.json' \
     --exclude='_versions/_*.jsonl' \
+    --exclude='_*.json' \
+    --exclude='_*.jsonl' \
+    --exclude='*.lock' \
+    --exclude='.approval_queue.sig' \
+    --exclude='.csv_expected_hashes.json' \
+    --exclude='.fim_*.json' \
+    --exclude='.presence.json' \
     --exclude='*.bak' \
     .
 

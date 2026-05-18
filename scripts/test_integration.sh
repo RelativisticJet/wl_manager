@@ -159,6 +159,12 @@ echo "── REST Endpoint — POST (save + audit) ──"
 echo "  (Setting up test CSV in container...)"
 MSYS_NO_PATHCONV=1 docker exec -u splunk wl_manager_test bash -c 'printf "host,user,CommandLine,Comment\nWKSTN-001,bob,whoami,Legacy entry\nWKSTN-042,alice,net use,Approved\n" > /opt/splunk/etc/apps/wl_manager/lookups/TEST_whitelist.csv' 2>/dev/null || true
 
+# Fetch the current content_hash — save_csv enforces optimistic locking
+# (a security control added in hardening round 6). Without expected_content_hash
+# the save returns HTTP 409 Conflict.
+EXPECTED_HASH=$(splunk_custom GET -d "action=get_csv_content&csv_file=TEST_whitelist.csv" 2>/dev/null \
+    | python3 -c "import sys,json; print(json.load(sys.stdin).get('content_hash',''))" 2>/dev/null)
+
 run_test "POST save_csv writes CSV and returns diff"
 SAVE_BODY=$(splunk_custom POST \
     -H "Content-Type: application/json" \
@@ -167,6 +173,7 @@ SAVE_BODY=$(splunk_custom POST \
         "csv_file": "TEST_whitelist.csv",
         "app_context": "",
         "detection_rule": "TEST_rule",
+        "expected_content_hash": "'"$EXPECTED_HASH"'",
         "headers": ["host","user","CommandLine","Comment"],
         "rows": [
             {"host":"WKSTN-042","user":"alice","CommandLine":"net use","Comment":"Approved"},

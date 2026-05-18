@@ -287,7 +287,7 @@ def build():
     # -- Approval Workflow --
     pdf.section("4", "Approval Workflow Demo")
     pdf.body(
-        "One of the key v2.0 features is the approval workflow. "
+        "Whitelist Manager enforces an approval workflow for high-impact changes. "
         "Bulk operations above configurable thresholds require admin approval."
     )
 
