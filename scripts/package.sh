@@ -139,6 +139,7 @@ tar -czf "$SPL_FILE" \
     --exclude="$APP_NAME/requirements*.txt" \
     --exclude="$APP_NAME/pytest.ini" \
     --exclude="$APP_NAME/sbom.cdx.json" \
+    --exclude="$APP_NAME/mkdocs.yml" \
     --exclude="$APP_NAME/__pycache__" \
     --exclude="$APP_NAME/**/__pycache__" \
     --exclude="$APP_NAME/**/*.pyc" \
@@ -155,6 +156,9 @@ tar -czf "$SPL_FILE" \
     --exclude="$APP_NAME/test_*.py" \
     --exclude="$APP_NAME/*-after-*" \
     --exclude="$APP_NAME/login-check" \
+    --exclude="$APP_NAME/default/data/ui/views/test_runner.xml" \
+    --exclude="$APP_NAME/appserver/static/test_runner.xml" \
+    --exclude="$APP_NAME/appserver/static/tests" \
     "$APP_NAME/"
 
 # Restore the original mapping file
