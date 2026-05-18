@@ -25,7 +25,7 @@
     },
     "commonInformationModels": null,
     "license": {
-      "name": "MIT",
+      "name": "Apache-2.0",
       "text": null,
       "uri": "https://github.com/RelativisticJet/wl_manager/blob/main/LICENSE"
     }

@@ -134,4 +134,5 @@ threat model and defense layout.
 
 ## License
 
-MIT — see [LICENSE](https://github.com/RelativisticJet/wl_manager/blob/main/LICENSE).
+Apache License 2.0 — see [LICENSE](https://github.com/RelativisticJet/wl_manager/blob/main/LICENSE)
+and [NOTICE](https://github.com/RelativisticJet/wl_manager/blob/main/NOTICE).

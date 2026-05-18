@@ -19,11 +19,11 @@
       "name": "wl_manager",
       "version": "2.0.0",
       "description": "Manage detection-rule CSV whitelists with inline editing, approval workflows, version control, and diff-based audit trail",
-      "publisher": "Security Engineering",
+      "publisher": "Oleh Bezsonov",
       "licenses": [
         {
           "license": {
-            "id": "MIT"
+            "id": "Apache-2.0"
           }
         }
       ],

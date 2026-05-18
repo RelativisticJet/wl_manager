@@ -163,3 +163,9 @@ tests/a11y/reports/
 # MemPalace per-project files (issue #185)
 mempalace.yaml
 entities.json
+
+# Firecrawl scratch — page scrapes from research/competitor-analysis
+# sessions land here; not project content. Phase 3.1 pre-public audit
+# removed 3 unrelated career-page scrapes that had been accidentally
+# tracked (2026-05-18).
+.firecrawl/
