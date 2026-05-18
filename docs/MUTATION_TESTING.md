@@ -209,25 +209,28 @@ queued as v1.1 maintenance work.
    doc. Escape hatch: explicit `TEST_RUNNER_FILES` env var still
    overrides auto-derivation.
 
+2. ~~**Switch the volume mount to read-only.**~~ — DONE. The host
+   repo is now mounted at `/repo` as `:ro`; a 512 MiB tmpfs is
+   mounted at `/scratch` and populated from `/repo` at container
+   creation. mutmut runs with `WORKDIR=/scratch` and mutates the
+   tmpfs copy only — the host tree is unreachable from inside the
+   container. Verified: a deliberate write attempt to
+   `/repo/bin/wl_validation.py` fails with "Read-only file system";
+   host file sha256 unchanged after a fresh container creation.
+   Source-refresh signal: `scripts/mutmut.sh kill` then re-run (the
+   tmpfs is repopulated from `/repo` only on container creation).
+
 ### Open (queued for v1.1 release prep)
 
-1. **Switch the volume mount to read-only.** Replace
-   `-v "$REPO_ROOT:/work"` with `-v "$REPO_ROOT:/work:ro"` and have
-   mutmut use a tmpfs (or container-local) scratch dir for its
-   mutations. This removes the host-tree-corruption hazard entirely.
-   Mutmut's internal cache lives in `mutants/.mutmut-cache` and can
-   stay on a separate writable volume. Estimated effort: 1 hour
-   (test the cache-survives-restart property).
-
-2. **Re-run wl_validation with the correct selector** to get a
+1. **Re-run wl_validation with the correct selector** to get a
    fresh survivor count after the 2 new tests above. Expected
    result: ≤8 survivors (the equivalent mutants), down from 12.
 
-3. **Run wl_csv.py with the correct selector**. Expected: real
+2. **Run wl_csv.py with the correct selector**. Expected: real
    survivor count, plausibly 5-20 genuine gaps in CSV diff /
    hash-registry logic.
 
-4. **Add `bin/wl_audit.py` mutation pass.** The 37 reported survivors
+3. **Add `bin/wl_audit.py` mutation pass.** The 37 reported survivors
    on `wl_audit.py` from a prior session need the same re-validation
    under the correct selector before deciding what to do with them.
 

@@ -52,6 +52,35 @@
 # is named `wl_manager_mutmut` and stays up between commands;
 # `scripts/mutmut.sh kill` tears it down when you're done.
 #
+# Host-tree safety: :ro mount + tmpfs scratch
+# -------------------------------------------
+#
+# Prior versions of this script mounted `$REPO_ROOT` at `/work` as
+# read-write. Every mutation mutmut applied was a real write to
+# the host filesystem. If mutmut was killed between mutate-and-
+# restore (SIGKILL, container stop, host reboot), the source file
+# stayed in mutated state and `git diff` showed it as a normal
+# edit. The 2026-05-18 session caught a live `_csv_file_hash → None`
+# mutation about to be staged — host-mount + interrupted mutmut
+# is a real foot-gun.
+#
+# Current layout: host repo is mounted READ-ONLY at /repo. A
+# tmpfs (in-RAM, ephemeral) is mounted at /scratch. At container
+# creation, /repo is copied into /scratch. mutmut runs WITH
+# /scratch as CWD and mutates /scratch/bin/*.py — the host /repo
+# is never written to.
+#
+# Implications:
+#   - To pick up source changes from the host, `scripts/mutmut.sh kill`
+#     and then re-run. The fresh container will copy current /repo
+#     into a fresh tmpfs. Editing host source between runs without
+#     `kill` is intentionally invisible to the mutator.
+#   - The mutmut cache (mutants/.mutmut-cache + .pytest_cache) lives
+#     in /scratch and persists across `start/stop` of the same
+#     container, but disappears on `kill` (container removal).
+#   - tmpfs default cap is 512 MiB (--tmpfs-size). Plenty for the
+#     ~10 MB working repo plus mutmut's tracking dirs.
+#
 # What gets mutated
 # -----------------
 #
@@ -199,18 +228,59 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Posix path conversion for Windows Git Bash
 export MSYS_NO_PATHCONV=1
 
+populate_scratch() {
+    # Copy /repo into /scratch. /scratch is the tmpfs mutation surface;
+    # /repo is the read-only host mount. mutmut mutates /scratch only,
+    # so the host tree is never written to.
+    #
+    # We use `cp -a /repo/. /scratch/` (trailing dot+slash) to copy
+    # the CONTENTS of /repo into /scratch, not the /repo directory
+    # itself. The -a preserves mode/ownership/timestamps — important
+    # because mutmut keys its cache on source file timestamps.
+    #
+    # Running as -u 0 (root) inside the container because /scratch is
+    # owned by root after tmpfs mount; the default container user
+    # cannot write to a fresh root-owned mount.
+    echo "→ populating /scratch from /repo (tmpfs is fresh)..."
+    if ! docker exec -u 0 "$CONTAINER" sh -c 'cp -a /repo/. /scratch/'; then
+        echo "✖ scratch population failed — removing container." >&2
+        docker rm -f "$CONTAINER" >/dev/null
+        exit 1
+    fi
+}
+
+scratch_is_empty() {
+    # Quick check whether /scratch needs (re-)populating. We check for
+    # the presence of bin/ — a fresh tmpfs has no bin/ until populate
+    # runs. This lets us repopulate after `docker start` of a stopped
+    # container (tmpfs is wiped on container stop/start cycles).
+    ! docker exec "$CONTAINER" sh -c 'test -d /scratch/bin'
+}
+
 ensure_container() {
     if docker inspect "$CONTAINER" >/dev/null 2>&1; then
         # Container exists. Make sure it's running.
         if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER")" != "true" ]; then
             docker start "$CONTAINER" >/dev/null
         fi
+        # tmpfs is wiped on container stop/start, so we may need to
+        # repopulate even on an existing container.
+        if scratch_is_empty; then
+            populate_scratch
+        fi
         return
     fi
     echo "→ creating mutmut container ($IMAGE)..."
+    # Mount layout:
+    #   /repo    — host repo, READ-ONLY. mutmut never writes here.
+    #   /scratch — tmpfs (in-RAM), 512 MiB cap. Copied from /repo
+    #              at startup; mutmut mutates files here.
+    #   -w /scratch — CWD so relative paths (bin/wl_X.py, tests/...)
+    #              resolve into the writable copy.
     docker run -d --name "$CONTAINER" \
-        -v "$REPO_ROOT:/work" \
-        -w /work \
+        -v "$REPO_ROOT:/repo:ro" \
+        --tmpfs /scratch:size=536870912 \
+        -w /scratch \
         --entrypoint sleep \
         "$IMAGE" infinity >/dev/null
 
@@ -218,6 +288,8 @@ ensure_container() {
     # We DON'T use --quiet here so failures are visible. mutmut
     # 2.4.4 is the last 2.x release before 3.x rewrote the API
     # incompatibly; we pin it to keep the harness stable.
+    # pip installs into the container's writable layer (NOT /scratch),
+    # so deps survive tmpfs wipes across container start/stop.
     if ! docker exec "$CONTAINER" pip install \
             mutmut==2.4.4 \
             pytest==9.0.3 \
@@ -228,6 +300,8 @@ ensure_container() {
         docker rm -f "$CONTAINER" >/dev/null
         exit 1
     fi
+
+    populate_scratch
 }
 
 cmd_run() {
