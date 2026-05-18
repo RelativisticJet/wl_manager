@@ -1043,16 +1043,25 @@ I recommend **option 2 (fix-everything-visible)** — none of the V2 fixes are r
 | F-L10 | Edit `docs/PRE_PUBLIC_AUDIT.md` "Personal identity" subsection (lines 269-277) to remove inaccurate claim about `wildleo91@gmail.com` location. | Low |
 | F-L11 | After F-L6/F-L7 land, re-run screenshot-capture playbook for `02-inline-editing.png` + `03-audit-trail.png`. | Low |
 
-##### Ready for user decision
+##### Phase G — execution closeout (2026-05-18)
 
-The audit-first deliverable is complete. Phase G needs user authorization on:
+User picked **option 2 (fix-everything)** with `.planning/` untrack, `git tag -d` authorized, and F-C3 confirmed red on `main`. Batch landed across this turn's commits:
 
-1. **Which batch strategy** — option 1 (strict-MEDIUM), option 2 (fix-everything, recommended), or option 3 (minimum-viable)?
-2. **For F-M6**, which sub-option — (a) untrack `.planning/`, (b) bulk sed-replace (my recommendation), or (c) leave as-is?
-3. **For F-H2**, authorization to `git tag -d` + `git push :refs/tags/...` on the remote (destructive on a personal/private remote — low risk but explicit yes required)?
-4. **F-C3 status** — please confirm: was `integration-tests.yml` part of the last green CI run, or is the chaos test currently broken on `main`?
+| Commit | Findings closed | Notes |
+|---|---|---|
+| `ffe4ff9` | F-C3, F-H2 | chaos test `_seed_chaos_csv` fixture; tags `v1.0.0`/`v2.0.0` deleted local AND remote (lightweight tags from wildleo91 era) |
+| `3b3eeb8` | F-M1, F-L4, F-L5 | `scripts/package.sh` EXCLUDES gained `mkdocs.yml`, both `test_runner.xml` paths, `appserver/static/tests` |
+| `1589ade` | F-M2, F-M3 | `app.manifest` author → `Oleh Bezsonov` with email; `sbom.cdx.json` synced to 1.0.0-rc1 / build 660 / 2026-05-18 |
+| (F-M5/L8/L9 commit) | F-M5, F-L8, F-L9 | `Path(__file__).parent`-based screenshots in two manual E2E scripts; 6 stale `tests/` PNGs removed AND ignored; `scripts/hooks/README.md` placeholder |
+| (F-M6 commit) | F-M6 | `.planning/` untracked (152 files) — content preserved on disk |
+| `71b66a5` | F-L6, F-L7, F-L10 | 7 demo CSVs curated (DR20/DR102 rewritten, DR88 partial, DR310/71/520/630 narrative AND domain scrub); audit-doc Personal-identity paragraph rewritten to match actual grep state |
 
-Once these four are answered, the batch-fix execution is mechanical and estimated 1-3 commits depending on strategy.
+**Deferred (explicit, not failure):**
+
+- **F-M4** (`app.manifest` releaseDate) — release-time task; updates at Phase 3.2 rc1 cut alongside `build` + `version` bumps.
+- **F-L11** (re-capture screenshots `02-inline-editing.png` + `03-audit-trail.png`) — requires a live Splunk container running the curated demo CSVs. Will run after Phase 3.4 flip / before Phase 3.2 rc1 cut.
+
+**Final V2 status:** 13 of 15 findings closed in this session. 2 deferred with explicit reasons. Zero open at the time of writing.
 
 ---
 
@@ -1067,3 +1076,4 @@ Once these four are answered, the batch-fix execution is mechanical and estimate
 | 2026-05-18 | claude-opus-4-7 + user | Audit V2 Phase D closed — ~252 files inspected across `tests/`, `scripts/`, `demo/`, `docs/`, `bench_results/`. One MEDIUM (F-M5: 7 hardcoded `C:/Users/PC/...` paths in `test_e2e_realworld.py` + `test_e2e_manual_browser.py`) and three LOW (F-L8: 6 stale tests/ root PNGs; F-L9: scripts/hooks/README.md maintainer-path example; F-L10: audit-doc drift on `wildleo91@gmail.com` location claim). All four queued for Phase G. |
 | 2026-05-18 | claude-opus-4-7 + user | Audit V2 Phase E closed — 154 files inspected in `.planning/` + `.claude/qa-failure-modes.md` + `.zap/rules.tsv`. One MEDIUM (F-M6: 170 `c:/Users/PC/wl_manager/...` and `c:/Users/PC/.claude/...` path occurrences across 30 tracked planning docs). No CRITICAL/HIGH/LOW. Decision needed in Phase G: untrack `.planning/` entirely vs bulk-replace paths in place vs leave as-is. |
 | 2026-05-18 | claude-opus-4-7 + user | Audit V2 Phase F closed — visual review of all 4 `docs/screenshots/*.png`. Read each at full resolution (PIL crop-then-read for the largest, `03-audit-trail.png` 1648×3341). No real PII in any screenshot — all visible names are synthetic role accounts (`superadmin1`/`wladmin1`/`analyst1`) or demo CSV data; all fictional GRC narratives are well-crafted. One LOW recorded: F-L11 (screenshots `02-inline-editing.png` + `03-audit-trail.png` are coupled to demo CSV content — re-capture if F-L6/F-L7 curation runs). |
+| 2026-05-18 | claude-opus-4-7 + user | Audit V2 Phase G batch-fix executed. User picked option 2 (fix-everything). 13 of 15 findings closed in 7 commits (`ffe4ff9` chaos test + tags; `3b3eeb8` package.sh excludes; `1589ade` manifest + SBOM; F-M5/L8/L9 portable paths + PNG removal; F-M6 `.planning/` untrack; `71b66a5` demo CSV curation + audit-doc self-correct). 2 deferred with explicit reasons: F-M4 (releaseDate — Phase 3.2 cut task), F-L11 (screenshot re-capture — needs live Splunk container). Zero open V2 findings at close. |
