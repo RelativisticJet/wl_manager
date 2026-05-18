@@ -178,7 +178,7 @@ README reads as a finished product.
 | 2.5 | CODE_OF_CONDUCT.md (Contributor Covenant 2.1) | Standard text | 15 min |
 | 2.6 | GitHub issue templates (bug, feature, security, question) | `.github/ISSUE_TEMPLATE/` populated | 45 min |
 | 2.7 | PR template at `.github/PULL_REQUEST_TEMPLATE.md` | Covers test plan, screenshots, verification | 15 min |
-| 2.8 | MkDocs Material scaffold: `mkdocs.yml` + `docs/<index>.md` + nav + theme + `.github/workflows/docs.yml` deploying to GitHub Pages | `https://relativisticjet.github.io/wl_manager/` live | 2-3 hr |
+| 2.8 | MkDocs Material scaffold: `mkdocs.yml` + `docs/<index>.md` + nav + theme + `.github/workflows/docs.yml` deploying to GitHub Pages | Scaffold + workflow exist; `build` job green on every PR; deploy job present and gated on `github.event.repository.private == false`. **Live URL `https://relativisticjet.github.io/wl_manager/` does not deploy until Phase 3.4 flips the repo public** — Pages on a private free repo would 404 on the deploy API. | 2-3 hr (scaffold only; deploy verification belongs to Phase 3.4) |
 | 2.9 | Migrate existing docs (SBOM, INSTALLATION, RUNBOOKS, DECISION_LOG, SPLUNK_QUIRKS, etc.) into MkDocs nav | All accessible from site nav | 1-2 hr |
 | 2.10 | README rewrite for public audience: hero, value prop, install, RBAC, badges, link to hosted docs | Reads like a finished product | 3-4 hr |
 | 2.11 | GitHub repo settings: topics, description, homepage URL, social preview image | Discoverability optimized; topics include `splunk`, `splunkbase`, `siem`, `soc-tools`, `splunk-enterprise-security`, `detection-engineering` | 30 min |
