@@ -21,7 +21,7 @@
 const H = require("./lib_helpers.cjs");
 
 async function cleanupStaleRequests(page) {
-    // Cancel ALL pending entries (not just DR45) to ensure a clean slate
+    // Cancel ALL pending entries to ensure a clean slate
     // before concurrency tests. Leftover pending entries from prior tests
     // would interfere with conflict-check assertions.
     const q = await H.restCall(page, "GET", { action: "get_approval_queue" });
@@ -42,8 +42,8 @@ function buildSubmitPayload(tag) {
     return {
         action: "submit_approval",
         approval_action_type: "bulk_row_removal",
-        detection_rule: "DR45_suspicious_login",
-        csv_file: "DR45_suspicious_login.csv",
+        detection_rule: "DR55_brute_force_login",
+        csv_file: "DR55_brute_force_users.csv",
         reason: `concurrency_${tag}`,
         payload: {
             removed_keys: ["c_test_row_1"],
@@ -226,7 +226,7 @@ function buildSubmitPayload(tag) {
         // Get current mtime
         const s = await H.restCall(admin.page, "GET", {
             action: "check_csv_status",
-            csv_file: "DR45_suspicious_login.csv",
+            csv_file: "DR55_brute_force_users.csv",
         });
         const mtime = s.file_mtime || s.mtime;
         if (!mtime) {
@@ -237,7 +237,7 @@ function buildSubmitPayload(tag) {
         // Get current CSV so we can produce a valid save payload
         const csv = await H.restCall(admin.page, "GET", {
             action: "get_csv_content",
-            rule_name: "DR45_suspicious_login",
+            rule_name: "DR55_brute_force_login",
         });
         const headers = csv.headers || [];
         const rows = csv.rows || [];
@@ -250,8 +250,8 @@ function buildSubmitPayload(tag) {
         // second should get a stale-mtime error.
         const payload = {
             action: "save_csv",
-            csv_file: "DR45_suspicious_login.csv",
-            detection_rule: "DR45_suspicious_login",
+            csv_file: "DR55_brute_force_users.csv",
+            detection_rule: "DR55_brute_force_login",
             headers: headers,
             rows: rows,                   // no actual change
             expected_mtime: mtime,

@@ -1,5 +1,0 @@
-src_ip,dest_ip,dest_port,protocol,Comment,termination
-10.10.5.25,198.51.100.10,443,TCP,Cloud monitoring agent egress,
-10.50.2.200,192.0.2.100,22,TCP,SFTP file transfer to payment processor,
-10.10.3.50,203.0.113.75,9200,TCP,Elasticsearch cluster cross-DC replication,
-172.16.0.100,198.51.100.50,5671,TCP,RabbitMQ federation link to partner,2026-04-25

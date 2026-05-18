@@ -95,12 +95,12 @@ class TestGetActions:
         assert "mapping" in body
 
     def test_get_csv_content(self, docker_available):
-        code, body = _docker_curl("get_csv_content&csv_file=DR102_whitelist.csv")
+        code, body = _docker_curl("get_csv_content&csv_file=DR130_priv_escalation.csv")
         assert code == 200
         assert "headers" in body or "rows" in body or "error" not in body
 
     def test_check_csv_status(self, docker_available):
-        code, body = _docker_curl("check_csv_status&csv_file=DR102_whitelist.csv")
+        code, body = _docker_curl("check_csv_status&csv_file=DR130_priv_escalation.csv")
         assert code == 200
 
     def test_get_apps(self, docker_available):
@@ -137,7 +137,7 @@ class TestPostActions:
     def test_save_csv_requires_permission(self, docker_available):
         code, body = _docker_curl("save_csv", method="POST", payload={
             "action": "save_csv",
-            "csv_file": "DR102_whitelist.csv",
+            "csv_file": "DR130_priv_escalation.csv",
             "rows": [],
         })
         # 200 or 403 or 400 — not 500
@@ -175,7 +175,7 @@ class TestBackwardCompatibility:
 
     def test_get_csv_content_response_shape(self, docker_available):
         """get_csv_content must return {headers: [...], rows: [...]}."""
-        code, body = _docker_curl("get_csv_content&csv_file=DR102_whitelist.csv")
+        code, body = _docker_curl("get_csv_content&csv_file=DR130_priv_escalation.csv")
         assert code == 200
         assert "headers" in body
         assert "rows" in body
@@ -200,10 +200,10 @@ class TestDispatchIntegrity:
     def test_all_get_actions_dont_crash(self, docker_available):
         """Every GET action in the dispatch table should return non-500."""
         get_actions = [
-            "get_rules", "get_csvs", "get_mapping", "get_csv_content&csv_file=DR102_whitelist.csv",
-            "check_csv_status&csv_file=DR102_whitelist.csv", "get_apps",
+            "get_rules", "get_csvs", "get_mapping", "get_csv_content&csv_file=DR130_priv_escalation.csv",
+            "check_csv_status&csv_file=DR130_priv_escalation.csv", "get_apps",
             "get_pending_approvals", "get_notifications",
-            "report_presence&csv_file=DR102_whitelist.csv",
+            "report_presence&csv_file=DR130_priv_escalation.csv",
         ]
         failures = []
         for action in get_actions:

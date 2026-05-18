@@ -18,7 +18,7 @@ const USER = "superadmin1", PASS = "Chang3d!";
     // ── 2. CSV operations (inherited from editor) ──
     await H.test("S02 Can load and view CSV", async () => {
         await H.navigateToWM(page);
-        await H.selectRule(page, "DR88_lateral_movement");
+        await H.selectRule(page, "DR130_privilege_escalation");
         await H.waitForTable(page);
     });
 
@@ -115,7 +115,7 @@ const USER = "superadmin1", PASS = "Chang3d!";
         const d = await H.restCall(page, "POST", {
             action: "check_approval_gate",
             gate_action: "bulk_row_addition",
-            csv_file: "DR88_whitelist.csv",
+            csv_file: "DR130_priv_escalation.csv",
             app_context: "",
             selected_count: "100"
         });

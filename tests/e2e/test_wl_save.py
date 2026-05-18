@@ -29,8 +29,8 @@ SPLUNK_URL = "http://localhost:8000"
 REST_URL = "https://localhost:8089"
 WM_PATH = "/en-US/app/wl_manager/whitelist_manager"
 AUTH = HTTPBasicAuth("admin", "Chang3d!")
-TEST_RULE = "DR45_suspicious_login"
-TEST_CSV = "DR45_whitelist_users.csv"
+TEST_RULE = "DR55_brute_force_login"
+TEST_CSV = "DR55_brute_force_users.csv"
 TEST_APP = "wl_manager"
 
 
@@ -184,9 +184,9 @@ def page(browser_inst) -> Page:
 # -- Shared Navigation --
 
 def nav_to_csv(page: Page) -> None:
-    """Select DR45 rule and CSV, wait for table to render."""
+    """Select DR55 rule and CSV, wait for table to render."""
     page.locator("#rule-search").click()
-    page.locator("#rule-search").fill("DR45")
+    page.locator("#rule-search").fill("DR55")
     page.wait_for_timeout(500)
     page.locator(f'.wl-dropdown-item:has-text("{TEST_RULE}")').first.click()
     page.wait_for_timeout(1000)

@@ -1,8 +1,0 @@
-user,allowed_hours,Comment,Expires
-svc_backup,0-23,Backup service runs 24/7,
-svc_monitoring,0-23,Monitoring never sleeps,
-n.williams,22-06,Night shift NOC analyst - works 10pm to 6am,
-r.patel,20-04,Works IST hours from US office (8am-6pm IST),
-svc_etl,1-5,ETL jobs scheduled between 1am-5am,
-a.novak,6-22,Early starter in EU timezone,
-svc_patching,2-6,WSUS patching window service account,

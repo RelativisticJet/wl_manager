@@ -1,6 +1,0 @@
-host,user,CommandLine,Comment,Expires,_added_by,_added_at
-WKSTN-NEW1,jsmith,whoami,Legacy admin tool - updated comment,,,
-WKSTN-NEW2,alice,net user,Approved network mapping,2026-04-15 09:00,,
-SRV-NEW01,svc_backup,robocopy,Scheduled backup job,,,
-SRV-MON01,svc_monitoring,wmic process list,Monitoring service inventory poll,,,
-WKSTN-DEV01,bob,powershell -Command Get-Service,Developer toolchain inspection,2026-09-01,,

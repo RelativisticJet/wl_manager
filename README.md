@@ -150,15 +150,18 @@ Edit `lookups/rule_csv_map.csv` to map your detection rules to CSV lookup files:
 
 ```csv
 rule_name,csv_file,app_context
-DR20_malicious_command,DR20_whitelist.csv,wl_manager
 DR55_brute_force_login,DR55_brute_force_users.csv,wl_manager
+DR130_privilege_escalation,DR130_priv_escalation.csv,wl_manager
 ```
 
 - `rule_name` — display name in the Detection Rule dropdown
 - `csv_file` — the CSV lookup file in the app's `lookups/` directory
 - `app_context` — the Splunk app containing the CSV (usually `wl_manager`)
 
-The app ships with 18 sample detection rules. Replace or extend these with your own.
+The packaged `.spl` ships with an empty `rule_csv_map.csv` — populate
+it with your own detection rules. The repo includes a small set of
+demo CSVs under `lookups/` for screenshots and tests; these are
+excluded from the published `.spl` (see `scripts/package.sh`).
 
 ### 3. Verify the Audit Index
 

@@ -20,14 +20,14 @@ const GET_ACTIONS = [
     { action: "get_rules", tier: "any" },
     { action: "get_csvs", tier: "any" },
     { action: "get_csv_content", tier: "any",
-      params: { rule_name: "DR45_suspicious_login" } },
+      params: { rule_name: "DR55_brute_force_login" } },
     { action: "get_mapping", tier: "any" },
     { action: "get_versions", tier: "any",
-      params: { csv_file: "DR45_suspicious_login.csv" } },
+      params: { csv_file: "DR55_brute_force_users.csv" } },
     { action: "check_csv_status", tier: "any",
-      params: { csv_file: "DR45_suspicious_login.csv" } },
+      params: { csv_file: "DR55_brute_force_users.csv" } },
     { action: "get_col_widths", tier: "any",
-      params: { csv_file: "DR45_suspicious_login.csv" } },
+      params: { csv_file: "DR55_brute_force_users.csv" } },
     { action: "get_apps", tier: "any" },
     { action: "report_presence", tier: "any" },
     { action: "get_presence", tier: "any" },
@@ -65,9 +65,9 @@ const SAFE_POSTS = [
 
     // EDIT_ROLES
     { action: "check_approval_gate", tier: "edit",
-      params: { csv_file: "DR45_suspicious_login.csv", action: "save_csv" } },
+      params: { csv_file: "DR55_brute_force_users.csv", action: "save_csv" } },
     { action: "save_col_widths", tier: "edit",
-      params: { csv_file: "DR45_suspicious_login.csv", col_widths: { "user": 150 } } },
+      params: { csv_file: "DR55_brute_force_users.csv", col_widths: { "user": 150 } } },
 ];
 
 const ALL_ACTIONS = GET_ACTIONS.map(a => ({ ...a, method: "GET" }))

@@ -137,7 +137,7 @@ class TestSaveColWidths:
     """
 
     SAMPLE_PAYLOAD = {
-        "csv_file": "DR102_whitelist.csv",
+        "csv_file": "DR130_priv_escalation.csv",
         "app_context": "wl_manager",
         "col_widths": {"user": 200, "src_ip": 150},
     }
@@ -160,7 +160,7 @@ class TestSaveColWidths:
         # Read back via GET
         path = ("/services/custom/wl_manager"
                 "?action=get_col_widths"
-                "&csv_file=DR102_whitelist.csv"
+                "&csv_file=DR130_priv_escalation.csv"
                 "&app_context=wl_manager")
         proc = container_curl(path, check=False)
         body = json.loads(proc.stdout.strip())
@@ -181,7 +181,7 @@ class TestLogEvent:
             self, container_state, container_curl):
         code, body = _post_action(container_curl, "log_event", {
             "event_action": "csv_exported",
-            "csv_file": "DR102_whitelist.csv",
+            "csv_file": "DR130_priv_escalation.csv",
             "app_context": "wl_manager",
         })
         assert code == 200
@@ -192,7 +192,7 @@ class TestLogEvent:
             self, container_state, container_curl):
         code, body = _post_action(container_curl, "log_event", {
             "event_action": "csv_imported",
-            "csv_file": "DR102_whitelist.csv",
+            "csv_file": "DR130_priv_escalation.csv",
             "app_context": "wl_manager",
             "rows_added": 5,
         })
@@ -356,8 +356,8 @@ class TestSaveCsvSmallEditHappyPath:
     inner pending_approvals entry shape if any exist.
     """
 
-    # Use DR102_whitelist.csv from the demo state — already exists
-    CSV_FILE = "DR102_whitelist.csv"
+    # Use DR130_priv_escalation.csv from the demo state — already exists
+    CSV_FILE = "DR130_priv_escalation.csv"
 
     REQUIRED_TOP_LEVEL = {
         "success", "diff", "file_mtime", "content_hash",
@@ -580,8 +580,8 @@ class TestRevertCsvResponseShape:
     def test_revert_response_shape(
             self, container_state, container_curl):
         # Precondition: pick a CSV with at least one prior version
-        # snapshot. DR102_whitelist.csv has many in the demo state.
-        csv_file = "DR102_whitelist.csv"
+        # snapshot. DR130_priv_escalation.csv has many in the demo state.
+        csv_file = "DR130_priv_escalation.csv"
 
         # List versions
         path = (f"/services/custom/wl_manager"

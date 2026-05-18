@@ -4165,7 +4165,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
 
         # ── Generate or validate CSV filename ─────────────────────────
         if not csv_filename:
-            # Auto-generate from rule name: DR102_powershell -> DR102_powershell.csv
+            # Auto-generate from rule name: DR130_privilege_escalation -> DR130_privilege_escalation.csv
             # Strictly ASCII alphanumeric; everything else (including CJK and
             # other Unicode letters that c.isalnum() would have accepted)
             # collapses to "_" so the derived filename is filesystem-safe.

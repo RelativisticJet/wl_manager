@@ -79,9 +79,9 @@ const H = require("./lib_helpers.cjs");
     await H.test("SEC09 _from_approval=true in payload does not bypass gates", async () => {
         const d = await H.restCall(ap, "POST", {
             action: "save_csv",
-            csv_file: "DR20_whitelist.csv",
+            csv_file: "DR130_priv_escalation.csv",
             app_context: "",
-            detection_rule: "DR20_malicious_command",
+            detection_rule: "DR130_privilege_escalation",
             headers: JSON.stringify(["user", "comment"]),
             rows: JSON.stringify([{"user": "bypass_test", "comment": "test"}]),
             _from_approval: "true",
@@ -148,8 +148,8 @@ const H = require("./lib_helpers.cjs");
     await H.test("SEC15 _ prefix column in payload rejected", async () => {
         const d = await H.restCall(ap, "POST", {
             action: "save_csv",
-            csv_file: "DR20_whitelist.csv",
-            detection_rule: "DR20_malicious_command",
+            csv_file: "DR130_priv_escalation.csv",
+            detection_rule: "DR130_privilege_escalation",
             headers: JSON.stringify(["user", "_hidden_malicious"]),
             rows: JSON.stringify([{"user": "test", "_hidden_malicious": "evil"}]),
             comment: "reserved prefix test"
@@ -163,7 +163,7 @@ const H = require("./lib_helpers.cjs");
         // Load CSV to get mtime
         const csv = await H.restCall(ap, "GET", {
             action: "get_csv_content",
-            csv_file: "DR20_whitelist.csv",
+            csv_file: "DR130_priv_escalation.csv",
             app: ""
         });
         const mtime = csv.file_mtime;
@@ -171,8 +171,8 @@ const H = require("./lib_helpers.cjs");
         // First save — should succeed
         const save1 = await H.restCall(ap, "POST", {
             action: "save_csv",
-            csv_file: "DR20_whitelist.csv",
-            detection_rule: "DR20_malicious_command",
+            csv_file: "DR130_priv_escalation.csv",
+            detection_rule: "DR130_privilege_escalation",
             headers: JSON.stringify(csv.headers),
             rows: JSON.stringify(csv.rows),
             comment: "Concurrent test save 1",
@@ -183,8 +183,8 @@ const H = require("./lib_helpers.cjs");
         if (!save1.error) {
             const save2 = await H.restCall(ap, "POST", {
                 action: "save_csv",
-                csv_file: "DR20_whitelist.csv",
-                detection_rule: "DR20_malicious_command",
+                csv_file: "DR130_priv_escalation.csv",
+                detection_rule: "DR130_privilege_escalation",
                 headers: JSON.stringify(csv.headers),
                 rows: JSON.stringify(csv.rows),
                 comment: "Concurrent test save 2 (should conflict)",
@@ -235,7 +235,7 @@ const H = require("./lib_helpers.cjs");
     await H.test("SEC21 Save with empty headers rejected", async () => {
         const d = await H.restCall(wp, "POST", {
             action: "save_csv",
-            csv_file: "DR20_whitelist.csv",
+            csv_file: "DR130_priv_escalation.csv",
             headers: "[]",
             rows: "[]",
             comment: "empty headers test"
@@ -246,8 +246,8 @@ const H = require("./lib_helpers.cjs");
     await H.test("SEC22 Save with mismatched headers/rows", async () => {
         const d = await H.restCall(wp, "POST", {
             action: "save_csv",
-            csv_file: "DR20_whitelist.csv",
-            detection_rule: "DR20_malicious_command",
+            csv_file: "DR130_priv_escalation.csv",
+            detection_rule: "DR130_privilege_escalation",
             headers: JSON.stringify(["col1"]),
             rows: JSON.stringify([{"col1": "a", "col2": "b", "col99": "extra"}]),
             comment: "mismatched headers test"
@@ -259,8 +259,8 @@ const H = require("./lib_helpers.cjs");
     await H.test("SEC23 Non-ASCII in comment field rejected", async () => {
         const d = await H.restCall(wp, "POST", {
             action: "save_csv",
-            csv_file: "DR20_whitelist.csv",
-            detection_rule: "DR20_malicious_command",
+            csv_file: "DR130_priv_escalation.csv",
+            detection_rule: "DR130_privilege_escalation",
             headers: JSON.stringify(["user"]),
             rows: JSON.stringify([{"user": "test"}]),
             comment: "Test with em\u2014dash and \u00e9"

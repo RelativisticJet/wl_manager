@@ -4,7 +4,7 @@
  */
 const H = require("./lib_helpers.cjs");
 const USER = "analyst1", PASS = "Chang3d!";
-const TEST_RULE = "DR20_malicious_command";
+const TEST_RULE = "DR130_privilege_escalation";
 
 (async () => {
     const { browser, page } = await H.createSession(USER, PASS);
@@ -84,7 +84,7 @@ const TEST_RULE = "DR20_malicious_command";
         const d = await H.restCall(page, "POST", {
             action: "check_approval_gate",
             gate_action: "bulk_row_addition",
-            csv_file: "DR20_whitelist.csv",
+            csv_file: "DR130_priv_escalation.csv",
             app_context: "",
             selected_count: 5
         });
@@ -101,7 +101,7 @@ const TEST_RULE = "DR20_malicious_command";
         const d = await H.restCall(page, "POST", {
             action: "submit_approval",
             approval_action: "column_removal",
-            csv_file: "DR20_whitelist.csv",
+            csv_file: "DR130_priv_escalation.csv",
             app_context: "",
             detection_rule: TEST_RULE,
             reason: "E2E test approval request",
@@ -181,7 +181,7 @@ const TEST_RULE = "DR20_malicious_command";
     await H.test("A18 Presence reporting works", async () => {
         const d = await H.restCall(page, "GET", {
             action: "report_presence",
-            csv_file: "DR20_whitelist.csv"
+            csv_file: "DR130_priv_escalation.csv"
         });
         // May not error
     });

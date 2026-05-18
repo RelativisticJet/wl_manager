@@ -208,32 +208,18 @@ Every file here is read by Splunk at app load to set up endpoints, indexes, role
 
 ---
 
-## `lookups/` — Splunk lookup files (20 tracked)
+## `lookups/` — Splunk lookup files (4 tracked)
 
-The `lookups/DR*.csv` files are demo data. `rule_csv_map.csv` is the master rule→csv mapping. Both are tracked, but the demo CSVs are **excluded from the customer `.spl`** (`scripts/package.sh:145`) and `rule_csv_map.csv` is swapped to a header-only version before packaging (`scripts/package.sh:103`).
+The `lookups/DR*.csv` files are demo data, also used as test fixtures. `rule_csv_map.csv` is the master rule→csv mapping. Both are tracked, but the demo CSVs are **excluded from the customer `.spl`** (`scripts/package.sh:146`) and `rule_csv_map.csv` is swapped to a header-only version before packaging (`scripts/package.sh:103`).
+
+The set was trimmed from 19 demo CSVs to 3 on 2026-05-18 — the dropped 16 only existed as test fixtures; nothing customer-visible changed (the .spl already excluded all `DR*.csv`).
 
 | File | Purpose | Public? | Up-to-date? | Notes |
 |---|---|---|---|---|
-| `lookups/rule_csv_map.csv` | Master mapping: detection_rule → csv_file → app_context. 19 production-rule rows after F-C2 trim. | Repo-only (header-only in `.spl`) | Yes | F-C2 closure trimmed 33→19 rows. |
-| `lookups/DR20_whitelist.csv` | Demo: malicious-command whitelist. | Repo-only | Yes | F-L7 rewrote 89→5 rows. |
-| `lookups/DR45_whitelist_hosts.csv` | Demo: host whitelist for suspicious-login rule. | Repo-only | Yes | 51 synthetic rows. |
-| `lookups/DR45_whitelist_users.csv` | Demo: user whitelist for suspicious-login rule. | Repo-only | Yes | |
-| `lookups/DR55_brute_force_src.csv` | Demo: source-IP whitelist for brute-force rule. | Repo-only | Yes | |
-| `lookups/DR55_brute_force_users.csv` | Demo: user whitelist for brute-force rule. | Repo-only | Yes | |
-| `lookups/DR71_data_exfil_hosts.csv` | Demo: host whitelist for data-exfiltration rule. | Repo-only | Yes | |
-| `lookups/DR71_data_exfil_users.csv` | Demo: user whitelist for data-exfiltration rule. | Repo-only | Yes | F-L6 closure removed person-narrative prefixes. |
-| `lookups/DR88_whitelist.csv` | Demo: lateral-movement whitelist. | Repo-only | Yes | F-L7 closure replaced the 2 test-marker rows. |
-| `lookups/DR102_whitelist.csv` | Demo: priv-escalation host whitelist. | Repo-only | Yes | F-L7 closure rewrote 7→4 rows. |
-| `lookups/DR130_priv_escalation.csv` | Demo: priv-escalation user whitelist (the rule shown in `docs/screenshots/02-inline-editing.png`). | Repo-only | Yes | Not in F-L6/L7 scope; rows curated upstream. |
-| `lookups/DR310_impossible_travel.csv` | Demo: impossible-travel user whitelist. | Repo-only | Yes | F-L6 closure removed person-narratives. |
-| `lookups/DR415_suspicious_process.csv` | Demo: suspicious-process whitelist. | Repo-only | Yes | |
-| `lookups/DR520_anomalous_logon_time.csv` | Demo: off-hours-logon whitelist. | Repo-only | Yes | F-L6 closure removed person-narratives. |
-| `lookups/DR600_unauthorized_software.csv` | Demo: unauthorized-software whitelist (header only). | Repo-only | Yes | |
-| `lookups/DR610_vpn_anomaly.csv` | Demo: VPN-anomaly whitelist. | Repo-only | Yes | |
-| `lookups/DR620_cloud_api_abuse.csv` | Demo: cloud-API-abuse whitelist. | Repo-only | Yes | |
-| `lookups/DR630_email_exfiltration.csv` | Demo: email-exfiltration whitelist. | Repo-only | Yes | F-L6 closure replaced 4 domains with RFC 2606 example space. |
-| `lookups/DR640_service_account_logon.csv` | Demo: service-account-logon whitelist. | Repo-only | Yes | |
-| `lookups/DR650_firewall_bypass.csv` | Demo: firewall-bypass whitelist. | Repo-only | Yes | |
+| `lookups/rule_csv_map.csv` | Master mapping: detection_rule → csv_file → app_context. 3 mapping rows (DR55 pair + DR130). | Repo-only (header-only in `.spl`) | Yes | Trimmed from 19 rows on 2026-05-18. |
+| `lookups/DR55_brute_force_src.csv` | Demo: source-IP whitelist for brute-force rule. Simple 3-column schema (`src_ip,src_host,Comment`). | Repo-only | Yes | |
+| `lookups/DR55_brute_force_users.csv` | Demo: user whitelist for brute-force rule. 7-column schema with `Expires` + audit-trail columns. | Repo-only | Yes | |
+| `lookups/DR130_priv_escalation.csv` | Demo: priv-escalation user whitelist. 10-column rich schema (the rule shown in `docs/screenshots/02-inline-editing.png`). | Repo-only | Yes | |
 
 > **Why ship a header-only `rule_csv_map.csv` and no `DR*.csv` at all to customers?** Customers should populate their own detection rules, not inherit our demo set. The .spl ships the mechanism (handler, dashboards, RBAC, alerts), not pre-loaded content.
 

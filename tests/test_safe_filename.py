@@ -39,7 +39,7 @@ class TestSafeFilename(unittest.TestCase):
 
     # ── Valid filenames ──────────────────────────────────────────────
     def test_simple_csv(self):
-        self.assertTrue(_safe_filename("DR45_whitelist_hosts.csv"))
+        self.assertTrue(_safe_filename("DR130_priv_escalation.csv"))
 
     def test_uppercase_csv(self):
         self.assertTrue(_safe_filename("RULES.CSV"))

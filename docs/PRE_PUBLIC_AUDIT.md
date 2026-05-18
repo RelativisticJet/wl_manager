@@ -752,12 +752,14 @@ They are not registered as views and are reachable only via direct URL (`/static
 
 The `lookups/DR*.csv` files (19 demo whitelists, GitHub-public but excluded from `.spl` per `scripts/package.sh:145`) contain demo rows with:
 
-- Name-shaped strings with backstories. Spot-checked rows:
-  - `lookups/DR310_impossible_travel.csv:2` — `c.rodriguez,US,Carlos Rodriguez - commutes between NYC and Miami offices weekly,2026-12-31`
-  - `lookups/DR310_impossible_travel.csv:3` — `d.kim,KRTES,David Kim - based in Seoul but uses US VPN for corp access,2026-06-30`
-  - `lookups/DR71_data_exfil_users.csv:4` — `j.martinez,Jose Martinez - video editor uploads raw footage to cloud storage daily`
-  - `lookups/DR520_anomalous_logon_time.csv:4` — `n.williams,22-06,Night shift NOC analyst - works 10pm to 6am`
-- One real-world domain: `lookups/DR630_email_exfiltration.csv:2` — `l.thompson,partnercorp.com,50,Legal team sharing contracts with external counsel,`. `partnercorp.com` resolves to a real registered domain (Partner Corp — a real entity per public WHOIS). Other demo domains (`vendor-xyz.co.jp`, `boardmembers.org`) are RFC-2606-safe-ish patterns but `partnercorp.com` is not in the reserved-example space.
+- Name-shaped strings with backstories. Spot-checked rows (paths are
+  historical — the affected demo CSVs were removed in the
+  2026-05-18 demo trim, see Phase H closeout below):
+  - `DR310_impossible_travel.csv:2` (removed) — `c.rodriguez,US,Carlos Rodriguez - commutes between NYC and Miami offices weekly,2026-12-31`
+  - `DR310_impossible_travel.csv:3` (removed) — `d.kim,KRTES,David Kim - based in Seoul but uses US VPN for corp access,2026-06-30`
+  - `DR71_data_exfil_users.csv:4` (removed) — `j.martinez,Jose Martinez - video editor uploads raw footage to cloud storage daily`
+  - `DR520_anomalous_logon_time.csv:4` (removed) — `n.williams,22-06,Night shift NOC analyst - works 10pm to 6am`
+- One real-world domain: `DR630_email_exfiltration.csv:2` (removed) — `l.thompson,partnercorp.com,50,Legal team sharing contracts with external counsel,`. `partnercorp.com` resolves to a real registered domain (Partner Corp — a real entity per public WHOIS). Other demo domains (`vendor-xyz.co.jp`, `boardmembers.org`) are RFC-2606-safe-ish patterns but `partnercorp.com` is not in the reserved-example space.
 
 **Risk lens:** L2 (PII-shape — though the names are common enough to plausibly be synthetic, a casual GitHub viewer cannot tell at a glance) + L9 (branding / professional appearance — real domain in a demo dataset implies sloppy curation).
 
@@ -765,12 +767,12 @@ The `lookups/DR*.csv` files (19 demo whitelists, GitHub-public but excluded from
 
 ##### F-L7 (LOW): Demo CSVs contain obvious E2E-run debris
 
-Same files as F-L6, but separate finding because the fix is a content-curation pass rather than a name-replacement:
+Same files as F-L6, but separate finding because the fix is a content-curation pass rather than a name-replacement (paths are historical — the affected demo CSVs were removed in the 2026-05-18 demo trim):
 
-- `lookups/DR102_whitelist.csv:2` — `E2E-EDITED-HOST,analyst2,1774751458` (E2E test artifact left behind after a verification run)
-- `lookups/DR88_whitelist.csv:2` — `EDITED_AFTER_LAZY_INIT,SRV-FILE01,Approved file share access` (clearly a test marker)
-- `lookups/DR88_whitelist.csv:3` — `SECOND_EDIT,Station_2,Test comment for DR88`
-- `lookups/DR20_whitelist.csv:3` — `TEST_2,,` and `TEST_3,,` (sparse test rows)
+- `DR102_whitelist.csv:2` (removed) — `E2E-EDITED-HOST,analyst2,1774751458` (E2E test artifact left behind after a verification run)
+- `DR88_whitelist.csv:2` (removed) — `EDITED_AFTER_LAZY_INIT,SRV-FILE01,Approved file share access` (clearly a test marker)
+- `DR88_whitelist.csv:3` (removed) — `SECOND_EDIT,Station_2,Test comment for DR88`
+- `DR20_whitelist.csv:3` (removed) — `TEST_2,,` and `TEST_3,,` (sparse test rows)
 
 These rows tell a casual viewer "this is dev debris, not a curated demo set." They are not customer-shipped (excluded from `.spl`), so the audit lens is L8 (unprofessional / dev-debris on GitHub-public) + L5 (stale — accumulated from prior E2E runs that didn't clean up).
 
@@ -990,8 +992,8 @@ Reviewed via direct read (small screenshots) and via PIL crop-then-read on `03-a
 | F-M6 | MEDIUM | 170 `c:/Users/PC/...` path occurrences across 30 `.planning/` tracked planning docs | `.planning/phases/**/*.md` + `.planning/superpowers/plans/2026-04-05-wave3-entry-point-rewrite.md` | E | No — visibility/branding only |
 | F-L4 | LOW | `test_runner.xml` QUnit dashboards ship in `.spl` | `default/data/ui/views/test_runner.xml` + `appserver/static/test_runner.xml` | C | No |
 | F-L5 | LOW | `appserver/static/tests/` 5 QUnit JS files ship in `.spl` | `appserver/static/tests/test_wl_cp_*.js` (×5) | C | No |
-| F-L6 | LOW | Demo CSVs have realistic-name narratives + one real domain `partnercorp.com` | `lookups/DR310_impossible_travel.csv`, `DR71_data_exfil_users.csv`, `DR630_email_exfiltration.csv`, etc. | C | No — GitHub-public hygiene |
-| F-L7 | LOW | Demo CSVs contain obvious E2E test debris | `lookups/DR102_whitelist.csv:2`, `DR88_whitelist.csv:2-3`, `DR20_whitelist.csv:3-4` | C | No — same |
+| F-L6 | LOW | Demo CSVs have realistic-name narratives + one real domain `partnercorp.com` | `DR310_impossible_travel.csv` (removed), `DR71_data_exfil_users.csv` (removed), `DR630_email_exfiltration.csv` (removed), etc. | C | No — GitHub-public hygiene |
+| F-L7 | LOW | Demo CSVs contain obvious E2E test debris | `DR102_whitelist.csv:2` (removed), `DR88_whitelist.csv:2-3` (removed), `DR20_whitelist.csv:3-4` (removed) | C | No — same |
 | F-L8 | LOW | 6 stale E2E screenshot debris PNGs tracked at `tests/` root (~745 KB) | `tests/e2e_phase*.png` (×5) plus a `screenshot_debug.png` artifact | D | No |
 | F-L9 | LOW | `scripts/hooks/README.md:80` embeds maintainer's exact path as example | `scripts/hooks/README.md:80` | D | No |
 | F-L10 | LOW | Audit V1 stale claim — `wildleo91@gmail.com` location | `docs/PRE_PUBLIC_AUDIT.md:271-277` | D | No — self-correct |

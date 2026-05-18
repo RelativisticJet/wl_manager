@@ -4,7 +4,7 @@
  */
 const H = require("./lib_helpers.cjs");
 const USER = "wladmin1", PASS = "Chang3d!";
-const TEST_RULE = "DR45_suspicious_login";
+const TEST_RULE = "DR55_brute_force_login";
 
 (async () => {
     const { browser, page } = await H.createSession(USER, PASS);
@@ -111,7 +111,7 @@ const TEST_RULE = "DR45_suspicious_login";
         const d = await H.restCall(page, "POST", {
             action: "check_approval_gate",
             gate_action: "bulk_row_edit",
-            csv_file: "DR45_whitelist_users.csv",
+            csv_file: "DR55_brute_force_users.csv",
             app_context: "",
             selected_count: "10"
         });

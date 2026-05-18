@@ -15,7 +15,7 @@ Registry file format::
 
     {
         "rule_csv_map.csv": "<sha256>",
-        "DR20_whitelist.csv": "<sha256>",
+        "DR130_priv_escalation.csv": "<sha256>",
         ...
         "_checksum": "<hmac-sha256>"
     }

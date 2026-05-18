@@ -505,7 +505,7 @@ Edit `lookups/rule_csv_map.csv` to map your detection rules to CSV lookup files:
 
 ```csv
 rule_name,csv_file,app_context
-DR20_malicious_command,DR20_whitelist.csv,wl_manager
+DR55_brute_force_login,DR55_brute_force_users.csv,wl_manager
 MY_CUSTOM_RULE,my_custom_whitelist.csv,search
 ```
 

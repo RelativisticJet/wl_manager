@@ -156,15 +156,15 @@ def phase1_analyst_operations(page):
 
     go_to_wlm(page)
 
-    # 1a. Select DR102 and view data
-    if select_rule(page, "DR102_priv_escalation"):
-        ok(acct, "Select Rule", "Selected DR102_priv_escalation")
+    # 1a. Select DR130 and view data
+    if select_rule(page, "DR130_privilege_escalation"):
+        ok(acct, "Select Rule", "Selected DR130_privilege_escalation")
     else:
-        bug(acct, "Select Rule", "Could not select DR102_priv_escalation")
+        bug(acct, "Select Rule", "Could not select DR130_privilege_escalation")
         return
 
     rows_before = get_row_count(page)
-    ok(acct, "View", f"DR102 has {rows_before} rows")
+    ok(acct, "View", f"DR130 has {rows_before} rows")
 
     # 1b. Add 2 new rows with data
     page.locator("text=Add Row").first.click()
@@ -198,7 +198,7 @@ def phase1_analyst_operations(page):
 
     # 1d. Verify rows persisted after page reload
     go_to_wlm(page)
-    select_rule(page, "DR102_priv_escalation")
+    select_rule(page, "DR130_privilege_escalation")
     rows_reloaded = get_row_count(page)
     if rows_reloaded == rows_after_add2:
         ok(acct, "Persistence", f"Rows persisted after reload ({rows_reloaded})")
@@ -243,7 +243,7 @@ def phase1_analyst_operations(page):
 
     # 1h. Search functionality
     go_to_wlm(page)
-    select_rule(page, "DR102_priv_escalation")
+    select_rule(page, "DR130_privilege_escalation")
     search = page.locator("input[placeholder*='Filter']")
     if search.count() > 0:
         search.first.fill("WKSTN")
@@ -265,9 +265,9 @@ def phase1_analyst_operations(page):
         ok(acct, "Export CSV", "Export CSV button available")
 
     # 1j. Switch to different rule
-    if select_rule(page, "DR310_impossible_travel"):
+    if select_rule(page, "DR55_brute_force_login"):
         rows_310 = get_row_count(page)
-        ok(acct, "Switch Rule", f"Switched to DR310 ({rows_310} rows)")
+        ok(acct, "Switch Rule", f"Switched to DR55 ({rows_310} rows)")
 
     page.screenshot(path=str(SCREENSHOT_DIR / "e2e_phase1.png"), full_page=True)
 

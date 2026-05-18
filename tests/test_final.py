@@ -79,12 +79,12 @@ print("\n2. Create CSV — Submit + Approve")
 r = api_post("admin", PW, {
     "action": "submit_approval",
     "approval_action_type": "create_csv",
-    "detection_rule": "DR102_priv_escalation",
+    "detection_rule": "DR130_privilege_escalation",
     "csv_file": "final_test_csv.csv",
     "description": "Final test CSV creation",
     "original_payload": {
         "action": "create_csv",
-        "detection_rule": "DR102_priv_escalation",
+        "detection_rule": "DR130_privilege_escalation",
         "csv_file": "final_test_csv.csv",
         "headers": ["user", "src_ip", "Comment"],
         "app_context": "wl_manager",
@@ -112,7 +112,7 @@ t("wladmin2 approves", "error" not in r3)
 
 # CSV was created
 time.sleep(0.5)
-r4 = api_get("admin", PW, "get_csvs", {"rule": "DR102_priv_escalation"})
+r4 = api_get("admin", PW, "get_csvs", {"rule": "DR130_privilege_escalation"})
 csvs = [c.get("csv_file", c) if isinstance(c, dict) else c for c in r4.get("csv_files", [])]
 t("CSV file created", "final_test_csv.csv" in csvs)
 
@@ -155,12 +155,12 @@ print("\n4. Remove CSV — Submit + Reject")
 r = api_post("admin", PW, {
     "action": "submit_approval",
     "approval_action_type": "remove_csv",
-    "detection_rule": "DR102_priv_escalation",
+    "detection_rule": "DR130_privilege_escalation",
     "csv_file": "final_test_csv.csv",
     "description": "Final test CSV removal",
     "original_payload": {
         "action": "remove_csv",
-        "detection_rule": "DR102_priv_escalation",
+        "detection_rule": "DR130_privilege_escalation",
         "csv_file": "final_test_csv.csv",
         "app_context": "wl_manager",
     },

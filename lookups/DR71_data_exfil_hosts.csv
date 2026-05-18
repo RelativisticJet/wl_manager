@@ -1,7 +1,0 @@
-host,dest_ip,dest_port,bytes_threshold,Comment,Expires,_added_by,_added_at
-WKSTN-DEV-042,185.199.108.153,443,2000000000,GitHub LFS pushes from dev workstation,2026-05-31,,
-SRV-SFTP01,203.0.113.50,22,5000000000,Daily SFTP upload to vendor - 5GB expected,,,
-SRV-BACKUP01,198.51.100.10,443,10000000000,Offsite cloud backup - up to 10GB nightly,,,
-SRV-EMAIL01,209.85.220.41,587,1000000000,Mail relay to Google Workspace,,,
-SRV-PROXY01,0.0.0.0,443,50000000000,Web proxy - aggregate traffic is high by design,,,
-SRV-SIEM01,52.45.100.22,9997,8000000000,Splunk forwarder to cloud SIEM instance,,,

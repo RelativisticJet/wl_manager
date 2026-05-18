@@ -113,11 +113,11 @@ def phase1_analyst_daily_ops():
     test("Load rules", code == 200 and len(rules) > 0, f"{len(rules)} rules")
 
     # T02: Load CSV content
-    data, code = api_get(u, {"action": "get_csv_content", "csv_file": "DR102_whitelist.csv", "app": "wl_manager"})
+    data, code = api_get(u, {"action": "get_csv_content", "csv_file": "DR130_priv_escalation.csv", "app": "wl_manager"})
     rows = data.get("rows", [])
     headers = data.get("headers", [])
     mtime = data.get("file_mtime")
-    test("Load DR102 CSV", code == 200 and len(rows) == 5, f"{len(rows)} rows, headers={headers}")
+    test("Load DR130 CSV", code == 200 and len(rows) == 5, f"{len(rows)} rows, headers={headers}")
 
     # T03: Add 2 rows
     new_rows = list(rows)
@@ -125,9 +125,9 @@ def phase1_analyst_daily_ops():
     new_rows.append({"host": "E2E-HOST-002"})
     data, code = api_post(u, {
         "action": "save_csv",
-        "csv_file": "DR102_whitelist.csv",
+        "csv_file": "DR130_priv_escalation.csv",
         "app_context": "wl_manager",
-        "detection_rule": "DR102_priv_escalation",
+        "detection_rule": "DR130_privilege_escalation",
         "headers": headers,
         "rows": new_rows,
         "expected_mtime": mtime,
@@ -139,7 +139,7 @@ def phase1_analyst_daily_ops():
     mtime = data.get("file_mtime", mtime)
 
     # T04: Verify persistence
-    data, code = api_get(u, {"action": "get_csv_content", "csv_file": "DR102_whitelist.csv", "app": "wl_manager"})
+    data, code = api_get(u, {"action": "get_csv_content", "csv_file": "DR130_priv_escalation.csv", "app": "wl_manager"})
     test("Rows persisted", len(data.get("rows", [])) == 7, f"{len(data.get('rows',[]))} rows")
     mtime = data.get("file_mtime", mtime)
 
@@ -148,9 +148,9 @@ def phase1_analyst_daily_ops():
     rows[0]["host"] = "E2E-EDITED-HOST"
     data, code = api_post(u, {
         "action": "save_csv",
-        "csv_file": "DR102_whitelist.csv",
+        "csv_file": "DR130_priv_escalation.csv",
         "app_context": "wl_manager",
-        "detection_rule": "DR102_priv_escalation",
+        "detection_rule": "DR130_privilege_escalation",
         "headers": headers,
         "rows": rows,
         "expected_mtime": mtime,
@@ -162,16 +162,16 @@ def phase1_analyst_daily_ops():
     mtime = data.get("file_mtime", mtime)
 
     # T06: Remove a row (with reason)
-    data, code = api_get(u, {"action": "get_csv_content", "csv_file": "DR102_whitelist.csv", "app": "wl_manager"})
+    data, code = api_get(u, {"action": "get_csv_content", "csv_file": "DR130_priv_escalation.csv", "app": "wl_manager"})
     rows = data.get("rows", [])
     mtime = data.get("file_mtime", mtime)
     removed_host = rows[-1]["host"]
     save_rows = rows[:-1]
     data, code = api_post(u, {
         "action": "save_csv",
-        "csv_file": "DR102_whitelist.csv",
+        "csv_file": "DR130_priv_escalation.csv",
         "app_context": "wl_manager",
-        "detection_rule": "DR102_priv_escalation",
+        "detection_rule": "DR130_privilege_escalation",
         "headers": headers,
         "rows": save_rows,
         "expected_mtime": mtime,
@@ -184,19 +184,19 @@ def phase1_analyst_daily_ops():
     mtime = data.get("file_mtime", mtime)
 
     # T07: Search filter (simulated)
-    data, code = api_get(u, {"action": "get_csv_content", "csv_file": "DR102_whitelist.csv", "app": "wl_manager"})
+    data, code = api_get(u, {"action": "get_csv_content", "csv_file": "DR130_priv_escalation.csv", "app": "wl_manager"})
     rows = data.get("rows", [])
     filtered = [r for r in rows if "E2E" in r.get("host", "")]
     test("Search filter", len(filtered) >= 1, f"E2E rows found: {len(filtered)}")
 
     # T08: Version history
-    data, code = api_get(u, {"action": "get_versions", "csv_file": "DR102_whitelist.csv", "app": "wl_manager"})
+    data, code = api_get(u, {"action": "get_versions", "csv_file": "DR130_priv_escalation.csv", "app": "wl_manager"})
     versions = data.get("versions", [])
     test("Version history", len(versions) >= 3, f"{len(versions)} versions")
 
     # T09: Switch to different rule
-    data, code = api_get(u, {"action": "get_csv_content", "csv_file": "DR310_impossible_travel.csv", "app": "wl_manager"})
-    test("Switch to DR310", code == 200, f"{len(data.get('rows',[]))} rows")
+    data, code = api_get(u, {"action": "get_csv_content", "csv_file": "DR55_brute_force_users.csv", "app": "wl_manager"})
+    test("Switch to DR55", code == 200, f"{len(data.get('rows',[]))} rows")
 
     return mtime
 

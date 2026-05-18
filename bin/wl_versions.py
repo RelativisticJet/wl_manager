@@ -76,13 +76,13 @@ def read_version_manifest(csv_path: str) -> Tuple[Dict, str]:
 
     Manifest structure:
     {
-        "csv_file": "DR102_whitelist.csv",
+        "csv_file": "DR130_priv_escalation.csv",
         "current_version": "20260331_203045",
         "versions": {
             "20260331_203045": {
                 "timestamp": "2026-03-31T20:30:45Z",
                 "display": "31-03-2026 20:30:45",
-                "filename": "DR102_whitelist_20260331_203045.csv",
+                "filename": "DR130_priv_escalation_20260331_203045.csv",
                 "analyst": "admin",
                 "action": "save",
                 "row_count": 42,
@@ -337,7 +337,7 @@ def get_versions_list(csv_path: str) -> Tuple[List[Dict], str]:
     result = []
     for entry in versions:
         filename = entry.get("filename", "")
-        # Extract timestamp from filename: "DR102_whitelist_20260331_203045.csv"
+        # Extract timestamp from filename: "DR130_priv_escalation_20260331_203045.csv"
         # Timestamp format is: _YYYYMMDD_HHMMSS (or _YYYYMMDD_HHMMSS_mmm for collisions)
         # Remove .csv extension first
         if filename.endswith(".csv"):
@@ -407,12 +407,12 @@ def revert_csv_pipeline(
 
     Args:
         csv_path: Absolute filesystem path to CSV file.
-        version_filename: Filename of the version to revert to (e.g., "DR102_whitelist_20260331_203045.csv").
+        version_filename: Filename of the version to revert to (e.g., "DR130_priv_escalation_20260331_203045.csv").
         version_display: Display string for the version (e.g., "31-03-2026 12:37:16 (42 rows, by admin)").
         revert_reason: Human-readable reason for the revert.
         analyst: Username of the analyst performing the revert.
         session_key: Splunk session key for REST API calls.
-        csv_file: Short name of CSV file (for audit events, e.g., "DR102_whitelist.csv").
+        csv_file: Short name of CSV file (for audit events, e.g., "DR130_priv_escalation.csv").
         app_context: App context (e.g., "whitelist_manager").
         detection_rule: Detection rule name.
 

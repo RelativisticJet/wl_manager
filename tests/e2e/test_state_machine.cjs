@@ -31,8 +31,8 @@ function buildSubmitPayload(ruleTag) {
     return {
         action: "submit_approval",
         approval_action_type: "bulk_row_removal",
-        detection_rule: "DR45_suspicious_login",
-        csv_file: "DR45_suspicious_login.csv",
+        detection_rule: "DR55_brute_force_login",
+        csv_file: "DR55_brute_force_users.csv",
         reason: `state_machine_test_${ruleTag}`,
         payload: {
             removed_keys: ["sm_test_row_key_1", "sm_test_row_key_2"],
@@ -48,7 +48,7 @@ async function cleanupStaleRequests(page) {
     const items = q.approval_queue || q.queue || [];
     for (const item of items) {
         if (item.status === "pending" &&
-            item.detection_rule === "DR45_suspicious_login" &&
+            item.detection_rule === "DR55_brute_force_login" &&
             item.reason && item.reason.startsWith("state_machine_test_")) {
             await H.restCall(page, "POST", {
                 action: "process_approval",
@@ -119,8 +119,8 @@ async function cleanupStaleRequests(page) {
         const r = await H.restCall(analyst.page, "POST", {
             action: "submit_approval",
             approval_action_type: "no_such_thing",
-            detection_rule: "DR45_suspicious_login",
-            csv_file: "DR45_suspicious_login.csv",
+            detection_rule: "DR55_brute_force_login",
+            csv_file: "DR55_brute_force_users.csv",
             reason: "sm05_test",
             payload: {},
         });

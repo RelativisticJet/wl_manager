@@ -793,7 +793,7 @@ def save_csv_pipeline(
         column_renames: List of {old_name, new_name} dicts for column renames.
         explicit_row_add_reason: Explicit reason for row additions (may be "__per_row__").
         has_comment_col: Whether CSV has a Comment column.
-        csv_file: Short name of CSV file (for audit events, e.g., "DR102_whitelist.csv").
+        csv_file: Short name of CSV file (for audit events, e.g., "DR130_priv_escalation.csv").
         app_context: App context (e.g., "whitelist_manager").
         detection_rule: Detection rule name.
 

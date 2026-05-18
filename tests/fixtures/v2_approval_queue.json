@@ -5,7 +5,7 @@
     "timestamp": 1677696645,
     "analyst": "jsmith",
     "action_type": "save_csv",
-    "csv_file": "DR102_whitelist.csv",
+    "csv_file": "DR130_priv_escalation.csv",
     "detection_rule": "Suspicious Login",
     "reason": "Updated whitelist for trusted partners",
     "payload": {

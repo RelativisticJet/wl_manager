@@ -203,7 +203,7 @@ function kvForge(payloadObj) {
             });
             const d = await H.restCall(superPage, "GET", {
                 action: "check_csv_status",
-                csv_file: "DR20_whitelist.csv",
+                csv_file: "DR130_priv_escalation.csv",
                 app: ""
             });
             if (!d.content_hash || typeof d.content_hash !== "string" || d.content_hash.length !== 64) {
@@ -213,11 +213,11 @@ function kvForge(payloadObj) {
         });
 
         await H.test("AD05 Stale view: mtime-preserving write (touch -r) flips content_hash", async () => {
-            const PATH = `${LOOKUPS_DIR}/DR20_whitelist.csv`;
+            const PATH = `${LOOKUPS_DIR}/DR130_priv_escalation.csv`;
             // Snapshot initial hash and mtime
             const before = await H.restCall(superPage, "GET", {
                 action: "check_csv_status",
-                csv_file: "DR20_whitelist.csv",
+                csv_file: "DR130_priv_escalation.csv",
                 app: ""
             });
             const mtimeBefore = before.file_mtime;
@@ -236,7 +236,7 @@ function kvForge(payloadObj) {
             // Poll check_csv_status again
             const after = await H.restCall(superPage, "GET", {
                 action: "check_csv_status",
-                csv_file: "DR20_whitelist.csv",
+                csv_file: "DR130_priv_escalation.csv",
                 app: ""
             });
 
@@ -254,10 +254,10 @@ function kvForge(payloadObj) {
             // Simulate SPL `| outputlookup` editing the CSV directly.
             // Writing via Python in the container is the closest
             // analog in the test harness.
-            const PATH = `${LOOKUPS_DIR}/DR20_whitelist.csv`;
+            const PATH = `${LOOKUPS_DIR}/DR130_priv_escalation.csv`;
             const before = await H.restCall(superPage, "GET", {
                 action: "check_csv_status",
-                csv_file: "DR20_whitelist.csv",
+                csv_file: "DR130_priv_escalation.csv",
                 app: ""
             });
             dockerExecStr(`python3 -c "
@@ -269,7 +269,7 @@ with open('${PATH}', 'a', newline='') as f:
             await new Promise(r => setTimeout(r, 300));
             const after = await H.restCall(superPage, "GET", {
                 action: "check_csv_status",
-                csv_file: "DR20_whitelist.csv",
+                csv_file: "DR130_priv_escalation.csv",
                 app: ""
             });
             if (after.content_hash === before.content_hash) {
@@ -1187,7 +1187,7 @@ print("inject status:", resp.status)
             await new Promise(r => setTimeout(r, 2000));
 
             // Pick a test CSV that exists
-            const testCsv = "DR20_whitelist.csv";
+            const testCsv = "DR130_priv_escalation.csv";
             const csvPath = `${LOOKUPS_DIR}/${testCsv}`;
 
             // Record current content so we can restore it
@@ -1262,8 +1262,8 @@ print("inject status:", resp.status)
             await new Promise(r => setTimeout(r, 3000));
 
             // Clear any prior FIM events for our test rule
-            const testRule = "DR20_malicious_command";
-            const testCsv = "DR20_whitelist.csv";
+            const testRule = "DR130_privilege_escalation";
+            const testCsv = "DR130_priv_escalation.csv";
 
             // Record the current time marker
             const timeMarker = new Date().toISOString().slice(0, 19);
@@ -1331,7 +1331,7 @@ print("inject status:", resp.status)
             await H.restCall(superPage, "POST", { action: "bootstrap_csv_hashes" });
             await new Promise(r => setTimeout(r, 3000));
 
-            const testCsv = "DR20_whitelist.csv";
+            const testCsv = "DR130_priv_escalation.csv";
             const csvPath = `${LOOKUPS_DIR}/${testCsv}`;
 
             // Save original content for restore
@@ -1394,7 +1394,7 @@ print("inject status:", resp.status)
             await H.restCall(superPage, "POST", { action: "bootstrap_csv_hashes" });
 
             // Tamper with a CSV via filesystem (simulating attacker)
-            const testCsv = "DR20_whitelist.csv";
+            const testCsv = "DR130_priv_escalation.csv";
             const csvPath = `${LOOKUPS_DIR}/${testCsv}`;
             const origContent = dockerExec(["cat", csvPath]).stdout;
             dockerExecStr(`echo 'LAUNDERING_TEST,attack,data' >> ${csvPath}`);

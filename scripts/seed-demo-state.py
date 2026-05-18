@@ -94,23 +94,6 @@ def step(label: str, resp: dict) -> None:
 
 banner("Step 1: realistic row additions by analyst1")
 
-# DR45_whitelist_users — add 1 new row (within bulk-add threshold)
-step("DR45 add r.thomas",
-     save_csv("analyst1", "DR45_suspicious_login", "DR45_whitelist_users.csv",
-              [
-                  {"user": "jsmith",      "src_ip": "10.0.1.50",
-                   "Comment": "VPN from home office"},
-                  {"user": "k.patel",     "src_ip": "10.0.2.115",
-                   "Comment": "Remote contractor - approved"},
-                  {"user": "svc_jenkins", "src_ip": "10.5.0.22",
-                   "Comment": "CI/CD pipeline service account"},
-                  {"user": "r.thomas",    "src_ip": "10.0.4.88",
-                   "Comment": "Sales team RDP gateway"},
-              ],
-              "Add sales team RDP gateway whitelist"))
-
-time.sleep(1)
-
 # DR55_brute_force_users — edit one threshold value
 step("DR55 increase threshold",
      save_csv("analyst1", "DR55_brute_force_login", "DR55_brute_force_users.csv",
@@ -141,19 +124,20 @@ step("DR55 increase threshold",
 
 banner("Step 2: pending approval requests")
 
-# 2a. Submit a CSV removal request (always trips approval gate).
+# 2a. Submit a column removal request (will be approved in Step 3).
 # All fields are ASCII-only — no em-dashes / curly quotes / etc.
-step("submit_approval remove_csv DR610",
+step("submit_approval column_removal DR55 auth_method",
      submit_approval("analyst1",
-                     "remove_csv",
-                     detection_rule="DR610_vpn_anomaly",
-                     csv_file="DR610_vpn_anomaly.csv",
+                     "column_removal",
+                     detection_rule="DR55_brute_force_login",
+                     csv_file="DR55_brute_force_users.csv",
                      app_context="wl_manager",
-                     comment="Rule retired - vendor switched VPN provider"))
+                     column_name="auth_method",
+                     comment="Field deprecated - moving to centralized auth catalog"))
 
 time.sleep(1)
 
-# 2b. Submit a column removal request
+# 2b. Submit a column removal request (will be rejected in Step 3).
 step("submit_approval column_removal DR130 ticket_id",
      submit_approval("analyst1",
                      "column_removal",
@@ -165,12 +149,15 @@ step("submit_approval column_removal DR130 ticket_id",
 
 time.sleep(1)
 
-# 2c. Submit a rule deletion
-step("submit_approval remove_rule DR640",
+# 2c. Submit a column removal request (will stay pending after Step 3).
+step("submit_approval column_removal DR55 src_host",
      submit_approval("analyst1",
-                     "remove_rule",
-                     detection_rule="DR640_service_account_logon",
-                     comment="Replaced by DR_SA_LOGON_v2 (planned)"))
+                     "column_removal",
+                     detection_rule="DR55_brute_force_login",
+                     csv_file="DR55_brute_force_src.csv",
+                     app_context="wl_manager",
+                     column_name="src_host",
+                     comment="Hostname column redundant - src_ip already canonical"))
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -194,7 +181,7 @@ if len(pending) >= 1:
              "action": "process_approval",
              "request_id": rid,
              "decision": "approve",
-             "admin_comment": "Approved - vendor change confirmed"}))
+             "admin_comment": "Approved - auth catalog migration scheduled"}))
     time.sleep(0.5)
 
 if len(pending) >= 2:

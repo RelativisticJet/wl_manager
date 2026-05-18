@@ -125,10 +125,10 @@ def phase1(page):
     go_wlm(page)
 
     # 1.1 Select rule
-    if select_rule(page, "DR102_priv_escalation"):
-        ok(acct, "Select", "Selected DR102_priv_escalation")
+    if select_rule(page, "DR130_privilege_escalation"):
+        ok(acct, "Select", "Selected DR130_privilege_escalation")
     else:
-        bug(acct, "Select", "Failed to select DR102"); return
+        bug(acct, "Select", "Failed to select DR130"); return
 
     r0 = row_count(page)
     ok(acct, "View", f"Table has {r0} rows")
@@ -150,7 +150,7 @@ def phase1(page):
 
     # 1.4 Verify persistence
     go_wlm(page)
-    select_rule(page, "DR102_priv_escalation")
+    select_rule(page, "DR130_privilege_escalation")
     r2 = row_count(page)
     if r2 == r1:
         ok(acct, "Persist", f"Row persisted after reload ({r2} rows)")
@@ -164,7 +164,7 @@ def phase1(page):
 
     # 1.6 Verify edit persisted
     go_wlm(page)
-    select_rule(page, "DR102_priv_escalation")
+    select_rule(page, "DR130_privilege_escalation")
     new_val = page.locator("#csv-table-container table tbody tr").first.locator("textarea.wl-input").first.input_value()
     if new_val == "E2E-EDITED-VAL":
         ok(acct, "Edit Persist", f"Edit persisted: {new_val}")
@@ -220,8 +220,8 @@ def phase1(page):
     ok(acct, "Discard", f"Discarded changes ({r_discard} rows)")
 
     # 1.10 Switch rule
-    if select_rule(page, "DR310_impossible_travel"):
-        ok(acct, "Switch Rule", f"Switched to DR310 ({row_count(page)} rows)")
+    if select_rule(page, "DR55_brute_force_login"):
+        ok(acct, "Switch Rule", f"Switched to DR55 ({row_count(page)} rows)")
 
     screenshot(page, "phase1")
 

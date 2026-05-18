@@ -168,7 +168,7 @@ READ_PROBES = [
     # Parameterized read — uses a CSV that should exist in the
     # demo state. If demo state changes, this may need updating.
     ("get_csv_content",      "superadmin1",
-     "&csv_file=DR102_whitelist.csv"),
+     "&csv_file=DR130_priv_escalation.csv"),
     # Run a few as analyst1 too — different code path (RBAC
     # branch + role-filtered output).
     ("get_rules",            "analyst1",    ""),
@@ -216,7 +216,7 @@ WRITE_PROBES = [
      "superadmin1"),
     # save_col_widths — KV write, no audit
     ("save_col_widths",
-     {"csv_file": "DR102_whitelist.csv", "widths": {"c1": 100}},
+     {"csv_file": "DR130_priv_escalation.csv", "widths": {"c1": 100}},
      "superadmin1"),
     # mark_notifications_read — KV write
     ("mark_notifications_read",
@@ -226,7 +226,7 @@ WRITE_PROBES = [
     # parses payload
     ("check_approval_gate",
      {"action_type": "save_csv", "edited_count": 1, "csv_file":
-      "DR102_whitelist.csv", "detection_rule": "DR102"},
+      "DR130_priv_escalation.csv", "detection_rule": "DR130_privilege_escalation"},
      "analyst1"),
 ]
 
@@ -329,8 +329,8 @@ class TestApprovalFlowLatency:
         # require valid CSV state mutation).
         submit_payload = {
             "action_type": "column_removal",
-            "csv_file": "DR102_whitelist.csv",
-            "detection_rule": "DR102",
+            "csv_file": "DR130_priv_escalation.csv",
+            "detection_rule": "DR130_privilege_escalation",
             "comment": "perf smoke",
             "pending_highlight": {
                 "type": "column",

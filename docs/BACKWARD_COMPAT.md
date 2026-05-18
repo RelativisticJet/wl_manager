@@ -65,13 +65,13 @@ The v3.0 modular rewrite maintains full compatibility with:
 **Manifest structure:**
 ```json
 {
-  "csv_file": "DR102_whitelist.csv",
+  "csv_file": "DR130_priv_escalation.csv",
   "current_version": "20260331_203045",
   "versions": {
     "20260331_203045": {
       "timestamp": "2026-03-31T20:30:45Z",
       "display": "31-03-2026 20:30:45",
-      "filename": "DR102_whitelist_20260331_203045.csv",
+      "filename": "DR130_priv_escalation_20260331_203045.csv",
       "analyst": "admin",
       "action": "save",
       "row_count": 42,
@@ -105,7 +105,7 @@ The v3.0 modular rewrite maintains full compatibility with:
   "timestamp": 1677696645,
   "analyst": "jsmith",
   "action_type": "save_csv",
-  "csv_file": "DR102_whitelist.csv",
+  "csv_file": "DR130_priv_escalation.csv",
   "detection_rule": "Suspicious Login",
   "reason": "Updated whitelist for trusted partners",
   "payload": {}

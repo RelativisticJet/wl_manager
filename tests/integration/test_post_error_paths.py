@@ -176,7 +176,7 @@ class TestSaveCsvErrorPaths:
     def test_missing_detection_rule_returns_error(
             self, container_state, container_curl):
         code, body = _post_action(container_curl, "save_csv", {
-            "csv_file": "DR102_whitelist.csv",
+            "csv_file": "DR130_priv_escalation.csv",
             "app_context": "wl_manager",
             "rows": [],
             # detection_rule missing
@@ -188,8 +188,8 @@ class TestSaveCsvErrorPaths:
         """ASCII enforcement on the analyst's comment (the
         free-form reason that flows into the audit trail)."""
         code, body = _post_action(container_curl, "save_csv", {
-            "csv_file": "DR102_whitelist.csv",
-            "detection_rule": "DR102_whitelist",
+            "csv_file": "DR130_priv_escalation.csv",
+            "detection_rule": "DR130_privilege_escalation",
             "app_context": "wl_manager",
             "rows": [],
             "comment": "Reason with non-ASCII: 测试",
@@ -201,8 +201,8 @@ class TestSaveCsvErrorPaths:
         """app_context is a required validation gate — bad values
         must be rejected before any filesystem operations."""
         code, body = _post_action(container_curl, "save_csv", {
-            "csv_file": "DR102_whitelist.csv",
-            "detection_rule": "DR102_whitelist",
+            "csv_file": "DR130_priv_escalation.csv",
+            "detection_rule": "DR130_privilege_escalation",
             "app_context": "../malicious",  # path-traversal style
             "rows": [],
         })
@@ -231,7 +231,7 @@ class TestSaveColWidthsErrorPaths:
             self, container_state, container_curl):
         code, body = _post_action(
             container_curl, "save_col_widths", {
-                "csv_file": "DR102_whitelist.csv",
+                "csv_file": "DR130_priv_escalation.csv",
                 "app_context": "../bad",
                 "col_widths": {"user": 200},
             })

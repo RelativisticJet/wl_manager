@@ -62,7 +62,7 @@ class TestReadVersionManifest:
 
     def test_read_version_manifest_valid_json(self, tmp_path):
         """Read valid manifest, verify returns dict with correct structure."""
-        csv_path = os.path.join(str(tmp_path), "DR102_whitelist.csv")
+        csv_path = os.path.join(str(tmp_path), "DR130_priv_escalation.csv")
         os.makedirs(get_versions_dir(csv_path), exist_ok=True)
 
         manifest = {
@@ -70,7 +70,7 @@ class TestReadVersionManifest:
                 {
                     "timestamp": "2026-03-31T20:30:45Z",
                     "display": "31-03-2026 20:30:45",
-                    "filename": "DR102_whitelist_20260331_203045.csv",
+                    "filename": "DR130_priv_escalation_20260331_203045.csv",
                     "analyst": "admin",
                     "action": "save",
                     "row_count": 42,
@@ -79,7 +79,7 @@ class TestReadVersionManifest:
             ]
         }
 
-        manifest_path = os.path.join(get_versions_dir(csv_path), "DR102_whitelist_versions.json")
+        manifest_path = os.path.join(get_versions_dir(csv_path), "DR130_priv_escalation_versions.json")
         with open(manifest_path, "w") as f:
             json.dump(manifest, f)
 
@@ -89,7 +89,7 @@ class TestReadVersionManifest:
 
     def test_read_version_manifest_missing_file(self, tmp_path):
         """File missing, verify returns empty dict and empty error."""
-        csv_path = os.path.join(str(tmp_path), "DR102_whitelist.csv")
+        csv_path = os.path.join(str(tmp_path), "DR130_priv_escalation.csv")
         os.makedirs(get_versions_dir(csv_path), exist_ok=True)
 
         result, error = read_version_manifest(csv_path)
@@ -98,10 +98,10 @@ class TestReadVersionManifest:
 
     def test_read_version_manifest_invalid_json(self, tmp_path):
         """Malformed JSON, verify returns empty dict and error."""
-        csv_path = os.path.join(str(tmp_path), "DR102_whitelist.csv")
+        csv_path = os.path.join(str(tmp_path), "DR130_priv_escalation.csv")
         os.makedirs(get_versions_dir(csv_path), exist_ok=True)
 
-        manifest_path = os.path.join(get_versions_dir(csv_path), "DR102_whitelist_versions.json")
+        manifest_path = os.path.join(get_versions_dir(csv_path), "DR130_priv_escalation_versions.json")
         with open(manifest_path, "w") as f:
             f.write("{invalid json")
 
@@ -121,7 +121,7 @@ class TestReadVersionManifest:
         rules — the revert path was crashing on those rules
         before this fix.
         """
-        csv_path = os.path.join(str(tmp_path), "DR102_whitelist.csv")
+        csv_path = os.path.join(str(tmp_path), "DR130_priv_escalation.csv")
         os.makedirs(get_versions_dir(csv_path), exist_ok=True)
 
         # Legacy bare-list format
@@ -129,7 +129,7 @@ class TestReadVersionManifest:
             {
                 "timestamp": "2026-03-28T22:58:08Z",
                 "display": "28-03-2026 22:58:08",
-                "filename": "DR102_whitelist_20260328_225808.csv",
+                "filename": "DR130_priv_escalation_20260328_225808.csv",
                 "analyst": "system",
                 "action": "original",
                 "row_count": 5,
@@ -138,7 +138,7 @@ class TestReadVersionManifest:
             {
                 "timestamp": "2026-03-29T02:22:36Z",
                 "display": "29-03-2026 02:22:36",
-                "filename": "DR102_whitelist_20260329_022236.csv",
+                "filename": "DR130_priv_escalation_20260329_022236.csv",
                 "analyst": "analyst2",
                 "action": "save",
                 "row_count": 4,
@@ -147,7 +147,7 @@ class TestReadVersionManifest:
         ]
         manifest_path = os.path.join(
             get_versions_dir(csv_path),
-            "DR102_whitelist_versions.json")
+            "DR130_priv_escalation_versions.json")
         with open(manifest_path, "w") as f:
             json.dump(legacy_manifest, f)
 
@@ -168,12 +168,12 @@ class TestReadVersionManifest:
         """R2-D5-F1: a manifest that's neither a list nor a dict
         (e.g., a string, number) must error out, not silently
         normalize to garbage."""
-        csv_path = os.path.join(str(tmp_path), "DR102_whitelist.csv")
+        csv_path = os.path.join(str(tmp_path), "DR130_priv_escalation.csv")
         os.makedirs(get_versions_dir(csv_path), exist_ok=True)
 
         manifest_path = os.path.join(
             get_versions_dir(csv_path),
-            "DR102_whitelist_versions.json")
+            "DR130_priv_escalation_versions.json")
         # Pathological: top-level is a string, not list or dict
         with open(manifest_path, "w") as f:
             f.write('"unexpected scalar"')
@@ -189,7 +189,7 @@ class TestWriteVersionManifest:
 
     def test_write_version_manifest_normal(self, tmp_path):
         """Write manifest, verify file created with correct JSON."""
-        csv_path = os.path.join(str(tmp_path), "DR102_whitelist.csv")
+        csv_path = os.path.join(str(tmp_path), "DR130_priv_escalation.csv")
         os.makedirs(get_versions_dir(csv_path), exist_ok=True)
 
         manifest = {
@@ -197,7 +197,7 @@ class TestWriteVersionManifest:
                 {
                     "timestamp": "2026-03-31T20:30:45Z",
                     "display": "31-03-2026 20:30:45",
-                    "filename": "DR102_whitelist_20260331_203045.csv",
+                    "filename": "DR130_priv_escalation_20260331_203045.csv",
                     "analyst": "admin",
                     "action": "save",
                     "row_count": 42,
@@ -211,14 +211,14 @@ class TestWriteVersionManifest:
         assert error == ""
 
         # Verify file contents
-        manifest_path = os.path.join(get_versions_dir(csv_path), "DR102_whitelist_versions.json")
+        manifest_path = os.path.join(get_versions_dir(csv_path), "DR130_priv_escalation_versions.json")
         with open(manifest_path, "r") as f:
             loaded = json.load(f)
         assert loaded == manifest
 
     def test_write_version_manifest_overwrite(self, tmp_path):
         """Write manifest twice, verify second write overwrites."""
-        csv_path = os.path.join(str(tmp_path), "DR102_whitelist.csv")
+        csv_path = os.path.join(str(tmp_path), "DR130_priv_escalation.csv")
         os.makedirs(get_versions_dir(csv_path), exist_ok=True)
 
         manifest1 = {"versions": [{"filename": "v1.csv"}]}
@@ -239,7 +239,7 @@ class TestSnapshotVersion:
     def test_snapshot_version_creates_copy(self, tmp_path):
         """Snapshot a CSV, verify timestamped copy created in _versions/."""
         # Create test CSV
-        csv_path = os.path.join(str(tmp_path), "DR102_whitelist.csv")
+        csv_path = os.path.join(str(tmp_path), "DR130_priv_escalation.csv")
         with open(csv_path, "w") as f:
             f.write("user,ip\njsmith,10.0.0.1\n")
 
@@ -249,13 +249,13 @@ class TestSnapshotVersion:
         assert timestamp_id == "20260331_203045"
 
         versions_dir = get_versions_dir(csv_path)
-        snapshot_file = os.path.join(versions_dir, f"DR102_whitelist_{timestamp_id}.csv")
+        snapshot_file = os.path.join(versions_dir, f"DR130_priv_escalation_{timestamp_id}.csv")
         assert os.path.isfile(snapshot_file)
 
     @freeze_time("2026-03-31 20:30:45")
     def test_snapshot_version_updates_manifest(self, tmp_path):
         """Snapshot, verify manifest updated with version entry."""
-        csv_path = os.path.join(str(tmp_path), "DR102_whitelist.csv")
+        csv_path = os.path.join(str(tmp_path), "DR130_priv_escalation.csv")
         with open(csv_path, "w") as f:
             f.write("user,ip\njsmith,10.0.0.1\n")
 
@@ -276,7 +276,7 @@ class TestSnapshotVersion:
         """Create MAX_VERSIONS+1 snapshots, verify only MAX_VERSIONS kept."""
         from wl_versions import MAX_VERSIONS
 
-        csv_path = os.path.join(str(tmp_path), "DR102_whitelist.csv")
+        csv_path = os.path.join(str(tmp_path), "DR130_priv_escalation.csv")
         with open(csv_path, "w") as f:
             f.write("user,ip\njsmith,10.0.0.1\n")
 
@@ -303,7 +303,7 @@ class TestGetVersionsList:
 
     def test_get_versions_list_empty(self, tmp_path):
         """Empty manifest, verify returns empty list."""
-        csv_path = os.path.join(str(tmp_path), "DR102_whitelist.csv")
+        csv_path = os.path.join(str(tmp_path), "DR130_priv_escalation.csv")
         os.makedirs(get_versions_dir(csv_path), exist_ok=True)
 
         result, error = get_versions_list(csv_path)
@@ -312,7 +312,7 @@ class TestGetVersionsList:
 
     def test_get_versions_list_multiple_versions(self, tmp_path):
         """Multiple snapshots, verify sorted newest-first with display format."""
-        csv_path = os.path.join(str(tmp_path), "DR102_whitelist.csv")
+        csv_path = os.path.join(str(tmp_path), "DR130_priv_escalation.csv")
         os.makedirs(get_versions_dir(csv_path), exist_ok=True)
 
         manifest = {
@@ -320,7 +320,7 @@ class TestGetVersionsList:
                 {
                     "timestamp": "2026-03-31T20:30:00Z",
                     "display": "31-03-2026 20:30:00",
-                    "filename": "DR102_whitelist_20260331_203000.csv",
+                    "filename": "DR130_priv_escalation_20260331_203000.csv",
                     "analyst": "admin",
                     "action": "save",
                     "row_count": 40,
@@ -329,7 +329,7 @@ class TestGetVersionsList:
                 {
                     "timestamp": "2026-03-31T20:31:00Z",
                     "display": "31-03-2026 20:31:00",
-                    "filename": "DR102_whitelist_20260331_203100.csv",
+                    "filename": "DR130_priv_escalation_20260331_203100.csv",
                     "analyst": "analyst1",
                     "action": "save",
                     "row_count": 42,
@@ -338,7 +338,7 @@ class TestGetVersionsList:
             ]
         }
 
-        manifest_path = os.path.join(get_versions_dir(csv_path), "DR102_whitelist_versions.json")
+        manifest_path = os.path.join(get_versions_dir(csv_path), "DR130_priv_escalation_versions.json")
         with open(manifest_path, "w") as f:
             json.dump(manifest, f)
 
@@ -357,7 +357,7 @@ class TestGetVersionsList:
 
     def test_get_versions_list_missing_manifest(self, tmp_path):
         """No manifest file, verify returns empty list."""
-        csv_path = os.path.join(str(tmp_path), "DR102_whitelist.csv")
+        csv_path = os.path.join(str(tmp_path), "DR130_priv_escalation.csv")
         os.makedirs(get_versions_dir(csv_path), exist_ok=True)
 
         result, error = get_versions_list(csv_path)
@@ -371,7 +371,7 @@ class TestSnapshotVersionIntegration:
     @freeze_time("2026-03-31 20:30:45")
     def test_snapshot_and_retrieve(self, tmp_path):
         """Full cycle: create snapshot, read manifest, get versions list."""
-        csv_path = os.path.join(str(tmp_path), "DR102_whitelist.csv")
+        csv_path = os.path.join(str(tmp_path), "DR130_priv_escalation.csv")
         with open(csv_path, "w") as f:
             f.write("user,ip\njsmith,10.0.0.1\njdoe,10.0.0.2\n")
 
@@ -567,7 +567,7 @@ class TestVersionIdExtraction:
 
     def test_get_versions_list_extracts_version_id(self, tmp_path):
         """Verify version_id correctly extracted from filename."""
-        csv_path = os.path.join(str(tmp_path), "DR102_whitelist.csv")
+        csv_path = os.path.join(str(tmp_path), "DR130_priv_escalation.csv")
         os.makedirs(get_versions_dir(csv_path), exist_ok=True)
 
         manifest = {
@@ -575,7 +575,7 @@ class TestVersionIdExtraction:
                 {
                     "timestamp": "2026-03-31T20:30:45Z",
                     "display": "31-03-2026 20:30:45",
-                    "filename": "DR102_whitelist_20260331_203045.csv",
+                    "filename": "DR130_priv_escalation_20260331_203045.csv",
                     "analyst": "admin",
                     "action": "save",
                     "row_count": 42,
@@ -584,7 +584,7 @@ class TestVersionIdExtraction:
             ]
         }
 
-        manifest_path = os.path.join(get_versions_dir(csv_path), "DR102_whitelist_versions.json")
+        manifest_path = os.path.join(get_versions_dir(csv_path), "DR130_priv_escalation_versions.json")
         with open(manifest_path, "w") as f:
             json.dump(manifest, f)
 
