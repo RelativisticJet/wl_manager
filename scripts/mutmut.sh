@@ -148,7 +148,12 @@ derive_test_files_for() {
             return 1
             ;;
         bin/wl_validation.py)
-            echo "tests/unit/test_validation.py tests/unit/test_ascii_validation.py tests/unit/test_validator_fuzz.py"
+            # test_frontend_backend_parity.py also exercises wl_validation
+            # (imports is_safe_filename, validate_ascii_text, is_ascii_name)
+            # to detect JS/Python ASCII-regex drift. Included here so
+            # mutations to the Python validators get cross-checked against
+            # the frontend regex source as well.
+            echo "tests/unit/test_validation.py tests/unit/test_ascii_validation.py tests/unit/test_validator_fuzz.py tests/unit/test_frontend_backend_parity.py"
             ;;
         bin/wl_csv.py)
             echo "tests/unit/test_csv.py tests/unit/test_diff_fuzz.py"
@@ -169,7 +174,10 @@ derive_test_files_for() {
             echo "tests/unit/test_limits.py"
             ;;
         bin/wl_constants.py)
-            echo "tests/unit/test_constants.py"
+            # Parity test imports _SAFE_COLNAME_RE from wl_constants; mutating
+            # the regex source in wl_constants must trigger this test so JS/
+            # Python drift is caught.
+            echo "tests/unit/test_constants.py tests/unit/test_frontend_backend_parity.py"
             ;;
         bin/wl_filelock.py)
             echo "tests/unit/test_filelock.py"
@@ -356,6 +364,7 @@ TEST_RUNNER_FILES is not):
   bin/wl_validation.py    tests/unit/test_validation.py
                           tests/unit/test_ascii_validation.py
                           tests/unit/test_validator_fuzz.py
+                          tests/unit/test_frontend_backend_parity.py
   bin/wl_csv.py           tests/unit/test_csv.py
                           tests/unit/test_diff_fuzz.py
   bin/wl_audit.py         tests/unit/test_audit.py
@@ -367,6 +376,7 @@ TEST_RUNNER_FILES is not):
   bin/wl_versions.py      tests/unit/test_versions.py
   bin/wl_limits.py        tests/unit/test_limits.py
   bin/wl_constants.py     tests/unit/test_constants.py
+                          tests/unit/test_frontend_backend_parity.py
   bin/wl_filelock.py      tests/unit/test_filelock.py
   bin/wl_fim.py           tests/unit/test_fim_append_only.py
   bin/wl_fim_common.py    tests/unit/test_fim_append_only.py

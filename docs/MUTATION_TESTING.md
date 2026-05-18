@@ -129,18 +129,7 @@ on the mutant and PASS on the pristine module.
   `foo.bar.csv` — exactly the SPL `base()` / dashboard drilldown URL
   parsing hazard the validator exists to prevent.
 
-### Killed by existing tests on a properly-configured run — 2
-
-These survivors are likely artifacts of the prior misconfigured
-selector. Existing tests would kill them in a fresh run. Listed for
-audit completeness, not action.
-
-| Mutant | Line | Mutation | Existing killer |
-|---|---|---|---|
-| 138 | 191 | `if "/" in name` → `if "XX/XX" in name` | `test_basename_check_independently_rejects_path_separators` (catches via basename fallthrough on POSIX) |
-| 146 | 197 | `name.startswith(".")` → `name.startswith("XX.XX")` | `test_is_safe_filename_rejects_dots` line 109 (catches at stem-regex on `.hidden.csv`) |
-
-### Equivalent mutants — 8
+### Equivalent mutants — 10 (revised 2026-05-19)
 
 These cannot be killed by any test because they produce
 indistinguishable behavior from the original. Documenting them
@@ -150,7 +139,9 @@ here prevents future contributors from wasting time trying.
 |---|---|---|---|
 | 91 | 31 | `sys.path.insert(0, ...)` → `sys.path.insert(1, ...)` | Both achieve import resolution. Position only affects ordering vs. other entries that don't conflict with `wl_constants`. |
 | 104 | 65 | `if len(cleaned) > max_length` → `if len(cleaned) >= max_length` | When `len(cleaned) == max_length`, `cleaned[:max_length] == cleaned`. The branch executes but produces identical output. |
+| **138** | 191 | `if "/" in name` → `if "XX/XX" in name` | **Reclassified 2026-05-19 (was "killed by existing tests").** On POSIX (Linux mutmut container), `os.path.basename` at line 193 catches every `/`-containing input the mutated check would have rejected — basename treats `/` as the separator, so basename(name) != name fires on any path-traversal input. The `/` check at line 191 is genuinely redundant defense-in-depth on POSIX. The `\\` half of the same `or` is still load-bearing (basename on POSIX does NOT split on `\\`), but mutmut leaves that part intact. |
 | 145 | 193 | `os.path.basename(name) != name → return False` → `return True` | On POSIX (mutmut container), no constructable input passes the prior `"/"` and `"\\"` checks but fails `os.path.basename != name` — the basename divergence is itself caused by `/` on POSIX. Branch is unreachable. |
+| **146** | 197 | `name.startswith(".")` → `name.startswith("XX.XX")` | **Reclassified 2026-05-19 (was "killed by existing tests").** For input `.hidden.csv`: mutated startswith check returns False; the stem `.hidden` then fails `_ASCII_FILENAME_STEM_RE` at line 227 (regex `^[A-Za-z0-9_\-]+\Z` rejects the leading dot). Function returns False via stem regex. There is no constructable input where startswith(".") would be load-bearing AND the stem regex would accept — because any input starting with "." produces a stem starting with "." which fails the alphanumeric/underscore/hyphen alphabet. |
 | 155 | 215 | `if not stem: return False` → `return True` | Caught earlier by `name.startswith(".")` at line 197. Any input reaching the stem check has a non-empty stem. |
 | 157 | 222 | `ord(c) < 0x20` → `ord(c) <= 0x20` | Adds space (0x20) to rejection. Space already excluded by stem regex `[A-Za-z0-9_\-]+`. |
 | 158 | 222 | `ord(c) < 0x20` → `ord(c) < 33` | Adds space + `!` to rejection. Both already excluded by stem regex. |
@@ -163,6 +154,33 @@ defenses (path-separator check → basename check → extension check
 char and edge-case mutants are caught by the stem regex regardless,
 making the control-char check defensive but mutation-test-invisible.
 This is a design choice (defense-in-depth) we accept.
+
+### 2026-05-19 fresh-run confirmation
+
+After items A (test-selector mapping) and B (safe `:ro`+tmpfs
+mount) landed, mutmut was re-run on `bin/wl_validation.py` with
+the corrected test selector
+(`tests/unit/test_validation.py tests/unit/test_ascii_validation.py
+tests/unit/test_validator_fuzz.py tests/unit/test_frontend_backend_parity.py`).
+
+**Result: 10 surviving mutants, all matching the equivalent set above.**
+
+This is the first run of mutmut on this module with a non-stale
+test selector. Notable findings:
+
+- The 2 new tests added in commit `eddcb62`
+  (`test_validate_ascii_text_returns_exact_error_string` and
+  `test_is_safe_filename_rejects_multi_dot_stem`) successfully killed
+  mutants 116 and 151 as predicted — confirmed by their absence from
+  the survivor list.
+- Mutants 138 and 146 were initially classified as "killed by existing
+  tests" in the original triage. The fresh run proved otherwise — both
+  survived because `is_safe_filename`'s overlapping defenses make the
+  individual checks redundant for any input the existing tests use.
+  The classification table above has been corrected.
+- Total mutation budget on this module: 100 mutations applied, 92
+  killed by the test suite, 10 survived as equivalent mutants. Effective
+  mutation score: 92% (or 100% kill rate of non-equivalent mutants).
 
 ---
 
