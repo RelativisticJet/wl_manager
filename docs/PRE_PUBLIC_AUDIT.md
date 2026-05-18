@@ -962,7 +962,87 @@ Reviewed via direct read (small screenshots) and via PIL crop-then-read on `03-a
 - The fictional GRC narratives ("SEC-2412" ticket, "vendor switched VPN provider", "Approved - vendor change confirmed") are well-crafted documentation examples; keep them.
 - Screenshots use the `wl_manager_test` container's `superadmin1`/`wladmin1`/`analyst1` synthetic accounts correctly — matches the CLAUDE.md `feedback_use_role_specific_accounts.md` policy.
 
+#### Phase G — Consolidated V2 findings + proposed batch fix (2026-05-18)
 
+**Audit V2 ran 6 phases (A–F) across every tracked directory in the repo (~700+ files total).** Findings registry follows. None reproduce a V1 finding; all are new surface that V1's opportunistic-lens approach missed.
+
+##### V2 findings — single-table summary
+
+| ID | Sev | Title | Location | Phase | Blocking? |
+|---|---|---|---|---|---|
+| F-C3 | HIGH | chaos test asserts pre-existence of CSV F-C2 deleted | `tests/integration/test_chaos_save_csv_chain.py:299-302` | V2 prep | CI-blocker if the `integration-tests.yml` workflow is in scope of the green-check; verify before assuming closed |
+| F-H2 | HIGH | git tag namespace collision (v1.0.0 + v2.0.0 lightweight tags exist) | `git tag -l` | A | Phase 3.8 release-cut blocker (not Phase 3.4 flip) |
+| F-M1 | MEDIUM | `mkdocs.yml` ships in `.spl` payload unnecessarily | repo root + `scripts/package.sh` EXCLUDES list | A | No — quality-of-package only |
+| F-M2 | MEDIUM | `sbom.cdx.json` is stale (claims v2.0.0 / build 627; current is v1.0.0-rc1 / build 660) | `sbom.cdx.json` | A | No — fix before Phase 3.2 cut |
+| F-M3 | MEDIUM | `app.manifest` author identity inconsistency (`RelativisticJet` vs `Oleh Bezsonov`) | `app.manifest` lines `"author":[...]` | A | Splunkbase listing blocker — fix before Phase 4 Splunkbase submit |
+| F-M4 | LOW | `app.manifest` releaseDate predates actual release (`2026-05-17`) | `app.manifest` `releaseDate` field | A | Release-time task |
+| F-M5 | MEDIUM | 7 hardcoded `C:/Users/PC/wl_manager/...` paths in 2 tracked test files | `tests/test_e2e_manual_browser.py:106` + `tests/test_e2e_realworld.py` (×6 lines) | D | No — but breaks every non-maintainer contributor's test runs |
+| F-M6 | MEDIUM | 170 `c:/Users/PC/...` path occurrences across 30 `.planning/` tracked planning docs | `.planning/phases/**/*.md` + `.planning/superpowers/plans/2026-04-05-wave3-entry-point-rewrite.md` | E | No — visibility/branding only |
+| F-L4 | LOW | `test_runner.xml` QUnit dashboards ship in `.spl` | `default/data/ui/views/test_runner.xml` + `appserver/static/test_runner.xml` | C | No |
+| F-L5 | LOW | `appserver/static/tests/` 5 QUnit JS files ship in `.spl` | `appserver/static/tests/test_wl_cp_*.js` (×5) | C | No |
+| F-L6 | LOW | Demo CSVs have realistic-name narratives + one real domain `partnercorp.com` | `lookups/DR310_impossible_travel.csv`, `DR71_data_exfil_users.csv`, `DR630_email_exfiltration.csv`, etc. | C | No — GitHub-public hygiene |
+| F-L7 | LOW | Demo CSVs contain obvious E2E test debris | `lookups/DR102_whitelist.csv:2`, `DR88_whitelist.csv:2-3`, `DR20_whitelist.csv:3-4` | C | No — same |
+| F-L8 | LOW | 6 stale E2E screenshot debris PNGs tracked at `tests/` root (~745 KB) | `tests/e2e_phase*.png` (×5) + `tests/screenshot_debug.png` | D | No |
+| F-L9 | LOW | `scripts/hooks/README.md:80` embeds maintainer's exact path as example | `scripts/hooks/README.md:80` | D | No |
+| F-L10 | LOW | Audit V1 stale claim — `wildleo91@gmail.com` location | `docs/PRE_PUBLIC_AUDIT.md:271-277` | D | No — self-correct |
+| F-L11 | LOW | Doc screenshots coupled to demo CSV content (F-L6/F-L7) | `docs/screenshots/02-inline-editing.png`, `03-audit-trail.png` | F | No — re-capture after curation |
+
+**Totals:** 2 HIGH, 5 MEDIUM, 8 LOW = **15 V2 findings.** 0 CRITICAL.
+
+##### Pre-flip status assessment
+
+A: **Phase 3.4 (private→public flip)** is the most-asked question. Only one finding strictly blocks the flip itself: **none.** F-H2 blocks the v1.0.0-rc1 release cut (Phase 3.8), not the flip. F-C3 blocks CI green (needs verification — was `integration-tests.yml` part of the last green run? grep `.github/workflows/integration-tests.yml` config to confirm whether `test_chaos_save_csv_chain.py` is in its include path).
+
+B: **Customer/contributor visibility.** The findings that actually shape what a first-time GitHub visitor sees:
+
+  - F-M6 (`.planning/`) — biggest cosmetic hit; visible on second-level click
+  - F-L6/F-L7 (demo CSVs) — visible by clicking into `lookups/`
+  - F-M5 (hardcoded paths in tests) — visible to a contributor trying to run the suite
+  - F-L8 (tracked PNGs in `tests/` root) — visible in repo file listing
+
+C: **Splunkbase-publish readiness.** F-M3 (author identity) is the single must-fix-before-Splunkbase finding — every Splunkbase listing renders the `author` field.
+
+##### Proposed batch-fix plan (for user authorization)
+
+Three plausible batching strategies:
+
+1. **Strict ordering — block the flip until everything HIGH/MEDIUM closes.** Land F-C3 (verify CI scope), F-H2 (clean tags), F-M1 through F-M6 (~8 files of edits), defer all LOW to a follow-up. Estimated 1-2 sessions of edit work. Most conservative.
+2. **Fix-everything-visible — close all V2 in one batch before flipping.** Land all 15 in one session: HIGH/MEDIUM as above, plus LOW cleanups (test debris removal, audit-doc self-correct, maintainer-path scrub of `.planning/`). Estimated 2-3 sessions. Most thorough.
+3. **Minimum-viable flip — only close the things that BLOCK the flip itself, ship the rest in v1.0.1.** That means: confirm F-C3 status (CI green or fix), defer F-H2 to Phase 3.8 (it's not in the flip path), leave F-M1–F-M6 for post-flip cleanup. Trust that early adopters won't fixate on `.planning/` paths or demo CSV names. Highest velocity, accepts the cosmetic debt.
+
+I recommend **option 2 (fix-everything-visible)** — none of the V2 fixes are risky, the cosmetic ones are mechanical sed/`git rm`, and the user said "I just don't want anyone to see what they shouldn't" / "Flag every borderline case — better safe than sorry" earlier in this audit. Doing the whole batch under one set of commits matches that disposition. Phase 3.4 flip happens AFTER the batch lands.
+
+##### Per-finding fix recipe (so user can pick subset if they prefer option 3)
+
+| ID | Fix command/edit | Risk |
+|---|---|---|
+| F-C3 | Either move `DR_VERSION_TEST.csv` to a test fixture autocreated in test setup, OR confirm `integration-tests.yml` doesn't include this test (it may be quarantined). 5 min once direction is picked. | Low |
+| F-H2 | `git tag -d v1.0.0 v2.0.0 && git push origin :refs/tags/v1.0.0 :refs/tags/v2.0.0` (after user confirms no fork or CI depends on them — neither does on private repo today). 2 min. | Medium — destructive on remote; verify before doing |
+| F-M1 | Add `mkdocs.yml` to EXCLUDES in `scripts/package.sh`. 1-line edit. | Low |
+| F-M2 | Re-generate via `python scripts/generate_sbom.py` (already exists). 1 min. | Low |
+| F-M3 | Edit `app.manifest` `"author":[{"name":"Oleh Bezsonov", ...}]` to match D5/D17 locked identity. | Low |
+| F-M4 | Update `releaseDate` at Phase 3.2 cut time (not now). | None |
+| F-M5 | Edit 7 lines to use `Path(__file__).parent / f"e2e_{name}.png"`. | Low |
+| F-M6 | Recommended: option (b) bulk sed-replace across `.planning/` — `find .planning -name '*.md' -exec sed -i -e 's\|c:/Users/PC/wl_manager\|${REPO_ROOT}\|g' -e 's\|/c/Users/PC/wl_manager\|${REPO_ROOT}\|g' -e 's\|c:/Users/PC/.claude\|~/.claude\|g' {} +`. Verify post-fix count drops to 0. | Low |
+| F-L4 | Add `default/data/ui/views/test_runner.xml` + `appserver/static/test_runner.xml` to EXCLUDES in `scripts/package.sh`. | Low |
+| F-L5 | Add `appserver/static/tests/` to EXCLUDES in `scripts/package.sh`. | Low |
+| F-L6 | Replace `Carlos Rodriguez`/`David Kim`/`Jose Martinez`-style names with `alice`/`bob`/`carol`; replace `partnercorp.com` with `example.com`. Re-capture screenshots after (F-L11). | Low |
+| F-L7 | Curate each `lookups/DR*.csv` to ~5 realistic synthetic rows; remove `E2E-EDITED-HOST`/`EDITED_AFTER_LAZY_INIT`/`SECOND_EDIT`/`TEST_*` rows. | Low |
+| F-L8 | `git rm tests/e2e_phase*.png tests/screenshot_debug.png` + add `tests/e2e_phase*.png` and `tests/screenshot_debug.png` to `.gitignore`. | Low |
+| F-L9 | Edit `scripts/hooks/README.md:80` to `<your-checkout>/scripts/hooks/...`. | Low |
+| F-L10 | Edit `docs/PRE_PUBLIC_AUDIT.md` "Personal identity" subsection (lines 269-277) to remove inaccurate claim about `wildleo91@gmail.com` location. | Low |
+| F-L11 | After F-L6/F-L7 land, re-run screenshot-capture playbook for `02-inline-editing.png` + `03-audit-trail.png`. | Low |
+
+##### Ready for user decision
+
+The audit-first deliverable is complete. Phase G needs user authorization on:
+
+1. **Which batch strategy** — option 1 (strict-MEDIUM), option 2 (fix-everything, recommended), or option 3 (minimum-viable)?
+2. **For F-M6**, which sub-option — (a) untrack `.planning/`, (b) bulk sed-replace (my recommendation), or (c) leave as-is?
+3. **For F-H2**, authorization to `git tag -d` + `git push :refs/tags/...` on the remote (destructive on a personal/private remote — low risk but explicit yes required)?
+4. **F-C3 status** — please confirm: was `integration-tests.yml` part of the last green CI run, or is the chaos test currently broken on `main`?
+
+Once these four are answered, the batch-fix execution is mechanical and estimated 1-3 commits depending on strategy.
 
 ---
 
