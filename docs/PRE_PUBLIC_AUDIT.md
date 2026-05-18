@@ -44,40 +44,57 @@ Concrete checks performed:
 
 ## Findings
 
-### CRITICAL — fixed in-turn
+### CRITICAL — fixed in-turn AND purged from history per user decision
 
 **F-C1: `.firecrawl/point72-*.md` (3 files) — personal job-search research tracked in repo.**
 
-Files:
+Files (now gone from working tree AND history):
 
 - `.firecrawl/point72-about.md` (404-page scrape, 121 B)
 - `.firecrawl/point72-home.md` (Point72 home-page scrape, 6.2 KB)
 - `.firecrawl/point72-splunk-security-engineer.md` (Point72 job posting, 5.2 KB)
 
-These are page-scrape artifacts from a research session unrelated to
-wl_manager (likely employer-research). On Phase 3.4 public flip they
-would be visible to anyone with the repo URL. Phase 0.10 secret-scan
-did not flag them because they contain no credentials, but the
-outsider-perspective lens immediately surfaces them.
+These were page-scrape artifacts from a research session unrelated to
+wl_manager (likely employer-research). They were accidentally committed
+bundled with an unrelated `chore(04-04)` commit on 2026-04-01
+(original SHA `15a2250`). Phase 0.10 secret-scan did not flag them
+because they contain no credentials, but the outsider-perspective lens
+immediately surfaced them.
 
-**Resolution:** removed in commit landing this audit. Also added
-`.firecrawl/` to `.gitignore` so the directory cannot be re-tracked
-by accident.
+**Resolution (working tree):** removed in commit `2bcbc5e`
+(`docs(release): Phase 3.1 — pre-public audit + in-turn fixes`).
+Added `.firecrawl/` to `.gitignore` so the directory cannot be
+re-tracked by accident.
 
-**Residual risk:** files remain in `git log`/blame history. If the
-user wants them removed from history entirely before the public flip,
-that requires either:
-(a) a `git filter-repo` history rewrite — invalidates any existing
-clones / forks. Acceptable here because the repo is still private and
-has no external collaborators.
-(b) accept the history retains them — they are findable by anyone who
-clones and runs `git log -p`. For 3 page-scrape files of public
-content, the practical privacy cost is low (the content was already
-public on point72.com; the only signal is "the maintainer once
-researched this employer").
+**Resolution (git history):** user explicitly authorized history
+sanitization ("I do not want anyone know or see that I did research
+on Point72 or anything else not related to the project"). Executed
+`git filter-repo --path .firecrawl --invert-paths` 2026-05-18:
 
-**Decision needed from user before Phase 3.4** — see
-"Open Questions" below.
+- All 498 commits rewritten.
+- Original `15a2250` (which bundled .firecrawl additions with a
+  legitimate `wl_pipelines.py` removal) reshaped to `a92af77` —
+  same commit message, same legitimate changes, .firecrawl lines
+  removed.
+- Original `2bcbc5e` (this audit's commit) reshaped to `6e3efbe`
+  — same effect, just no historical trace of .firecrawl ever
+  existing.
+- Force-pushed to `origin/main` with `--force-with-lease`. Repo
+  is private with zero external clones at time of rewrite, so no
+  collaborator history was invalidated.
+
+Tag `pre-firecrawl-purge-backup-2026-05-18` was created locally
+before the rewrite but filter-repo rewrote it too (it now points at
+the post-rewrite HEAD `6e3efbe`). Pushed to origin as a date-marker
+of the rewrite, not as a recoverable backup.
+
+**Lesson** (for future contributor handoff if a similar situation
+arises): `git filter-repo` rewrites annotated tags inside the repo
+along with commits. To preserve an actual pre-rewrite backup,
+`git clone . ../backup` BEFORE running filter-repo — the clone
+preserves the unmodified history independently. The protection that
+actually worked here was that GitHub's `origin/main` retained the
+pre-rewrite state until the explicit force-push.
 
 ---
 
@@ -137,11 +154,11 @@ early session. Adds nothing; confuses an outsider reading the tree
 
 ---
 
-### LOW — flagged for user decision (not auto-fixed)
+### LOW — resolved post-audit per user decision
 
-**F-L2: `docs/superpowers/` — internal planning docs visible to outsiders.**
+**F-L2: `docs/superpowers/` → `.planning/superpowers/` (RESOLVED 2026-05-18).**
 
-Two markdown files under `docs/superpowers/{plans,specs}/` document
+Two markdown files under `docs/superpowers/{plans,specs}/` documented
 the Wave-3 entry-point-rewrite plan written for an "agentic worker"
 audience, with references to internal tooling (`superpowers:subagent-driven-development`,
 `superpowers:executing-plans`) and per-step checkboxes for an
@@ -149,45 +166,24 @@ implementing agent. The content is not embarrassing, but the *framing*
 (internal-tooling jargon, agentic-worker reader assumption) is
 confusing for a human contributor reading the repo for the first time.
 
-`mkdocs.yml` already excludes `superpowers/plans/*.md` and
-`superpowers/specs/*.md` from the MkDocs site nav, so they don't
-appear on the hosted docs. But they remain visible via GitHub's
-file-tree browse after the public flip.
+**Resolution (user decision)**: moved to `.planning/superpowers/` to
+colocate with other internal-planning artifacts that are still tracked
+but contextualized as planning history (the `.planning/` directory is
+the conventional home for such material in this repo). The in-file
+Spec pointer was updated to the new path; `mkdocs.yml not_in_nav` glob
+entries removed since the files are no longer under `docs/`.
 
-**Options:**
-
-a. **Leave as-is** — transparency about development methodology;
-   contributors who care can read them.
-b. **Move to `.planning/superpowers/`** — colocates with other
-   internal-planning artifacts that are still tracked but
-   contextualized as planning history.
-c. **Remove entirely** — they served their purpose; the Wave-3
-   refactor is shipped and documented in CHANGELOG.
-
-Recommendation: (b) — preserves the planning history (which is
-genuinely valuable as an example of how the codebase was modularized)
-while making clear that it's internal-process material, not
-end-user documentation.
-
-**Needs user decision before Phase 3.4.**
-
-**F-L3: `.mcp.json.example` contains Windows-specific paths.**
+**F-L3: `.mcp.json.example` contains Windows-specific paths — deferred to v1.1 per user decision.**
 
 The committed example points at `C:\Users\PC\AppData\Local\Microsoft\WindowsApps\python.exe`
 and `C:/Users/PC/wl_manager` as MCP server paths. A Mac or Linux
 contributor copying this to `.mcp.json` will need to substitute
-those manually.
+those manually. The comments in the file already explain the
+substitution.
 
-**Options:**
-
-a. **Leave as-is** — comments explain the substitution; not
-   load-bearing for public release.
-b. **Genericize to `<path-to-python>` / `<path-to-repo>` placeholders**
-   — slightly cleaner onboarding, more contributor-friendly.
-
-Recommendation: (b), but **NOT** blocking Phase 3.4 — the comments
-in the file already explain that contributors must substitute their
-own paths. Park as a v1.1 polish item.
+**Resolution (user decision)**: defer to v1.1. Not load-bearing for
+public release. Tracked in `docs/PUBLIC_RELEASE_PLAN.md` §10 as a
+v1.1-backlog candidate when the next polish pass happens.
 
 ---
 
@@ -271,34 +267,17 @@ beyond the intentional D15 publisher email.
 
 ---
 
-## Open questions for user
+## Open questions for user — ALL RESOLVED (2026-05-18)
 
-These three items need a decision before Phase 3.4 (`repo private →
-public`) can fire. None block the **Phase 3.2** release-tag cut
-itself — they can be addressed during the Phase 3.3 verification or
-right before 3.4.
+All three items have been decided. Phase 3.1 is closed.
 
-1. **`.firecrawl/point72-*.md` git history retention** (from F-C1).
-   The files are removed from the working tree and gitignored, but
-   they still exist in `git log -p` history. Three options:
-   - **(a)** Accept — repo is still private, no external clones exist
-     yet, the page content was already public on point72.com so the
-     practical privacy cost is low. Phase 3.4 ships with the history
-     intact.
-   - **(b)** History rewrite via `git filter-repo` before Phase 3.4
-     — produces a clean history but invalidates any existing
-     clones/forks (currently zero, so cost is trivial).
-   - **(c)** Same as (b) but coordinated with a force-push to GitHub
-     after Phase 3.4 — more risky, redundant.
-   Recommendation: **(a)** unless the user has a specific reason to
-   sanitize the history (e.g., the page scrapes contain anything
-   they'd rather not be tied to publicly).
-
-2. **`docs/superpowers/` disposition** (from F-L2). Leave, move to
-   `.planning/`, or remove?
-
-3. **`.mcp.json.example` Windows path genericization** (from F-L3).
-   Fix now or defer to v1.1?
+1. **F-C1 history retention** → user picked option (b) "rewrite via
+   `git filter-repo` before Phase 3.4". Executed; force-pushed to
+   `origin/main` 2026-05-18.
+2. **F-L2 `docs/superpowers/` disposition** → user picked "move to
+   `.planning/superpowers/`". Executed.
+3. **F-L3 `.mcp.json.example` Windows-path genericization** → user
+   picked "defer to v1.1". Tracked in `PUBLIC_RELEASE_PLAN.md` §10.
 
 ---
 

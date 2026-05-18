@@ -117,8 +117,9 @@ not_in_nav: |
   RING_FINDINGS.md
   TESTING.md
   TESTING_PROGRESS_2026-04-15.md
-  superpowers/plans/*.md
-  superpowers/specs/*.md
+  # (superpowers/ planning docs moved to .planning/superpowers/ on
+  #  2026-05-18 per Phase 3.1 audit F-L2 — they are now outside docs/
+  #  so MkDocs ignores them automatically.)
 
 extra:
   social:

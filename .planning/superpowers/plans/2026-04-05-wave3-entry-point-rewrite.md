@@ -8,7 +8,7 @@
 
 **Tech Stack:** JavaScript (ES5), Splunk AMD/RequireJS, jQuery, underscore, Docker (Splunk 9.3.1 container)
 
-**Spec:** `docs/superpowers/specs/2026-04-05-wave3-entry-point-rewrite-design.md`
+**Spec:** `.planning/superpowers/specs/2026-04-05-wave3-entry-point-rewrite-design.md` (moved from `docs/superpowers/` to `.planning/superpowers/` 2026-05-18 per Phase 3.1 audit F-L2)
 
 ---
 
