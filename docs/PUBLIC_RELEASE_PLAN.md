@@ -228,7 +228,7 @@ These nice-to-haves were surfaced during the 2026-05-15 gap review alongside G2-
 | # | Task | Acceptance | Est. |
 |---|------|------------|------|
 | 3.1 | Pre-public review — read every file from an outsider's perspective | Walkthrough checklist documented in `docs/<PRE_PUBLIC_AUDIT>.md`. Anything sensitive or unprofessional flagged | 1 day |
-| 3.2 | Cut v1.0.0-rc1 release tag, private | Workflow signs the .spl, all CI green, Sigstore E2E verification per §8 of `docs/RELEASE_CHECKLIST.md` completed (legitimate + tampered artifact verification, Rekor entry confirmed) | 30 min + 1 hr Sigstore E2E |
+| 3.2 | Cut v1.0.0-rc1 release tag, private | Workflow signs the .spl, all CI green. (Sigstore E2E one-shot — §8 of `docs/RELEASE_CHECKLIST.md` — was completed on throwaway tag `v0.0.0-sigstore-test` on 2026-05-13; this row no longer carries the §8 dependency. Also runs the §3.5 Version-Tag Consistency pre-flight before `git tag`.) | 30 min |
 | 3.3 | Internal verification of rc1 .spl: install on clean Splunk container, run full E2E suite, manually verify major UI flows | Full install + uninstall + reinstall works clean | 4 hr |
 | 3.4 | **Flip repo private → public** (one-way without history rewrite) | GitHub repo visibility = public | 5 min |
 | 3.5 | Community pre-announcement on Splunk dev Slack, Splunk Lantern, dev.splunk.com forums | Posts published, links shared | 1-2 hr |
