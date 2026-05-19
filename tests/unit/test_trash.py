@@ -629,7 +629,19 @@ class TestRestoreFromTrashPipeline:
 class TestRestoreCsvFromTrash:
     """Tests for restore_csv_from_trash (covers lines 469-509 +
     _restore_mapping_for_csv helper, currently the biggest coverage gap
-    in wl_trash.py)."""
+    in wl_trash.py).
+
+    ⚠ Windows test-isolation note:
+    The `MAPPING_FILE` constant from `wl_constants` is
+    `/opt/splunk/etc/apps/wl_manager/lookups/rule_csv_map.csv`. On
+    Windows that resolves to `C:/opt/splunk/...` (leading-slash =
+    current drive root), an artifact directory that persists between
+    test runs. Tests in this class MUST `patch("wl_trash.MAPPING_FILE",
+    str(<tmp_path mapping file>))` in addition to `OWN_LOOKUPS`,
+    otherwise state leaks into `C:/opt/splunk/...` and causes
+    flake-style "rule already exists" failures on re-run. See
+    commit `df82528` for the discovery context.
+    """
 
     def _make_trash_item(self, tmp_path, csv_name="test.csv",
                         app_ctx="", rule_name=""):
@@ -731,7 +743,20 @@ class TestRestoreCsvFromTrash:
 
 @pytest.mark.unit
 class TestRestoreRuleFromTrash:
-    """Tests for restore_rule_from_trash (covers lines 575-647)."""
+    """Tests for restore_rule_from_trash (covers lines 575-647).
+
+    ⚠ Windows test-isolation note (same constraint as
+    TestRestoreCsvFromTrash above):
+    `wl_trash.MAPPING_FILE` resolves to `C:/opt/splunk/...` on Windows
+    because the constant is a leading-slash POSIX path that Python
+    interprets as relative to the current drive root. Every test in
+    this class MUST `patch("wl_trash.MAPPING_FILE", ...)` to a
+    tmp_path file in addition to `patch("wl_trash.OWN_LOOKUPS", ...)`,
+    otherwise mapping writes leak into `C:/opt/splunk/...` and cause
+    flake-style "rule already exists" / cross-test contamination
+    failures on re-run. See commit `df82528` for the discovery
+    context and the matching warning on TestRestoreCsvFromTrash.
+    """
 
     def _make_rule_trash_item(self, tmp_path, rule_name="DR_restored",
                               csv_names=("DR_a.csv", "DR_b.csv")):
