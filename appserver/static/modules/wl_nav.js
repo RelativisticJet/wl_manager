@@ -139,13 +139,25 @@ define([
         );
 
         $banner.on("click", ".wl-empty-install-cta", function () {
-            if (_actions && typeof _actions.showNewRuleModal === "function") {
-                _actions.showNewRuleModal();
-                // Hide banner for this session — admin took action. Non-sticky
-                // (no localStorage flag): if the modal is cancelled and state
-                // is still empty, the banner reappears on the next page load.
-                $banner.remove();
+            if (!_actions || typeof _actions.showNewRuleModal !== "function") {
+                return;
             }
+            try {
+                _actions.showNewRuleModal();
+            } catch (e) {
+                // Modal failed to open — keep banner visible so admin can
+                // retry. Without this branch, both onboarding paths would
+                // disappear silently.
+                showMsg(
+                    "Could not open the new-rule dialog. Reload the page to retry.",
+                    "error"
+                );
+                return;
+            }
+            // Modal opened — remove banner for this session. Non-sticky
+            // (no localStorage flag): if the modal is cancelled and state
+            // is still empty, the banner reappears on the next page load.
+            $banner.remove();
         });
 
         function dismiss() {
