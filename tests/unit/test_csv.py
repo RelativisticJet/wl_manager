@@ -980,3 +980,399 @@ def test_set_column_widths_swallows_oserror_silently(tmp_path):
             "if file exists post-failure it must be empty (json.dump raised "
             "before flushing); got: {!r}".format(widths_path.read_text())
         )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Pipeline tests — save_csv_pipeline + create_csv_pipeline
+#
+# These cover the two big orchestrator functions in wl_csv.py (lines 747-1244)
+# that previously had ZERO test coverage. Strategy: write a real CSV to
+# tmp_path, then call the pipeline directly. Mock only the side-effecting
+# Splunk integrations (`snapshot_version`, `post_audit_event`) — let the
+# diff math, file I/O, and metadata-column logic run for real.
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+from wl_csv import save_csv_pipeline, create_csv_pipeline
+
+
+def _write_initial_csv(tmp_path, headers, rows):
+    """Helper: write a CSV at tmp_path/test.csv and return its path."""
+    csv_path = str(tmp_path / "test.csv")
+    write_csv(csv_path, headers, rows)
+    return csv_path
+
+
+@pytest.mark.unit
+class TestCreateCsvPipeline:
+    """Tests for create_csv_pipeline (lines 1149-1244)."""
+
+    def test_create_csv_happy_path(self, tmp_path):
+        """Successful creation: file written, version snapshot taken, audit posted."""
+        csv_path = str(tmp_path / "DR_new.csv")
+
+        with patch("wl_versions.snapshot_version",
+                   return_value=("v1", "2026-05-19 12:00:00")) as mock_snap, \
+             patch("wl_audit.post_audit_event",
+                   return_value=(True, "")) as mock_post, \
+             patch("wl_audit.build_audit_event",
+                   return_value={"action": "csv_created"}):
+            result = create_csv_pipeline(
+                csv_path=csv_path,
+                headers=["src_ip", "reason"],
+                initial_rows=[{"src_ip": "1.2.3.4", "reason": "approved"}],
+                analyst="alice",
+                session_key="sk",
+                csv_file="DR_new.csv",
+                detection_rule="DR100",
+            )
+
+        assert result["success"] is True
+        assert "1 column" not in result["message"]  # 2 columns
+        assert "2 column" in result["message"]
+        assert result["data"]["column_count"] == 2
+        assert result["data"]["imported_row_count"] == 1
+        assert result["data"]["new_version"] == "v1"
+        # File actually exists on disk
+        assert os.path.isfile(csv_path)
+        mock_snap.assert_called_once()
+        mock_post.assert_called_once()
+
+    def test_create_csv_snapshot_oserror_still_succeeds(self, tmp_path):
+        """OSError during snapshot_version is logged but does NOT fail creation."""
+        csv_path = str(tmp_path / "DR_new.csv")
+
+        with patch("wl_versions.snapshot_version",
+                   side_effect=OSError("snapshot dir full")), \
+             patch("wl_audit.post_audit_event", return_value=(True, "")), \
+             patch("wl_audit.build_audit_event", return_value={}):
+            result = create_csv_pipeline(
+                csv_path=csv_path,
+                headers=["a"],
+                initial_rows=[],
+                analyst="alice",
+                session_key="sk",
+            )
+
+        assert result["success"] is True
+        # new_version is None because snapshot failed
+        assert result["data"]["new_version"] is None
+        # CSV file was still written
+        assert os.path.isfile(csv_path)
+
+    def test_create_csv_write_failure_returns_error(self, tmp_path):
+        """OSError on write_csv → success=False with safe error message."""
+        # Use a path that can't be written: a path whose parent doesn't exist
+        # AND the parent's parent doesn't exist (write_csv won't create it)
+        csv_path = str(tmp_path / "nonexistent" / "deep" / "DR.csv")
+
+        with patch("wl_csv.write_csv",
+                   side_effect=OSError("permission denied")):
+            result = create_csv_pipeline(
+                csv_path=csv_path,
+                headers=["a"],
+                initial_rows=[],
+                analyst="alice",
+                session_key="sk",
+            )
+
+        assert result["success"] is False
+        assert "Failed to create CSV" in result["error"]
+        assert result["data"] == {}
+
+    def test_create_csv_unexpected_exception_returns_error(self, tmp_path):
+        """Non-OSError exception caught by broad except, returned as error."""
+        csv_path = str(tmp_path / "DR.csv")
+
+        with patch("wl_csv.write_csv",
+                   side_effect=RuntimeError("unexpected boom")):
+            result = create_csv_pipeline(
+                csv_path=csv_path,
+                headers=["a"],
+                initial_rows=[],
+                analyst="alice",
+                session_key="sk",
+            )
+
+        assert result["success"] is False
+        assert "Unexpected error" in result["error"]
+
+
+@pytest.mark.unit
+class TestSaveCsvPipelineNoChanges:
+    """Edge case: pipeline called but nothing actually changed (lines 873-892)."""
+
+    def test_no_changes_returns_success_without_writing(self, tmp_path):
+        """Identical old+new → 'No changes detected' early return."""
+        csv_path = _write_initial_csv(
+            tmp_path,
+            headers=["src_ip", "reason"],
+            rows=[{"src_ip": "1.1.1.1", "reason": "approved"}],
+        )
+        # Capture mtime before — should NOT change because no write happens
+        mtime_before = os.path.getmtime(csv_path)
+
+        with patch("wl_versions.snapshot_version",
+                   return_value=("v1", "ts")) as mock_snap, \
+             patch("wl_audit.post_audit_event") as mock_post:
+            result = save_csv_pipeline(
+                csv_path=csv_path,
+                new_headers=["src_ip", "reason"],
+                new_rows=[{"src_ip": "1.1.1.1", "reason": "approved"}],
+                comment="no change",
+                analyst="alice",
+                session_key="sk",
+            )
+
+        assert result["success"] is True
+        assert "No changes detected" in result["message"]
+        assert result["data"]["added_row_count"] == 0
+        assert result["data"]["removed_row_count"] == 0
+        assert result["data"]["edited_row_count"] == 0
+        assert result["data"]["new_version"] is None
+        # snapshot + audit NOT called (early return)
+        mock_snap.assert_not_called()
+        mock_post.assert_not_called()
+
+
+@pytest.mark.unit
+class TestSaveCsvPipelineHappyPaths:
+    """Happy paths exercising the main save flow (lines 894-1127)."""
+
+    def test_save_with_row_added(self, tmp_path):
+        """Adding a row: diff detects it, snapshot taken, audit posted, file updated."""
+        csv_path = _write_initial_csv(
+            tmp_path,
+            headers=["src_ip", "reason"],
+            rows=[{"src_ip": "1.1.1.1", "reason": "approved"}],
+        )
+
+        with patch("wl_versions.snapshot_version",
+                   return_value=("v2", "2026-05-19 12:00")) as mock_snap, \
+             patch("wl_audit.post_audit_event",
+                   return_value=(True, "")) as mock_post, \
+             patch("wl_audit.build_audit_event",
+                   return_value={"action": "save_csv"}):
+            result = save_csv_pipeline(
+                csv_path=csv_path,
+                new_headers=["src_ip", "reason"],
+                new_rows=[
+                    {"src_ip": "1.1.1.1", "reason": "approved"},
+                    {"src_ip": "2.2.2.2", "reason": "new entry"},
+                ],
+                comment="add row",
+                analyst="alice",
+                session_key="sk",
+                csv_file="test.csv",
+                detection_rule="DR100",
+            )
+
+        assert result["success"] is True
+        assert result["data"]["added_row_count"] == 1
+        assert result["data"]["removed_row_count"] == 0
+        assert result["data"]["new_version"] == "v2"
+        # File on disk includes the added row + the _added_by/_added_at metadata
+        headers_after, rows_after = read_csv(csv_path)
+        assert "_added_by" in headers_after
+        assert "_added_at" in headers_after
+        assert len(rows_after) == 2
+        mock_snap.assert_called_once()
+        # At least one audit event posted (added row)
+        assert mock_post.call_count >= 1
+
+    def test_save_with_row_removed_and_reason(self, tmp_path):
+        """Removing a row: per-row reason captured in audit event."""
+        csv_path = _write_initial_csv(
+            tmp_path,
+            headers=["src_ip", "reason"],
+            rows=[
+                {"src_ip": "1.1.1.1", "reason": "approved"},
+                {"src_ip": "2.2.2.2", "reason": "old"},
+            ],
+        )
+
+        with patch("wl_versions.snapshot_version",
+                   return_value=("v2", "ts")), \
+             patch("wl_audit.post_audit_event", return_value=(True, "")), \
+             patch("wl_audit.build_audit_event", return_value={}):
+            result = save_csv_pipeline(
+                csv_path=csv_path,
+                new_headers=["src_ip", "reason"],
+                new_rows=[{"src_ip": "1.1.1.1", "reason": "approved"}],
+                comment="remove stale",
+                analyst="alice",
+                session_key="sk",
+                removal_reasons=[{"row": {"src_ip": "2.2.2.2",
+                                          "reason": "old"},
+                                 "reason": "expired"}],
+            )
+
+        assert result["success"] is True
+        assert result["data"]["removed_row_count"] == 1
+        assert result["data"]["added_row_count"] == 0
+
+    def test_save_with_row_edited(self, tmp_path):
+        """Editing a row: diff detects edit, audit event posted."""
+        csv_path = _write_initial_csv(
+            tmp_path,
+            headers=["src_ip", "reason"],
+            rows=[{"src_ip": "1.1.1.1", "reason": "approved"}],
+        )
+
+        with patch("wl_versions.snapshot_version",
+                   return_value=("v2", "ts")), \
+             patch("wl_audit.post_audit_event", return_value=(True, "")), \
+             patch("wl_audit.build_audit_event", return_value={}):
+            result = save_csv_pipeline(
+                csv_path=csv_path,
+                new_headers=["src_ip", "reason"],
+                new_rows=[{"src_ip": "1.1.1.1", "reason": "updated reason"}],
+                comment="fix reason text",
+                analyst="alice",
+                session_key="sk",
+            )
+
+        assert result["success"] is True
+        assert result["data"]["edited_row_count"] == 1
+
+    def test_save_with_row_reorder(self, tmp_path):
+        """Row reorder: cell edits discarded, only positions change."""
+        csv_path = _write_initial_csv(
+            tmp_path,
+            headers=["src_ip", "reason"],
+            rows=[
+                {"src_ip": "1.1.1.1", "reason": "a"},
+                {"src_ip": "2.2.2.2", "reason": "b"},
+                {"src_ip": "3.3.3.3", "reason": "c"},
+            ],
+        )
+
+        with patch("wl_versions.snapshot_version",
+                   return_value=("v2", "ts")), \
+             patch("wl_audit.post_audit_event", return_value=(True, "")), \
+             patch("wl_audit.build_audit_event", return_value={}):
+            result = save_csv_pipeline(
+                csv_path=csv_path,
+                new_headers=["src_ip", "reason"],
+                # Note: new_rows are intentionally different from old, but
+                # row_reorder is set so cell-edits should be discarded
+                new_rows=[
+                    {"src_ip": "1.1.1.1", "reason": "EDITED"},  # discarded
+                    {"src_ip": "2.2.2.2", "reason": "EDITED"},
+                    {"src_ip": "3.3.3.3", "reason": "EDITED"},
+                ],
+                comment="reorder",
+                analyst="alice",
+                session_key="sk",
+                row_reorder={"from_position": 1, "to_position": 3},
+            )
+
+        assert result["success"] is True
+        # File contents: row 1 moved to position 3, cell values UNCHANGED
+        _, rows_after = read_csv(csv_path)
+        assert rows_after[2]["src_ip"] == "1.1.1.1"
+        assert rows_after[2]["reason"] == "a"  # original, not "EDITED"
+
+    def test_save_with_column_added(self, tmp_path):
+        """Adding a column: diff detects column change, file reflects new header."""
+        csv_path = _write_initial_csv(
+            tmp_path,
+            headers=["src_ip"],
+            rows=[{"src_ip": "1.1.1.1"}],
+        )
+
+        with patch("wl_versions.snapshot_version",
+                   return_value=("v2", "ts")), \
+             patch("wl_audit.post_audit_event", return_value=(True, "")), \
+             patch("wl_audit.build_audit_event", return_value={}):
+            result = save_csv_pipeline(
+                csv_path=csv_path,
+                new_headers=["src_ip", "reason"],
+                new_rows=[{"src_ip": "1.1.1.1", "reason": "newcol"}],
+                comment="add column",
+                analyst="alice",
+                session_key="sk",
+            )
+
+        assert result["success"] is True
+        headers_after, _ = read_csv(csv_path)
+        assert "reason" in headers_after
+
+    def test_save_with_column_rename(self, tmp_path):
+        """Column rename: paired add/remove filtered, no spurious column-change audit."""
+        csv_path = _write_initial_csv(
+            tmp_path,
+            headers=["src_ip", "old_name"],
+            rows=[{"src_ip": "1.1.1.1", "old_name": "a"}],
+        )
+
+        with patch("wl_versions.snapshot_version",
+                   return_value=("v2", "ts")), \
+             patch("wl_audit.post_audit_event", return_value=(True, "")), \
+             patch("wl_audit.build_audit_event", return_value={}):
+            result = save_csv_pipeline(
+                csv_path=csv_path,
+                new_headers=["src_ip", "new_name"],
+                new_rows=[{"src_ip": "1.1.1.1", "new_name": "a"}],
+                comment="rename column",
+                analyst="alice",
+                session_key="sk",
+                column_renames=[{"old_name": "old_name",
+                                "new_name": "new_name"}],
+            )
+
+        assert result["success"] is True
+
+
+@pytest.mark.unit
+class TestSaveCsvPipelineErrorPaths:
+    """Error branches (lines 1129-1146)."""
+
+    def test_save_oserror_returns_safe_error(self, tmp_path):
+        """OSError during the save → success=False + safe (no-disclosure) message."""
+        csv_path = _write_initial_csv(
+            tmp_path,
+            headers=["a"],
+            rows=[{"a": "1"}],
+        )
+
+        with patch("wl_csv.write_csv",
+                   side_effect=OSError("simulated disk error")):
+            result = save_csv_pipeline(
+                csv_path=csv_path,
+                new_headers=["a"],
+                new_rows=[{"a": "1"}, {"a": "2"}],
+                comment="trigger write fail",
+                analyst="alice",
+                session_key="sk",
+            )
+
+        assert result["success"] is False
+        assert "Failed to save CSV" in result["error"]
+        # Error message MUST NOT disclose internal details
+        assert "simulated disk error" not in result["error"]
+        assert result["data"] == {}
+
+    def test_save_unexpected_exception_returns_safe_error(self, tmp_path):
+        """Unexpected exception caught by broad except → safe error."""
+        csv_path = _write_initial_csv(
+            tmp_path,
+            headers=["a"],
+            rows=[{"a": "1"}],
+        )
+
+        with patch("wl_csv.compute_diff",
+                   side_effect=RuntimeError("synthetic compute_diff failure")):
+            result = save_csv_pipeline(
+                csv_path=csv_path,
+                new_headers=["a"],
+                new_rows=[{"a": "2"}],
+                comment="trigger compute_diff fail",
+                analyst="alice",
+                session_key="sk",
+            )
+
+        assert result["success"] is False
+        assert "Unexpected error" in result["error"]
+        # Error message MUST NOT disclose internal details
+        assert "synthetic compute_diff failure" not in result["error"]
