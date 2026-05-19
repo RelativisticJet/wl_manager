@@ -15,6 +15,7 @@ import pytest
 from unittest import mock
 from unittest.mock import patch, MagicMock, mock_open
 from datetime import datetime, timezone
+from freezegun import freeze_time
 
 # Add bin directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'bin'))
@@ -830,3 +831,298 @@ def test_get_daily_limits_path_creates_versions_dir(tmp_path):
         path = _get_daily_limits_path()
         assert os.path.isdir(os.path.join(str(tmp_path), "_versions"))
         assert path.endswith("_daily_limits.json")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# read_limit_config integrity + migration (lines 258-290)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.unit
+class TestReadLimitConfigIntegrity:
+    """Cover the body of read_limit_config (currently the largest gap)."""
+
+    def test_missing_config_returns_defaults(self, tmp_path):
+        """No file on disk → returns dict(DEFAULT_LIMITS) — the early-return path."""
+        from wl_limits import read_limit_config, DEFAULT_LIMITS
+        with patch('wl_limits.OWN_LOOKUPS', str(tmp_path)):
+            result = read_limit_config()
+        assert result == dict(DEFAULT_LIMITS)
+
+    def test_valid_signed_config_returns_persisted_values(self, tmp_path):
+        """File present with valid checksum → values returned as written."""
+        from wl_limits import (read_limit_config, write_limit_config,
+                              DEFAULT_LIMITS)
+        custom = dict(DEFAULT_LIMITS)
+        custom["row_addition"] = 42
+        with patch('wl_limits.OWN_LOOKUPS', str(tmp_path)):
+            write_limit_config(custom)
+            result = read_limit_config()
+        assert result["row_addition"] == 42
+
+    def test_tampered_checksum_still_returns_data(self, tmp_path, caplog):
+        """Checksum mismatch logs warning but does NOT lock the app out
+        (covers lines 263-270 — the integrity-failure soft path)."""
+        from wl_limits import read_limit_config, DEFAULT_LIMITS
+        path = tmp_path / "_versions" / "_limit_config.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        config = dict(DEFAULT_LIMITS)
+        config["_checksum"] = "0" * 64  # fake checksum
+        path.write_text(json.dumps(config))
+
+        with patch('wl_limits.OWN_LOOKUPS', str(tmp_path)), \
+             caplog.at_level("WARNING"):
+            result = read_limit_config()
+        # Data is still returned (tolerant policy)
+        assert isinstance(result, dict)
+        # Warning was logged
+        assert any("CONFIG_INTEGRITY_FAILED" in rec.message
+                  for rec in caplog.records)
+
+    def test_legacy_reset_hour_utc_migrated(self, tmp_path):
+        """Old `reset_hour_utc: 7` rewrites to `reset_time_utc: "07:00"`
+        (covers lines 272-278)."""
+        from wl_limits import read_limit_config
+        path = tmp_path / "_versions" / "_limit_config.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        config = {"reset_hour_utc": 7}
+        path.write_text(json.dumps(config))
+
+        with patch('wl_limits.OWN_LOOKUPS', str(tmp_path)):
+            result = read_limit_config()
+        assert result["reset_time_utc"] == "07:00"
+        assert "reset_hour_utc" not in result
+
+    def test_legacy_reset_hour_utc_out_of_range_defaults_to_zero(self, tmp_path):
+        """Invalid reset_hour_utc (e.g., 99) → "00:00" fallback (line 278)."""
+        from wl_limits import read_limit_config
+        path = tmp_path / "_versions" / "_limit_config.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        config = {"reset_hour_utc": 99}
+        path.write_text(json.dumps(config))
+
+        with patch('wl_limits.OWN_LOOKUPS', str(tmp_path)):
+            result = read_limit_config()
+        assert result["reset_time_utc"] == "00:00"
+
+    def test_both_legacy_and_new_keys_drops_legacy(self, tmp_path):
+        """Both reset_hour_utc and reset_time_utc present → legacy dropped (line 282)."""
+        from wl_limits import read_limit_config
+        path = tmp_path / "_versions" / "_limit_config.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        config = {"reset_hour_utc": 5, "reset_time_utc": "09:30"}
+        path.write_text(json.dumps(config))
+
+        with patch('wl_limits.OWN_LOOKUPS', str(tmp_path)):
+            result = read_limit_config()
+        # New key wins; legacy is dropped
+        assert result["reset_time_utc"] == "09:30"
+        assert "reset_hour_utc" not in result
+
+    def test_corrupt_json_falls_back_to_defaults(self, tmp_path):
+        """JSON parse error → return DEFAULT_LIMITS (line 289-290)."""
+        from wl_limits import read_limit_config, DEFAULT_LIMITS
+        path = tmp_path / "_versions" / "_limit_config.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("not valid json {{{")
+
+        with patch('wl_limits.OWN_LOOKUPS', str(tmp_path)):
+            result = read_limit_config()
+        assert result == dict(DEFAULT_LIMITS)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# get_counter_period_key for weekly/monthly/yearly (lines 420-470)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.unit
+class TestGetCounterPeriodKeyFrequencies:
+    """Cover the weekly/monthly/yearly branches of get_counter_period_key.
+
+    The function returns a stringified period key that identifies the
+    current reset bucket; tests freeze time and exercise each frequency.
+    """
+
+    def test_never_returns_permanent(self):
+        """freq=never → "permanent" sentinel (line 403)."""
+        from wl_limits import get_counter_period_key
+        result = get_counter_period_key({"reset_frequency": "never"})
+        assert result == "permanent"
+
+    def test_invalid_reset_time_falls_back_to_midnight(self):
+        """reset_time_utc not parseable → fallback to 00:00 (lines 411-412)."""
+        from wl_limits import get_counter_period_key
+        with freeze_time("2026-05-19T15:00:00Z"):
+            result = get_counter_period_key({
+                "reset_frequency": "daily",
+                "reset_time_utc": "not-a-time",
+            })
+        # Should not raise; produces a date string
+        assert result == "2026-05-19"
+
+    @freeze_time("2026-05-19T15:00:00Z")  # Tuesday
+    def test_weekly_with_monday_reset(self):
+        """Weekly freq with reset_day_of_week=0 (Monday) → ISO week ending."""
+        from wl_limits import get_counter_period_key
+        result = get_counter_period_key({
+            "reset_frequency": "weekly",
+            "reset_day_of_week": 0,  # Monday
+            "reset_time_utc": "00:00",
+        })
+        # 2026-05-19 is a Tuesday; week reset on Monday at 00:00 means
+        # the current bucket starts Monday 2026-05-18.
+        assert "W" in result  # ISO week format like "2026-W21-Mon"
+
+    @freeze_time("2026-05-19T15:00:00Z")
+    def test_weekly_invalid_dow_falls_back_to_zero(self):
+        """reset_day_of_week=99 → falls back to 0 (line 425)."""
+        from wl_limits import get_counter_period_key
+        # Should not raise — uses Monday (0) as fallback
+        result = get_counter_period_key({
+            "reset_frequency": "weekly",
+            "reset_day_of_week": 99,
+        })
+        assert "W" in result
+
+    @freeze_time("2026-05-19T15:00:00Z")
+    def test_monthly_with_day_15_after_boundary(self):
+        """Monthly freq, reset on day 15. Today is May 19 >= boundary → "2026-05"."""
+        from wl_limits import get_counter_period_key
+        result = get_counter_period_key({
+            "reset_frequency": "monthly",
+            "reset_day_of_month": 15,
+            "reset_time_utc": "00:00",
+        })
+        assert result == "2026-05"
+
+    @freeze_time("2026-05-10T15:00:00Z")
+    def test_monthly_before_boundary_returns_previous_month(self):
+        """Monthly freq, today before reset day → previous month's key."""
+        from wl_limits import get_counter_period_key
+        result = get_counter_period_key({
+            "reset_frequency": "monthly",
+            "reset_day_of_month": 15,
+            "reset_time_utc": "00:00",
+        })
+        assert result == "2026-04"
+
+    @freeze_time("2026-05-19T15:00:00Z")
+    def test_monthly_invalid_day_falls_back_to_one(self):
+        """reset_day_of_month=99 → falls back to 1 (line 437)."""
+        from wl_limits import get_counter_period_key
+        result = get_counter_period_key({
+            "reset_frequency": "monthly",
+            "reset_day_of_month": 99,
+        })
+        # Day=1 always satisfies "now>=boundary" past midnight today
+        assert result == "2026-05"
+
+    @freeze_time("2026-05-19T15:00:00Z")
+    def test_monthly_short_month_clamps_day(self):
+        """reset_day=31 in Feb → clamps to last day of month (line 440)."""
+        from wl_limits import get_counter_period_key
+        with freeze_time("2026-02-28T15:00:00Z"):
+            result = get_counter_period_key({
+                "reset_frequency": "monthly",
+                "reset_day_of_month": 31,
+            })
+        # Feb has 28 days in 2026; boundary clamped to 28; we're past it
+        assert result == "2026-02"
+
+    @freeze_time("2026-05-19T15:00:00Z")
+    def test_yearly_after_boundary_returns_current_year(self):
+        """Yearly freq, reset on Jan 1. May 19 >= Jan 1 → "2026"."""
+        from wl_limits import get_counter_period_key
+        result = get_counter_period_key({
+            "reset_frequency": "yearly",
+            "reset_month": 1,
+            "reset_day_of_year": 1,
+            "reset_time_utc": "00:00",
+        })
+        assert result == "2026"
+
+    @freeze_time("2026-02-15T15:00:00Z")
+    def test_yearly_before_boundary_returns_prior_year(self):
+        """Yearly freq, reset on July 1. Feb 15 < July 1 → "2025"."""
+        from wl_limits import get_counter_period_key
+        result = get_counter_period_key({
+            "reset_frequency": "yearly",
+            "reset_month": 7,
+            "reset_day_of_year": 1,
+            "reset_time_utc": "00:00",
+        })
+        assert result == "2025"
+
+    @freeze_time("2026-05-19T15:00:00Z")
+    def test_yearly_invalid_month_falls_back_to_january(self):
+        """reset_month=99 → falls back to 1 (line 452)."""
+        from wl_limits import get_counter_period_key
+        result = get_counter_period_key({
+            "reset_frequency": "yearly",
+            "reset_month": 99,
+        })
+        # Month=1, day=1 → already past → current year
+        assert result == "2026"
+
+    @freeze_time("2026-05-19T15:00:00Z")
+    def test_unknown_frequency_falls_back_to_daily(self):
+        """Unknown freq value → daily date format (line 470)."""
+        from wl_limits import get_counter_period_key
+        result = get_counter_period_key({
+            "reset_frequency": "bogus_freq",
+            "reset_time_utc": "00:00",
+        })
+        assert result == "2026-05-19"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# increment_daily_limit overflow + cleanup (lines 593-615)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.unit
+class TestIncrementDailyLimitOverflow:
+    """Cover the MAX_TRACKED_ANALYSTS overflow bucket path."""
+
+    def test_overflow_user_routes_to_shared_bucket(self):
+        """When MAX_TRACKED_ANALYSTS is reached, additional users are tracked
+        under the shared `__overflow__` bucket (lines 603-609).
+        """
+        from wl_limits import increment_daily_limit
+        # Build counters that are exactly at the cap
+        existing = {"u_{}".format(i): {"row_addition": 1}
+                   for i in range(1, 1001)}
+        full_counters = {"2026-05-19": existing}
+
+        with patch('wl_limits.read_daily_limits',
+                   return_value=full_counters), \
+             patch('wl_limits.get_counter_period_key',
+                   return_value="2026-05-19"), \
+             patch('wl_limits.MAX_TRACKED_ANALYSTS', 1000), \
+             patch('wl_limits.write_daily_limits') as mock_write:
+            increment_daily_limit("new_user_over_cap", "row_addition")
+
+        # __overflow__ bucket should have been created and incremented
+        assert mock_write.call_count == 1
+        written_counters = mock_write.call_args[0][0]
+        assert "__overflow__" in written_counters["2026-05-19"]
+        assert "new_user_over_cap" not in written_counters["2026-05-19"]
+
+    def test_permanent_key_keeps_only_permanent_counter(self):
+        """In `never` mode, all non-`permanent` keys are pruned (line 594)."""
+        from wl_limits import increment_daily_limit
+        with patch('wl_limits.read_daily_limits',
+                   return_value={"2026-04-01": {"u1": {"x": 1}},
+                                "permanent": {"u2": {"x": 1}}}), \
+             patch('wl_limits.get_counter_period_key',
+                   return_value="permanent"), \
+             patch('wl_limits.write_daily_limits') as mock_write:
+            increment_daily_limit("u3", "row_addition")
+
+        written = mock_write.call_args[0][0]
+        # Old date-based key was pruned
+        assert "2026-04-01" not in written
+        # `permanent` key kept and u3 added there
+        assert "permanent" in written
+        assert "u3" in written["permanent"]
