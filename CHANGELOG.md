@@ -124,7 +124,9 @@ Modules still below 80% — deferred to v1.1 backlog or covered by the
 integration suite: `wl_csv` (60%, security boundary), `wl_limits`
 (67%), `wl_trash` (65%).
 
-Test suite: 716 → 789 (+73 tests).
+Test suite: 672 → 789 (+117 tests this session, spanning the G1/G2/G3
+coverage batches, the BLOCKER fix's `TestRevertCsvHandler`, and the
+final G5 push).
 
 `bin/wl_handler.py` was NOT modified during this work — it is
 FORBIDDEN as a unit-test or mutation target per the hardening rules.
