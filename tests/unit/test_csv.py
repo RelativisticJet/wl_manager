@@ -10,6 +10,7 @@ Fixtures:
 """
 
 import json
+import logging
 import os
 import sys
 import pytest
@@ -20,12 +21,15 @@ from freezegun import freeze_time
 # Add bin directory to path to import wl_csv and dependencies
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../bin'))
 
+from unittest.mock import patch
 from wl_csv import (
     read_csv, write_csv, compute_diff, get_expire_column,
     remove_expired_rows, get_column_widths, set_column_widths,
     update_csv_expected_hash, remove_csv_expected_hash,
     bootstrap_csv_expected_hashes, CSV_EXPECTED_HASHES_FILE,
 )
+import wl_csv as wl_csv_module
+from wl_csv import _find_row_positions
 from wl_constants import VERSIONS_DIR
 from wl_hmac_key import read_expected_hashes
 
@@ -811,3 +815,168 @@ def test_bootstrap_csv_expected_hashes_sentinel_csv_always_included(tmp_path):
     assert result["hashed_count"] == 1
     assert result["new_csvs"] == ["rule_csv_map.csv"]
     assert result["missing_count"] == 0
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Test: small wl_csv coverage gaps (item G2 batch 2, 2026-05-19)
+#
+# Covers the remaining uncovered branches in the unit-testable core of
+# bin/wl_csv.py: write_csv exception paths, _find_row_positions inner loop,
+# remove_expired_rows legacy-local kept branch, set_column_widths silent
+# failure. Lines: 244-249, 255-256, 399-402, 682, 739-740.
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.unit
+def test_write_csv_cleans_up_temp_on_failure(tmp_path):
+    """write_csv's except block removes the temp file when os.replace raises.
+
+    Covers lines 244-249 in wl_csv.py. Setup: pre-create the destination
+    `filepath` as a DIRECTORY so the final `os.replace(temp_path, filepath)`
+    raises (a directory cannot be overwritten by a file). The except block
+    then runs `os.remove(temp_path)` and re-raises.
+    """
+    target = tmp_path / "blocked.csv"
+    target.mkdir()  # Now os.replace can't write a file here
+    headers = ["name"]
+    rows = [{"name": "Alice"}]
+
+    # Exception class differs by platform (IsADirectoryError on POSIX,
+    # PermissionError or OSError on Windows). Accept any OSError subclass.
+    with pytest.raises(OSError):
+        write_csv(str(target), headers, rows)
+
+    # Verify the .tmp file was cleaned up (the except block's
+    # os.remove(temp_path) ran successfully on the file the with-open
+    # block created before os.replace failed).
+    assert not (tmp_path / "blocked.csv.tmp").exists()
+
+
+@pytest.mark.unit
+def test_write_csv_hash_update_failure_does_not_propagate(tmp_path, caplog):
+    """Hash-registry update failure is swallowed (CSV save must not fail).
+
+    Covers lines 255-256 in wl_csv.py. write_csv calls
+    update_csv_expected_hash after the atomic rename; per the comment
+    "Best-effort — hash update failure should NOT block the CSV save."
+    Patch update_csv_expected_hash to raise an OSError; the CSV file
+    must still exist on disk, and the function must return without
+    re-raising.
+    """
+    csv_path = tmp_path / "saved.csv"
+    headers = ["name"]
+    rows = [{"name": "Alice"}, {"name": "Bob"}]
+
+    with patch.object(
+        wl_csv_module, "update_csv_expected_hash",
+        side_effect=OSError("simulated registry write failure"),
+    ), caplog.at_level(logging.WARNING, logger=wl_csv_module._logger.name):
+        # Must not raise.
+        write_csv(str(csv_path), headers, rows)
+
+    # CSV was written successfully before the hash update attempt.
+    assert csv_path.exists()
+    assert "Alice" in csv_path.read_text()
+
+    # The except block logged the warning (line 256).
+    warning_texts = [r.getMessage() for r in caplog.records
+                     if r.levelno == logging.WARNING]
+    assert any("Failed to update expected hash" in m for m in warning_texts), (
+        "expected a WARNING log line about the hash-update failure; "
+        "got: {}".format(warning_texts)
+    )
+
+
+@pytest.mark.unit
+def test_find_row_positions_returns_both_positions_when_key_present():
+    """_find_row_positions returns 1-based positions when key is in both lists.
+
+    Covers lines 399-402 in wl_csv.py (the new_rows inner-loop branch).
+    Direct call with a row_key present in both old_rows and new_rows.
+    Production callers (compute_edited) typically pass an old-row key
+    that is NOT in new_rows (by construction of "edited"), so the
+    new_pos branch goes unexercised through that path. This test
+    pins the function's documented contract.
+    """
+    common_headers = ["name", "value"]
+    old_rows = [
+        {"name": "Alice", "value": "1"},
+        {"name": "Bob", "value": "2"},
+        {"name": "Carol", "value": "3"},
+    ]
+    new_rows = [
+        {"name": "Dan", "value": "10"},
+        {"name": "Bob", "value": "20"},  # Bob's key matches old_rows index 1
+    ]
+    # Bob's row_key
+    row_key = ("Bob", "2")
+
+    old_pos, new_pos = _find_row_positions(
+        row_key, old_rows, new_rows, common_headers
+    )
+    assert old_pos == 2, "Bob is at old_rows[1], 1-based = 2"
+    # new_rows has Bob with value "20" — different row_key ("Bob", "20")
+    # so the search for ("Bob", "2") does NOT find it; new_pos = 0.
+    assert new_pos == 0
+
+    # Now exercise the line-399 success path: search for a key that
+    # IS in new_rows.
+    row_key_present = ("Bob", "20")
+    old_pos2, new_pos2 = _find_row_positions(
+        row_key_present, old_rows, new_rows, common_headers
+    )
+    assert new_pos2 == 2, "Bob with value='20' is at new_rows[1], 1-based = 2"
+    assert old_pos2 == 0, "no row in old_rows matches ('Bob', '20')"
+
+
+@pytest.mark.unit
+def test_remove_expired_rows_legacy_naive_local_future_date_kept():
+    """Legacy-format expiration in the future is kept (else branch line 682).
+
+    Covers line 682 in wl_csv.py (the kept.append in the legacy-naive
+    local-time branch). Uses freezegun to fix "now" and a legacy date
+    string without the " UTC" suffix that is in the future.
+    """
+    headers = ["name", "expires"]
+    rows = [
+        # Legacy format (no UTC suffix), in the future
+        {"name": "Alice", "expires": "2099-12-31 23:59"},
+    ]
+
+    with freeze_time("2026-05-19 12:00:00"):
+        kept, expired_count = remove_expired_rows(
+            headers, rows, tz_offset_minutes=0
+        )
+
+    assert expired_count == 0
+    assert len(kept) == 1
+    assert kept[0]["name"] == "Alice"
+
+
+@pytest.mark.unit
+def test_set_column_widths_swallows_oserror_silently(tmp_path):
+    """set_column_widths is a non-critical feature; OSError on write is silenced.
+
+    Covers lines 739-740 in wl_csv.py (the except (OSError, IOError):
+    pass block). Patch json.dump to raise OSError; the function must
+    return without raising and without leaving partial state visible
+    to callers.
+    """
+    csv_path = tmp_path / "ignored.csv"
+    csv_path.write_text("name\n")
+    widths = {"name": 123}
+
+    with patch("wl_csv.json.dump", side_effect=OSError("disk full")):
+        # Must not raise — the function silently absorbs the failure.
+        set_column_widths(str(csv_path), widths)
+
+    # No widths file was written (the open() succeeded, json.dump failed
+    # before any bytes flushed). Function returned None as usual.
+    widths_path = tmp_path / VERSIONS_DIR / "ignored_colwidths.json"
+    # The file MAY exist as zero-bytes (open() ran before json.dump raised).
+    # Whether it exists or not, the function must NOT have raised.
+    if widths_path.exists():
+        assert widths_path.read_text() == "", (
+            "if file exists post-failure it must be empty (json.dump raised "
+            "before flushing); got: {!r}".format(widths_path.read_text())
+        )
