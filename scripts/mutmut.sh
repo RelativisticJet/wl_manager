@@ -249,12 +249,25 @@ populate_scratch() {
     # Running as -u 0 (root) inside the container because /scratch is
     # owned by root after tmpfs mount; the default container user
     # cannot write to a fresh root-owned mount.
+    #
+    # Post-cp: explicitly wipe any stale mutmut artifacts that came
+    # along from /repo. The 2026-05-19 item D run discovered that a
+    # prior :rw-mount session had left a `.mutmut-cache` (~190 KB)
+    # on the host repo. cp -a happily copied it into /scratch, and
+    # mutmut then aggregated those stale entries into the cumulative
+    # results table — confusing the wl_csv (correct selector) result
+    # display with leftover wl_audit / wl_validation entries from
+    # misconfigured prior runs. The wipe forces every container
+    # creation to start with a guaranteed-empty mutmut cache.
     echo "→ populating /scratch from /repo (tmpfs is fresh)..."
     if ! docker exec -u 0 "$CONTAINER" sh -c 'cp -a /repo/. /scratch/'; then
         echo "✖ scratch population failed — removing container." >&2
         docker rm -f "$CONTAINER" >/dev/null
         exit 1
     fi
+    # Wipe any prior mutmut artifacts that may have ridden along from
+    # the host. Safe to run even if neither exists.
+    docker exec -u 0 "$CONTAINER" sh -c 'rm -rf /scratch/.mutmut-cache /scratch/mutants' >/dev/null 2>&1 || true
 }
 
 scratch_is_empty() {

@@ -189,7 +189,7 @@ test selector. Notable findings:
 The 45 "survivors" reported for `bin/wl_csv.py` are NOT actionable.
 The mutmut command in the prior session was:
 
-```
+```text
 mutmut run --paths-to-mutate=bin/wl_csv.py --tests-dir=tests/unit \
   --runner='python -m pytest -x -q --tb=no \
             tests/unit/test_validation.py tests/unit/test_ascii_validation.py'
@@ -208,9 +208,80 @@ TEST_RUNNER_FILES="tests/unit/test_csv.py" \
     scripts/mutmut.sh run
 ```
 
-This run was NOT executed during the 2026-05-18 session — the time
-budget was exhausted by the discovery + safety work above. It is
-queued as v1.1 maintenance work.
+Re-ran 2026-05-19 — see next section for results.
+
+---
+
+## 2026-05-19 wl_csv.py fresh-run results (item D)
+
+Mutmut run with the corrected selector
+(`tests/unit/test_csv.py tests/unit/test_diff_fuzz.py`) on a fresh
+`:ro`-mount + tmpfs container.
+
+**Result: 723 mutations applied, 547 survived, 176 killed.
+Effective mutation score: 24%.**
+
+### Why the score is low
+
+`bin/wl_csv.py` is 1244 lines. Only ~600 of those — the diff engine
+(`compute_diff`, `compute_added`, `compute_removed`, `compute_edited`)
+and the hash-registry plumbing (`_csv_file_hash`,
+`update_csv_expected_hash`, `bootstrap_csv_expected_hashes`,
+`remove_csv_expected_hash`) — have unit-test coverage in
+`test_csv.py` and `test_diff_fuzz.py`. The remaining ~600 lines
+(`save_csv_pipeline` ~lines 747–1148 and `create_csv_pipeline`
+~lines 1149–1244) are tested via the live Splunk container in
+`tests/integration/`, NOT by the unit suite mutmut is exercising.
+
+This shows up in the survivor ID ranges: IDs 191–472 (the unit-
+testable core) have a mix of killed and survived mutations (~50%
+each in spot checks), while IDs 494–913 (the integration-only code)
+are almost entirely survivors.
+
+### Triage categories
+
+Spot-checked 10 representative survivors across the range; the
+pattern divides cleanly:
+
+| Class | Example mutants | Killable? | Action |
+|---|---|---|---|
+| Logger / docstring strings | 191 (logger name) | Low value | Skip |
+| Constant strings flowing into paths | 200 (`CSV_EXPECTED_HASHES_FILE`) | Killable | Worth a test pin |
+| Value→None crash mutations | 207 (`parent = None`) | Killable | Trivial unit test |
+| Hidden-column filter strings | 264, 388 (`startswith("_")`) | Killable | Security boundary, worth pinning |
+| Tuple default-value sentinels | 313, 332 (`row.get(h, "")`) | Mostly equivalent | Skip |
+| Response-dict key names | 431, 600 (`"text_diff"`, `"added_row_count"`) | Killable | Contract pinning — highest value |
+| JSON formatting params | 494 (`indent=2 → 3`) | Equivalent | Skip |
+| Integration-path mutations | 600+ (most of 494–913) | Killable but expensive | Defer to integration-test coverage |
+
+Rough estimate of GENUINE killable survivors in the unit-tested
+core (IDs 191–472): ~100–150. Closing them would require ~100–150
+new unit tests, ~5–10 lines each. Total work: 1–2 days.
+
+### Not addressed in this commit
+
+Closing the 100–150 genuine survivors is in scope of v1.1 item G
+(test coverage push from 32.4% → 80%). Writing those tests would
+naturally exercise the same code paths and kill the same mutants.
+Doing the work twice (once for mutmut-survivors, once for coverage)
+would be wasteful.
+
+### Harness bug discovered + fixed
+
+During this run, a leftover `.mutmut-cache` (~192 KB) from a prior
+`:rw`-mount session was found on the host repo. The
+`populate_scratch()` helper's `cp -a /repo/. /scratch/` copied this
+stale cache into the fresh tmpfs, leaking prior-run results (37
+phantom wl_audit survivors + 10–12 wl_validation entries) into the
+cumulative results display. This didn't affect the wl_csv survivor
+count for the new run (the mutmut progress counter showed
+`723/723` mutations actually tested), but it polluted the
+`mutmut results` aggregate view.
+
+Fix: `populate_scratch()` now explicitly wipes
+`/scratch/.mutmut-cache` and `/scratch/mutants` after the cp. The
+host-side leftover at `wl_manager/.mutmut-cache` was also removed.
+`.gitignore` already excluded it from tracking.
 
 ---
 
@@ -238,17 +309,25 @@ queued as v1.1 maintenance work.
    Source-refresh signal: `scripts/mutmut.sh kill` then re-run (the
    tmpfs is repopulated from `/repo` only on container creation).
 
+3. ~~**Re-run wl_validation with the correct selector**~~ — DONE.
+   Result: 10 surviving mutants, all equivalent. See "2026-05-19
+   fresh-run confirmation" section above. The estimate of "≤8
+   survivors" was off by 2 — the original triage incorrectly listed
+   mutants 138 and 146 as "killed by existing tests" when they're
+   actually equivalent. Doc corrected.
+
+4. ~~**Run wl_csv.py with the correct selector**~~ — DONE.
+   Result: 547 survivors of 723 mutations (24% kill rate). The
+   estimate of "5-20 genuine gaps" was wildly low — the actual
+   genuine-gap count is ~100-150 in the unit-tested core, plus
+   ~400 survivors in integration-only code that won't be killed
+   by unit tests at all. See "2026-05-19 wl_csv.py fresh-run
+   results (item D)" section above. Closing the ~100-150 genuine
+   survivors is deferred to v1.1 item G (test coverage push).
+
 ### Open (queued for v1.1 release prep)
 
-1. **Re-run wl_validation with the correct selector** to get a
-   fresh survivor count after the 2 new tests above. Expected
-   result: ≤8 survivors (the equivalent mutants), down from 12.
-
-2. **Run wl_csv.py with the correct selector**. Expected: real
-   survivor count, plausibly 5-20 genuine gaps in CSV diff /
-   hash-registry logic.
-
-3. **Add `bin/wl_audit.py` mutation pass.** The 37 reported survivors
+1. **Add `bin/wl_audit.py` mutation pass.** The 37 reported survivors
    on `wl_audit.py` from a prior session need the same re-validation
    under the correct selector before deciding what to do with them.
 
