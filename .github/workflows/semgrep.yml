@@ -30,7 +30,7 @@ jobs:
     container:
       image: semgrep/semgrep
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Run Splunk-adapted taint rules against bin/
         run: |

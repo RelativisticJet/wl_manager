@@ -50,7 +50,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # `cache: pip` was removed 2026-05-18 — actions/setup-python@v5
       # requires `requirements.txt` or `pyproject.toml` to compute the
@@ -61,7 +61,7 @@ jobs:
       # restore the cache, but with a single one-line install of a pinned
       # package the cache hit is worthless. Keep simple.
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -159,7 +159,7 @@ jobs:
 
       - name: Upload AppInspect JSON reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: appinspect-reports
           path: .planning/appinspect/appinspect-*-ci.json

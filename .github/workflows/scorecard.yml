@@ -60,7 +60,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Scorecard requires the full history for some checks (e.g.,
           # "Maintained" looks at commit cadence over time). The
@@ -84,7 +84,7 @@ jobs:
       # local copy is always retrievable even if GitHub's security-events
       # ingestion has an outage.
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: scorecard-sarif
