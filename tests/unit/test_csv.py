@@ -22,8 +22,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../bin'))
 
 from wl_csv import (
     read_csv, write_csv, compute_diff, get_expire_column,
-    remove_expired_rows, get_column_widths, set_column_widths
+    remove_expired_rows, get_column_widths, set_column_widths,
+    update_csv_expected_hash, remove_csv_expected_hash,
+    bootstrap_csv_expected_hashes, CSV_EXPECTED_HASHES_FILE,
 )
+from wl_constants import VERSIONS_DIR
+from wl_hmac_key import read_expected_hashes
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -599,3 +603,211 @@ def test_set_column_widths_empty_dict(tmp_path):
     widths_file = versions_dir / "test_colwidths.json"
     assert widths_file.exists()
     assert widths_file.read_text() == "{}"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Test: CSV expected-hashes registry (item G2 coverage push, 2026-05-19)
+#
+# Covers lines 125-217 in bin/wl_csv.py: remove_csv_expected_hash and
+# bootstrap_csv_expected_hashes. These are security-critical (CSV integrity
+# monitoring) and had zero unit-test coverage before item G2. The functions
+# are wrapped by HMAC sign/verify via wl_hmac_key — derive_hash_registry_key
+# falls back to sha256(FIM_HMAC_SALT) when /opt/splunk/etc/instance.cfg is
+# absent (test host), so the registry is signed deterministically and reads
+# round-trip cleanly without mocking.
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def _make_lookups_dir(tmp_path):
+    """Build a lookups/ tree with rule_csv_map.csv and _versions/ subdir."""
+    lookups = tmp_path / "lookups"
+    lookups.mkdir()
+    (lookups / VERSIONS_DIR).mkdir()
+    return lookups
+
+
+@pytest.mark.unit
+def test_remove_csv_expected_hash_removes_existing_entry(tmp_path):
+    """remove_csv_expected_hash drops one entry but leaves others intact."""
+    lookups = _make_lookups_dir(tmp_path)
+    csv_a = lookups / "a.csv"
+    csv_a.write_text("name\nAlice\n")
+    csv_b = lookups / "b.csv"
+    csv_b.write_text("name\nBob\n")
+    # Register both
+    update_csv_expected_hash(str(csv_a))
+    update_csv_expected_hash(str(csv_b))
+
+    remove_csv_expected_hash(str(csv_a))
+
+    hashes_path = lookups / VERSIONS_DIR / CSV_EXPECTED_HASHES_FILE
+    hashes = read_expected_hashes(str(hashes_path))
+    assert "a.csv" not in hashes
+    assert "b.csv" in hashes
+
+
+@pytest.mark.unit
+def test_remove_csv_expected_hash_missing_entry_is_no_op(tmp_path):
+    """Removing an entry that isn't registered must not raise or corrupt."""
+    lookups = _make_lookups_dir(tmp_path)
+    csv_a = lookups / "a.csv"
+    csv_a.write_text("name\nAlice\n")
+    update_csv_expected_hash(str(csv_a))
+
+    # Try to remove a CSV that was never registered
+    fake = lookups / "never_registered.csv"
+    remove_csv_expected_hash(str(fake))  # must not raise
+
+    hashes_path = lookups / VERSIONS_DIR / CSV_EXPECTED_HASHES_FILE
+    hashes = read_expected_hashes(str(hashes_path))
+    assert "a.csv" in hashes  # original entry preserved
+
+
+@pytest.mark.unit
+def test_remove_csv_expected_hash_no_registry_file_is_no_op(tmp_path):
+    """Removing from a registry that doesn't exist yet must not raise."""
+    lookups = _make_lookups_dir(tmp_path)
+    csv_a = lookups / "a.csv"
+    csv_a.write_text("name\nAlice\n")
+    # No prior update_csv_expected_hash call — registry file absent
+
+    remove_csv_expected_hash(str(csv_a))  # must not raise
+
+    # Registry should still be absent (no spurious write)
+    hashes_path = lookups / VERSIONS_DIR / CSV_EXPECTED_HASHES_FILE
+    assert not hashes_path.exists()
+
+
+@pytest.mark.unit
+def test_bootstrap_csv_expected_hashes_fresh_install(tmp_path):
+    """First bootstrap: every CSV is new, registry is created from scratch."""
+    lookups = _make_lookups_dir(tmp_path)
+    (lookups / "rule_csv_map.csv").write_text(
+        "rule_name,csv_file,app_context\n"
+        "R1,a.csv,wl_manager\n"
+        "R2,b.csv,wl_manager\n"
+    )
+    (lookups / "a.csv").write_text("name\nAlice\n")
+    (lookups / "b.csv").write_text("name\nBob\n")
+
+    result = bootstrap_csv_expected_hashes(str(lookups))
+
+    # Includes sentinel rule_csv_map.csv plus 2 mapped CSVs = 3
+    assert result["hashed_count"] == 3
+    assert result["missing_count"] == 0
+    assert result["missing_files"] == []
+    # All 3 are new on first bootstrap
+    assert set(result["new_csvs"]) == {"a.csv", "b.csv", "rule_csv_map.csv"}
+    assert result["changed_csvs"] == []
+    assert result["removed_csvs"] == []
+
+    # Registry written and HMAC-verifies on round-trip
+    hashes_path = lookups / VERSIONS_DIR / CSV_EXPECTED_HASHES_FILE
+    assert hashes_path.exists()
+    hashes = read_expected_hashes(str(hashes_path))
+    assert set(hashes.keys()) == {"a.csv", "b.csv", "rule_csv_map.csv"}
+
+
+@pytest.mark.unit
+def test_bootstrap_csv_expected_hashes_detects_changed_csv(tmp_path):
+    """Re-bootstrap after a CSV's content changes records old + new hashes."""
+    lookups = _make_lookups_dir(tmp_path)
+    (lookups / "rule_csv_map.csv").write_text(
+        "rule_name,csv_file,app_context\nR1,a.csv,wl_manager\n"
+    )
+    a_csv = lookups / "a.csv"
+    a_csv.write_text("name\nAlice\n")
+
+    # First bootstrap establishes baseline
+    first = bootstrap_csv_expected_hashes(str(lookups))
+    old_a_hash = first["new_csvs"]  # has a.csv as new
+    assert "a.csv" in old_a_hash
+
+    # Mutate the CSV
+    a_csv.write_text("name\nAlice\nBob\n")
+
+    # Second bootstrap detects the change
+    second = bootstrap_csv_expected_hashes(str(lookups))
+    assert second["new_csvs"] == []  # nothing new
+    changed_names = [c["csv_file"] for c in second["changed_csvs"]]
+    assert "a.csv" in changed_names
+    # The diff entry has the old and new hashes
+    a_entry = next(c for c in second["changed_csvs"] if c["csv_file"] == "a.csv")
+    assert a_entry["old_hash"] != a_entry["new_hash"]
+    assert len(a_entry["old_hash"]) == 64  # SHA-256 hex
+    assert len(a_entry["new_hash"]) == 64
+
+
+@pytest.mark.unit
+def test_bootstrap_csv_expected_hashes_detects_removed_csv(tmp_path):
+    """Re-bootstrap after a CSV is dropped from mapping records it in removed_csvs."""
+    lookups = _make_lookups_dir(tmp_path)
+    (lookups / "rule_csv_map.csv").write_text(
+        "rule_name,csv_file,app_context\n"
+        "R1,a.csv,wl_manager\n"
+        "R2,b.csv,wl_manager\n"
+    )
+    (lookups / "a.csv").write_text("name\nAlice\n")
+    (lookups / "b.csv").write_text("name\nBob\n")
+    bootstrap_csv_expected_hashes(str(lookups))
+
+    # Drop b.csv from the mapping AND remove the file
+    (lookups / "rule_csv_map.csv").write_text(
+        "rule_name,csv_file,app_context\nR1,a.csv,wl_manager\n"
+    )
+    (lookups / "b.csv").unlink()
+
+    result = bootstrap_csv_expected_hashes(str(lookups))
+    assert "b.csv" in result["removed_csvs"]
+    assert result["new_csvs"] == []
+    # a.csv content unchanged but rule_csv_map.csv (the sentinel) IS changed
+    # — its new content drops the b.csv row, so its hash differs. This is
+    # the laundering-correlation signal: mapping edits surface as a
+    # sentinel-CSV change in the same audit event as the removal.
+    changed_names = [c["csv_file"] for c in result["changed_csvs"]]
+    assert "a.csv" not in changed_names
+    assert "rule_csv_map.csv" in changed_names
+
+
+@pytest.mark.unit
+def test_bootstrap_csv_expected_hashes_missing_csv_file(tmp_path):
+    """CSV listed in mapping but file absent on disk → missing_files entry."""
+    lookups = _make_lookups_dir(tmp_path)
+    (lookups / "rule_csv_map.csv").write_text(
+        "rule_name,csv_file,app_context\n"
+        "R1,a.csv,wl_manager\n"
+        "R2,ghost.csv,wl_manager\n"
+    )
+    (lookups / "a.csv").write_text("name\nAlice\n")
+    # ghost.csv referenced but never created
+
+    result = bootstrap_csv_expected_hashes(str(lookups))
+    assert result["missing_count"] == 1
+    assert "ghost.csv" in result["missing_files"]
+    # a.csv + sentinel still hashed
+    assert result["hashed_count"] == 2
+
+
+@pytest.mark.unit
+def test_bootstrap_csv_expected_hashes_missing_mapping_raises_oserror(tmp_path):
+    """Bootstrap with no rule_csv_map.csv must raise OSError (fail-loud)."""
+    lookups = _make_lookups_dir(tmp_path)
+    # No rule_csv_map.csv written
+
+    with pytest.raises(OSError) as exc_info:
+        bootstrap_csv_expected_hashes(str(lookups))
+    assert "rule_csv_map.csv" in str(exc_info.value)
+
+
+@pytest.mark.unit
+def test_bootstrap_csv_expected_hashes_sentinel_csv_always_included(tmp_path):
+    """rule_csv_map.csv itself is always hashed even when mapping is empty."""
+    lookups = _make_lookups_dir(tmp_path)
+    (lookups / "rule_csv_map.csv").write_text(
+        "rule_name,csv_file,app_context\n"  # header only, no rows
+    )
+
+    result = bootstrap_csv_expected_hashes(str(lookups))
+    assert result["hashed_count"] == 1
+    assert result["new_csvs"] == ["rule_csv_map.csv"]
+    assert result["missing_count"] == 0
