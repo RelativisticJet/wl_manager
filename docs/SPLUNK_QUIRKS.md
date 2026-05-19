@@ -43,3 +43,20 @@ When a Splunk-specific quirk causes a bug or surprises us, capture it in this pr
 - **`-auth admin:Chang3d!`** breaks in bash because `!` triggers history expansion. Use stop + start without `-auth`, or use the REST API directly.
 - **`MSYS_NO_PATHCONV=1`** is required before every `docker exec` and `docker cp` command when using Git Bash on Windows, to prevent MSYS path conversion mangling `/opt/splunk/...` paths.
 - **`docker exec -u splunk`** for Splunk commands, **`-u 0`** for root operations (chown, reading protected files).
+- **PersistentScriptHandler runs N worker processes**: module-level
+  `dict`/`set`/`list` in `bin/wl_*.py` is per-worker state, NOT
+  app-state. Under concurrent traffic, writes scatter across workers
+  and reads see one worker's slice. Cross-user/cross-session state
+  belongs in a KV collection (precedent: `wl_presence_state`,
+  `wl_ratelimit_state`) or a file guarded by `bin/wl_filelock.py`.
+  **Exception**: unit-test fallback dicts that exist alongside a
+  KV-backed code path are acceptable — see docstring at top of
+  `bin/wl_presence.py` for the documented pattern. Per-worker caches
+  (no coherence needed, e.g. the content-hash LRU) are fine; document
+  the intent in a docstring. **Origin**: R6-F8 (Ring 6.1, 2026-05-12).
+- **`threading.Lock` provides zero cross-worker protection**: any file
+  read-modify-write in `bin/` must use `bin/wl_filelock.py` (fcntl
+  context manager). Atomic rename does NOT substitute for locking —
+  two writers can each prepare snapshots and overwrite each other's
+  logical result. See `rules_rmw_lock` in `bin/wl_rules.py` for the
+  idiom. **Origin**: R6-F5/F6/F7 (Ring 6.1, 2026-05-12).
