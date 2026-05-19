@@ -315,32 +315,52 @@ into 4 classes:
 | HTTP boundary edge cases | 68 (`200 <= status_code < 300` → `<= 300`) | Killable but unusual | Skip — HTTP 300 (Multiple Choices) is rarely seen and not load-bearing |
 | Event-building + HTTP path | 17 (kwarg filter), 55 (auth header template), 88 (None error_msg) | Killable, higher value | Defer to v1.1 item G |
 
-### Higher-value survivors (deferred to item G)
+### Higher-value survivors (status updated 2026-05-19 during item G)
 
 - **Mutant 17** (line 91): kwarg filter `("app_context", "comment")`
-  → `("XXapp_contextXX", "comment")`. Mutated version doesn't filter
-  `app_context`, so it would be added to the event dict redundantly
-  with the explicit `event["app_context"] = ...` write earlier. The
-  resulting event would have `app_context` twice. Killable by
-  asserting `len(event) == expected_field_count` in test_audit.
+  → `("XXapp_contextXX", "comment")`. **RECLASSIFIED AS EQUIVALENT.**
+  The original triage claimed this was killable via
+  `len(event) == expected_field_count` because the unfiltered loop
+  would write `app_context` to the event again. Closer analysis
+  during item G showed the second write is idempotent:
+  `event["app_context"] = kwargs["app_context"]` overwrites the
+  line-85 assignment with the *same* value (both pull from the same
+  `kwargs` dict), and a dict overwrite does not add a key. No
+  observable behavior changes for any test input. The mutant is
+  structurally indistinguishable from the original.
 
 - **Mutant 55** (line 156): HTTP Authorization header template
-  `"Splunk %s"` → `"XXSplunk %sXX"`. Production code would send
-  malformed auth header; Splunk REST API would reject with 401.
-  Tests mock urlopen and don't inspect the actual header value.
-  Killable by mock-asserting the header value.
+  `"Splunk %s"` → `"XXSplunk %sXX"`. **CLOSED in test_audit.py
+  `test_authorization_header_exact_splunk_prefix` (item G,
+  2026-05-19).** The existing
+  `test_post_audit_event_sets_headers` used `"Splunk <key>" in
+  <header>` (substring), which the mutated `"XXSplunk <key>XX"`
+  passes. The new test asserts exact equality on the full header
+  value. Manually verified: applying the mutation locally produces
+  the assertion failure
+  `expected "Splunk MY_SESSION_KEY_12345", got "XXSplunk
+  MY_SESSION_KEY_12345XX"`.
 
 - **Mutant 88** (line 189): `error_msg = str(e)` → `error_msg = None`
-  in the generic exception handler. Caller receives `(False, None)`
-  instead of `(False, "real error text")`, masking diagnostics. Test
-  could assert `error_msg is not None and len(error_msg) > 0` in the
-  exception path.
+  in the generic exception handler. **CLOSED in test_audit.py
+  `test_generic_exception_returns_non_empty_error_message` (item
+  G, 2026-05-19).** No prior test exercised the generic
+  `except Exception` branch (existing tests only triggered HTTPError,
+  URLError, socket.timeout). The new test injects a `RuntimeError`
+  via `mock_urlopen.side_effect` and asserts `error_msg is not None`
+  + non-empty + contains the original exception's text.
+  Manually verified: applying the mutation produces `assert None
+  is not None` failure.
 
-These ~3-5 higher-value survivors are in the integration-tested HTTP
-send path. Closing them via unit tests would require mocking the
-urllib.request layer — a different style of test than the existing
-event-construction unit tests. Defer to v1.1 item G as part of the
-broader test-coverage push.
+Closing summary (item G first batch, 2026-05-19):
+- Mutant 17 → equivalent (triage corrected — no test possible without
+  destroying program semantics).
+- Mutant 55 → killed by exact-string header assertion.
+- Mutant 88 → killed by mocked-`side_effect` generic-exception test.
+- Effective wl_audit kill rate after this batch: 57/90 → **63%**
+  (was 55/90 = 61%). 33 survivors remain, all in the lower-value
+  classes (log/error message text, equivalent HTTP-status edge
+  cases, integration-only paths).
 
 ---
 

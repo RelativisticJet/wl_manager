@@ -409,3 +409,90 @@ class TestAuditMutationCoverageGaps:
             "expected the truncation marker to report the exact "
             "number of dropped entries, got: {!r}".format(marker)
         )
+
+    @patch('wl_audit.urllib.request.urlopen')
+    def test_authorization_header_exact_splunk_prefix(self, mock_urlopen):
+        """Kill mutmut #55 (item E, 2026-05-19): Authorization header
+        template ``"Splunk %s"`` mutated to ``"XXSplunk %sXX"``.
+
+        Existing ``test_post_audit_event_sets_headers`` uses a substring
+        ``in`` assertion (``"Splunk test-session-key" in <header>``) which
+        the mutation slips past — the malformed header
+        ``"XXSplunk test-session-keyXX"`` still contains the substring.
+        In production the malformed header would cause Splunk's REST API
+        to reject the request with 401 (unauthorized) and audit events
+        would silently fail to land. Pin the header value with exact
+        equality so any character mutation is killed.
+        """
+        from wl_audit import build_audit_event, post_audit_event
+
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_urlopen.return_value = mock_response
+
+        event = build_audit_event(
+            action="added",
+            analyst="jsmith",
+            detection_rule="Rule 1",
+            csv_file="file.csv",
+        )
+        post_audit_event("MY_SESSION_KEY_12345", event)
+
+        req = mock_urlopen.call_args[0][0]
+        auth_header = req.headers["Authorization"]
+
+        # Exact format pin: "Splunk <session_key>" — any character
+        # mutation in the literal prefix or its template structure
+        # produces a different string and fails this assertion.
+        assert auth_header == "Splunk MY_SESSION_KEY_12345", (
+            "Authorization header must be exactly "
+            "'Splunk MY_SESSION_KEY_12345' (no extra characters, "
+            "no template drift). Got: {!r}".format(auth_header)
+        )
+
+    @patch('wl_audit.urllib.request.urlopen')
+    def test_generic_exception_returns_non_empty_error_message(self, mock_urlopen):
+        """Kill mutmut #88 (item E, 2026-05-19): generic ``except Exception``
+        branch assigns ``error_msg = str(e)``, mutated to ``error_msg = None``.
+
+        The HTTPError / URLError / socket.timeout branches are covered by
+        other tests, but the catch-all ``except Exception`` branch has no
+        coverage. Mutating ``error_msg = str(e)`` to ``error_msg = None``
+        makes the caller receive ``(False, None)`` instead of
+        ``(False, "real error text")``, masking diagnostic information.
+
+        Trigger by raising a non-{HTTPError, URLError, timeout} exception
+        (RuntimeError) from urlopen, then assert that the returned
+        ``error_msg`` is a non-empty string containing the original
+        exception's text.
+        """
+        from wl_audit import build_audit_event, post_audit_event
+
+        # RuntimeError doesn't match any of the specific except clauses
+        # (HTTPError, URLError, socket.timeout) — falls through to the
+        # generic ``except Exception``.
+        mock_urlopen.side_effect = RuntimeError("kaboom: unexpected runtime failure")
+
+        event = build_audit_event(
+            action="added",
+            analyst="jsmith",
+            detection_rule="Rule 1",
+            csv_file="file.csv",
+        )
+        success, error_msg = post_audit_event("SESSION_KEY", event)
+
+        assert success is False
+        # Mutant 88 sets error_msg = None — explicitly assert it isn't None.
+        assert error_msg is not None, (
+            "error_msg must not be None — mutant 88 silently drops "
+            "the diagnostic text from generic-exception failures."
+        )
+        assert isinstance(error_msg, str), (
+            "error_msg must be a string for caller-side logging compat. "
+            "Got type: {}".format(type(error_msg))
+        )
+        assert len(error_msg) > 0, "error_msg must contain diagnostic text"
+        assert "kaboom" in error_msg, (
+            "error_msg should preserve the original exception's text "
+            "(str(e) behavior). Got: {!r}".format(error_msg)
+        )
