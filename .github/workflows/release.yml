@@ -32,6 +32,16 @@ jobs:
       # critical and the 2026-05-13 §8 verification is keyed to its
       # behavior. v3→v4 would require re-doing the §8 dry-run on a
       # fresh throwaway tag, scheduled for a dedicated cycle.
+      #
+      # ⚠ FUTURE BUMPER WARNING (per cosign-installer v4.0.0 release
+      # notes, 2025-10-16): cosign-installer@v4 supports BOTH Cosign
+      # v2.x and Cosign v3+. The bump itself is safe AS LONG AS the
+      # `cosign-release` field below stays on v2.x. If you ever bump
+      # cosign-release to v3.x or later, the `cosign sign-blob` calls
+      # below MUST add `--bundle` (in v3+ the sign-blob signature
+      # format changed and the flag became required). Without it, the
+      # workflow will fail or emit invalid signatures. See DECISION_LOG
+      # 2026-05-20 row for the full bump-safety checklist.
       - uses: actions/checkout@v6
 
       - name: Set up Python
