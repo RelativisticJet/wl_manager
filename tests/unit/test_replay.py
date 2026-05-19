@@ -618,27 +618,62 @@ class TestSaveCsvHandler(unittest.TestCase):
         self.assertTrue(result["success"])
 
 
-class TestRevertCsvHandlerKnownBug(unittest.TestCase):
-    """Cover _execute_replay_revert_csv (lines 206-314).
+class TestRevertCsvHandler(unittest.TestCase):
+    """Cover _execute_replay_revert_csv (delegation to revert_csv_pipeline).
 
-    KNOWN BUG (documented here to make the test stable against the fix):
-    Line 226 calls `get_versions_dir()` with no arguments, but the function
-    requires `csv_path: str`. In production this ALWAYS raises TypeError,
-    which the broad `except Exception` at line 309 catches and returns as
-    `revert_failed`. Lines 229-307 are effectively dead code in production
-    until the bug is fixed.
-
-    We test the bug-caused error path, plus we cover the dead-code path
-    by lazily patching the in-function imports of read_version_manifest
-    and get_versions_dir at their source module (wl_versions).
+    History: an earlier implementation called `get_versions_dir()` with
+    no arguments (the function requires `csv_path: str`), and read
+    `version_id` from request_item although the approval queue stores
+    `version_filename`. Both bugs are fixed by delegating wholesale to
+    `revert_csv_pipeline` (same pattern as create_rule/delete_rule
+    handlers). These tests pin the FIXED behaviour.
     """
 
     def setUp(self):
         if execute_approved_action is None:
             self.skipTest("execute_approved_action not available")
 
-    def test_revert_csv_production_bug_returns_revert_failed(self):
-        """Document the dead-code bug: get_versions_dir() called with no args."""
+    def test_revert_csv_happy_path_delegates_to_pipeline(self):
+        """Successful pipeline → success result + data forwarded."""
+        import wl_replay
+        import wl_versions
+        with patch.object(wl_replay, "resolve_csv_path",
+                          return_value="/fake/x.csv"), \
+             patch.object(wl_versions, "revert_csv_pipeline",
+                          return_value={"success": True,
+                                        "message": "reverted",
+                                        "data": {"new_record_version":
+                                                 "2026-05-19 ..."}}) as mock_pipe:
+            result = execute_approved_action(
+                {"session_key": "sk",
+                 "original_analyst": "alice",
+                 "approving_admin": "bob"},
+                {"action_type": "revert_csv",
+                 "csv_file": "x.csv",
+                 "app_context": "wl_manager",
+                 "detection_rule": "DR100",
+                 "version_filename": "x_20260101_120000.csv",
+                 "version_display": "01-01-2026 12:00:00 (3 rows, by alice)",
+                 "revert_reason": "approved revert"},
+            )
+        self.assertTrue(result["success"])
+        self.assertEqual(result["message"], "reverted")
+        # Verify the delegation passes the expected kwargs
+        mock_pipe.assert_called_once()
+        kwargs = mock_pipe.call_args.kwargs
+        self.assertEqual(kwargs["csv_path"], "/fake/x.csv")
+        self.assertEqual(kwargs["version_filename"],
+                         "x_20260101_120000.csv")
+        self.assertEqual(kwargs["version_display"],
+                         "01-01-2026 12:00:00 (3 rows, by alice)")
+        self.assertEqual(kwargs["revert_reason"], "approved revert")
+        self.assertEqual(kwargs["analyst"], "alice")
+        self.assertEqual(kwargs["csv_file"], "x.csv")
+        self.assertEqual(kwargs["app_context"], "wl_manager")
+        self.assertEqual(kwargs["detection_rule"], "DR100")
+
+    def test_revert_csv_missing_version_filename_returns_error(self):
+        """No version_filename in payload → missing_version_filename error."""
         import wl_replay
         with patch.object(wl_replay, "resolve_csv_path",
                           return_value="/fake/x.csv"):
@@ -646,31 +681,81 @@ class TestRevertCsvHandlerKnownBug(unittest.TestCase):
                 {"session_key": "sk"},
                 {"action_type": "revert_csv",
                  "csv_file": "x.csv",
-                 "version_id": "v123"},
+                 "app_context": "wl_manager",
+                 "payload": {}},  # no version_filename anywhere
             )
-        # The TypeError from get_versions_dir() is caught by the broad except
         self.assertFalse(result["success"])
-        self.assertEqual(result["error_type"], "revert_failed")
-        self.assertIn("missing", result["error"].lower())
+        self.assertEqual(result["error_type"], "missing_version_filename")
 
-    def test_revert_csv_missing_manifest_path_returns_missing_versions(self):
-        """If we patch around the bug, missing manifest → missing_versions."""
+    def test_revert_csv_pipeline_failure_returns_revert_failed(self):
+        """Pipeline failure surfaces as revert_failed error_type."""
         import wl_replay
         import wl_versions
         with patch.object(wl_replay, "resolve_csv_path",
                           return_value="/fake/x.csv"), \
-             patch.object(wl_versions, "get_versions_dir",
-                          return_value="/fake/_versions"), \
-             patch("os.path.isfile", return_value=False):
+             patch.object(wl_versions, "revert_csv_pipeline",
+                          return_value={"success": False,
+                                        "error": "version file missing"}):
+            result = execute_approved_action(
+                {"session_key": "sk", "original_analyst": "alice"},
+                {"action_type": "revert_csv",
+                 "csv_file": "x.csv",
+                 "version_filename": "x_20260101.csv"},
+            )
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_type"], "revert_failed")
+        self.assertEqual(result["error"], "version file missing")
+
+    def test_revert_csv_pipeline_exception_returns_revert_failed(self):
+        """If the pipeline RAISES, wrapper catches and returns revert_failed."""
+        import wl_replay
+        import wl_versions
+        with patch.object(wl_replay, "resolve_csv_path",
+                          return_value="/fake/x.csv"), \
+             patch.object(wl_versions, "revert_csv_pipeline",
+                          side_effect=RuntimeError("disk full")):
             result = execute_approved_action(
                 {"session_key": "sk"},
                 {"action_type": "revert_csv",
                  "csv_file": "x.csv",
-                 "version_id": "v123"},
+                 "version_filename": "x_20260101.csv"},
             )
-        # Either missing_versions (path patched OK) or missing_csv (precondition)
-        # — both are acceptable failure modes for this bug-around test.
         self.assertFalse(result["success"])
+        self.assertEqual(result["error_type"], "revert_failed")
+        self.assertIn("disk full", result["error"])
+
+    def test_revert_csv_legacy_payload_under_payload_key(self):
+        """Older queue entries nest version_filename under 'payload' — honored."""
+        import wl_replay
+        import wl_versions
+        with patch.object(wl_replay, "resolve_csv_path",
+                          return_value="/fake/x.csv"), \
+             patch.object(wl_versions, "revert_csv_pipeline",
+                          return_value={"success": True,
+                                        "message": "ok"}) as mock_pipe:
+            result = execute_approved_action(
+                {"session_key": "sk"},
+                {"action_type": "revert_csv",
+                 "csv_file": "x.csv",
+                 "payload": {"version_filename": "legacy_x_20260101.csv",
+                             "version_display": "legacy display"}},
+            )
+        self.assertTrue(result["success"])
+        kwargs = mock_pipe.call_args.kwargs
+        self.assertEqual(kwargs["version_filename"],
+                         "legacy_x_20260101.csv")
+
+    def test_revert_alias_dispatches_to_same_handler(self):
+        """action_type='revert' (no _csv suffix) routes to same handler.
+
+        The handler stores approval queue entries with action_type='revert'
+        (see wl_handler.py:6761), not 'revert_csv'. The dispatch table
+        must accept both.
+        """
+        import wl_replay
+        self.assertIn("revert", wl_replay.REPLAY_HANDLERS)
+        self.assertIs(wl_replay.REPLAY_HANDLERS["revert"],
+                      wl_replay.REPLAY_HANDLERS["revert_csv"])
 
 
 class TestCreateCsvHandler(unittest.TestCase):

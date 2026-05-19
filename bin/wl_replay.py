@@ -73,7 +73,8 @@ def execute_approved_action(context: Dict[str, Any], request_item: Dict[str, Any
         }
 
     # Validate preconditions for actions requiring CSV files
-    _csv_required_actions = {"save_csv", "add_row", "remove_rows", "revert_csv"}
+    _csv_required_actions = {"save_csv", "add_row", "remove_rows",
+                             "revert_csv", "revert"}
     if action_type in _csv_required_actions:
         csv_file = request_item.get("csv_file", "")
         app_context = request_item.get("app_context", "")
@@ -205,113 +206,89 @@ def _execute_replay_save_csv(context: Dict[str, Any], request_item: Dict[str, An
 
 def _execute_replay_revert_csv(context: Dict[str, Any], request_item: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Execute revert_csv action — restore CSV to a previous version.
+    Execute revert_csv action — delegates to revert_csv_pipeline.
 
-    Args:
-        context: Approval context with metadata
-        request_item: Contains csv_file, app_context, version_id, comment
+    Matches the delegation pattern used by create_rule / delete_rule /
+    delete_csv handlers. The pipeline owns snapshot/diff/audit logic
+    (single source of truth — keeps replay path and direct-handler
+    path bit-for-bit identical).
 
-    Returns:
-        Dict: {success: bool, message: str, data: dict (optional), error: str (optional)}
+    The approval queue stores `version_filename` and `version_display`
+    (set by the submitter's call to _submit_approval, see
+    wl_handler.py:6768). Older payloads that nested these under
+    `payload` are also honored.
     """
     csv_file = request_item.get("csv_file", "")
     app_context = request_item.get("app_context", "")
-    version_id = request_item.get("version_id", "")
-    comment = request_item.get("comment", "")
+    detection_rule = request_item.get("detection_rule", "")
 
-    try:
-        # Get version manifest to find the version file
-        from wl_versions import read_version_manifest, get_versions_dir
+    payload = request_item.get("payload", {}) or {}
+    version_filename = (request_item.get("version_filename", "")
+                        or payload.get("version_filename", ""))
+    version_display = (request_item.get("version_display", "")
+                       or payload.get("version_display", ""))
+    revert_reason = (request_item.get("revert_reason", "")
+                     or payload.get("revert_reason", "")
+                     or payload.get("comment", "")
+                     or request_item.get("comment", "")
+                     or "Approved via approval queue")
 
-        versions_dir = get_versions_dir()
-        manifest_path = os.path.join(versions_dir, f"{csv_file}_versions.json")
-
-        if not os.path.isfile(manifest_path):
-            return {
-                "success": False,
-                "error": "Version history not found",
-                "error_type": "missing_versions"
-            }
-
-        manifest, _ = read_version_manifest(csv_file)
-        if not manifest:
-            return {
-                "success": False,
-                "error": "Failed to read version manifest",
-                "error_type": "manifest_error"
-            }
-
-        # Find version file matching version_id
-        version_file = None
-        for v in manifest.get("versions", []):
-            if v.get("version_id") == version_id:
-                version_file = os.path.join(versions_dir, v.get("filename", ""))
-                break
-
-        if not version_file or not os.path.isfile(version_file):
-            return {
-                "success": False,
-                "error": "Version file not found",
-                "error_type": "missing_version_file"
-            }
-
-        # Read version CSV data
-        headers, rows = read_csv(version_file)
-
-        # Write CSV to current location
-        path = resolve_csv_path(csv_file, app_context)
-        if path is None:
-            fallback = os.path.join(OWN_LOOKUPS, csv_file)
-            if os.path.isfile(fallback) and safe_realpath(fallback, APPS_DIR):
-                path = safe_realpath(fallback, APPS_DIR)
-
-        if path is None:
-            return {
-                "success": False,
-                "error": "CSV file not found",
-                "error_type": "missing_csv"
-            }
-
-        write_csv(path, headers, rows)
-
-        # Create new version snapshot of reverted state (path, analyst, action_label)
-        analyst = context.get("original_analyst", "")
-        new_version_id, _ = snapshot_version(path, analyst, "revert_csv")
-
-        # Post audit event
-        session_key = context.get("session_key", "")
-        approving_admin = context.get("approving_admin", "")
-        request_id = context.get("request_id", "")
-
-        audit_evt = build_audit_event(
-            action="replay_revert_csv",
-            analyst=approving_admin,
-            detection_rule=request_item.get("detection_rule", ""),
-            csv_file=csv_file,
-            app_context=app_context,
-            comment=f"Reverted to {version_id} by {approving_admin}. {comment}",
-            request_id=request_id,
-            reverted_to_version=version_id,
-            new_record_version=new_version_id,
-            original_analyst=analyst
-        )
-
-        post_result, post_error = post_audit_event(session_key, audit_evt)
-        if not post_result:
-            _logger.error(f"Audit posting failed for replay_revert_csv: {post_error}")
-
+    if not version_filename:
         return {
-            "success": True,
-            "message": "CSV reverted successfully",
-            "data": {"version_id": new_version_id}
+            "success": False,
+            "error": "version_filename missing from approval payload",
+            "error_type": "missing_version_filename",
         }
 
+    path = resolve_csv_path(csv_file, app_context)
+    if path is None:
+        fallback = os.path.join(OWN_LOOKUPS, csv_file)
+        if os.path.isfile(fallback) and safe_realpath(fallback, APPS_DIR):
+            path = safe_realpath(fallback, APPS_DIR)
+    if path is None:
+        return {
+            "success": False,
+            "error": "CSV file not found",
+            "error_type": "missing_csv",
+        }
+
+    from wl_versions import revert_csv_pipeline
+
+    analyst = context.get("original_analyst", "")
+    session_key = context.get("session_key", "")
+
+    try:
+        result = revert_csv_pipeline(
+            csv_path=path,
+            version_filename=version_filename,
+            version_display=version_display,
+            revert_reason=revert_reason,
+            analyst=analyst,
+            session_key=session_key,
+            csv_file=csv_file,
+            app_context=app_context,
+            detection_rule=detection_rule,
+        )
     except Exception as e:
+        _logger.error("revert_csv_pipeline raised: %s", e, exc_info=True)
         return {
             "success": False,
             "error": str(e),
-            "error_type": "revert_failed"
+            "error_type": "revert_failed",
         }
+
+    if not result.get("success"):
+        return {
+            "success": False,
+            "error": result.get("error", "Revert failed"),
+            "error_type": "revert_failed",
+        }
+
+    return {
+        "success": True,
+        "message": result.get("message", "CSV reverted successfully"),
+        "data": result.get("data", {}),
+    }
 
 
 def _execute_replay_create_rule(context: Dict[str, Any], request_item: Dict[str, Any]) -> Dict[str, Any]:
@@ -523,4 +500,5 @@ REPLAY_HANDLERS = {
     "remove_csv": _execute_replay_delete_csv,   # Alias: approval queue uses remove_*
     "remove_rule": _execute_replay_delete_rule,  # Alias: approval queue uses remove_*
     "revert_csv": _execute_replay_revert_csv,
+    "revert": _execute_replay_revert_csv,  # Alias: handler stores action_type="revert"
 }
