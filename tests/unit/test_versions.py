@@ -29,7 +29,11 @@ from wl_versions import (
     write_version_manifest,
     snapshot_version,
     get_versions_list,
+    revert_csv_pipeline,
 )
+import wl_versions as wl_versions_module
+import wl_audit as wl_audit_module
+from wl_csv import write_csv as _write_csv_helper
 
 
 @pytest.mark.unit
@@ -641,3 +645,341 @@ class TestVersionIdExtraction:
         assert len(result) == 1
         # Version ID should be extracted even without .csv
         assert result[0]["version_id"] == "20260331_203045"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Test: revert_csv_pipeline — covers wl_versions.py:377-658 (G3 batch 3b)
+#
+# This 280+ line pipeline function was uncovered prior to G3. Tests use
+# tmp_path for real filesystem I/O (CSV reads/writes, manifest, version
+# snapshots) and mock post_audit_event so no actual Splunk REST call fires.
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def _setup_csv_with_version(tmp_path, current_rows, version_rows,
+                            headers=("name", "value")):
+    """Build a CSV + a version snapshot + a manifest in tmp_path.
+
+    Returns (csv_path, version_filename, version_display).
+    """
+    csv_path = tmp_path / "test.csv"
+    versions_dir = tmp_path / "_versions"
+    versions_dir.mkdir()
+
+    _write_csv_helper(str(csv_path), list(headers), current_rows)
+
+    version_filename = "test_20260101_120000.csv"
+    version_path = versions_dir / version_filename
+    _write_csv_helper(str(version_path), list(headers), version_rows)
+
+    # Write a manifest that references the version snapshot
+    manifest_path = versions_dir / "test_versions.json"
+    manifest = {
+        "versions": [
+            {
+                "timestamp": "2026-01-01T12:00:00Z",
+                "display": "01-01-2026 12:00:00",
+                "filename": version_filename,
+                "analyst": "tester",
+                "action": "save",
+                "row_count": len(version_rows),
+                "col_count": len(headers),
+            }
+        ]
+    }
+    manifest_path.write_text(json.dumps(manifest))
+
+    return str(csv_path), version_filename, "01-01-2026 12:00:00"
+
+
+@pytest.mark.unit
+class TestRevertCsvPipeline:
+    """Cover revert_csv_pipeline at bin/wl_versions.py:377-658."""
+
+    def test_happy_path_overwrites_csv_and_returns_success(self, tmp_path):
+        """Current CSV is replaced by version content; audit event posted."""
+        current = [{"name": "Alice", "value": "1"}, {"name": "Bob", "value": "2"}]
+        version = [{"name": "Alice", "value": "1"}]  # version had only Alice
+        csv_path, version_filename, version_display = _setup_csv_with_version(
+            tmp_path, current, version
+        )
+
+        with patch.object(wl_audit_module, "post_audit_event") as mock_post:
+            mock_post.return_value = (True, "")
+            result = revert_csv_pipeline(
+                csv_path=csv_path,
+                version_filename=version_filename,
+                version_display=version_display,
+                revert_reason="oops, restore Alice-only state",
+                analyst="tester",
+                session_key="test_session",
+                csv_file="test.csv",
+                app_context="wl_manager",
+                detection_rule="DR1",
+            )
+
+        assert result["success"] is True
+        assert result["error"] == ""
+        # CSV was overwritten with version content (only Alice now)
+        from wl_csv import read_csv
+        new_headers, new_rows = read_csv(csv_path)
+        assert len(new_rows) == 1
+        assert new_rows[0]["name"] == "Alice"
+        # Audit event posted
+        assert mock_post.call_count == 1
+        evt = mock_post.call_args.args[1]
+        assert evt["action"] == "revert"
+        assert evt["analyst"] == "tester"
+        assert evt["reverted_to_version"] == version_display
+
+    def test_version_file_not_found_returns_error(self, tmp_path):
+        """Non-existent version filename returns error without touching CSV."""
+        csv_path = tmp_path / "test.csv"
+        (tmp_path / "_versions").mkdir()
+        _write_csv_helper(str(csv_path), ["name"], [{"name": "Alice"}])
+        original_content = csv_path.read_text()
+
+        with patch.object(wl_audit_module, "post_audit_event") as mock_post:
+            result = revert_csv_pipeline(
+                csv_path=str(csv_path),
+                version_filename="nonexistent_99999999_000000.csv",
+                version_display="bogus",
+                revert_reason="testing missing version",
+                analyst="tester",
+                session_key="key",
+            )
+
+        assert result["success"] is False
+        assert "Version file not found" in result["error"]
+        # CSV is unchanged
+        assert csv_path.read_text() == original_content
+        # No audit event posted (early return before audit)
+        assert mock_post.call_count == 0
+
+    def test_audit_event_records_added_rows_as_restoredback(self, tmp_path):
+        """Rows present in version but not current → restoredback_ lines."""
+        current = [{"name": "Alice", "value": "1"}]
+        version = [
+            {"name": "Alice", "value": "1"},
+            {"name": "Bob", "value": "2"},  # added back by revert
+        ]
+        csv_path, vf, vd = _setup_csv_with_version(tmp_path, current, version)
+
+        with patch.object(wl_audit_module, "post_audit_event") as mock_post:
+            mock_post.return_value = (True, "")
+            revert_csv_pipeline(
+                csv_path=csv_path,
+                version_filename=vf,
+                version_display=vd,
+                revert_reason="restore Bob",
+                analyst="tester",
+                session_key="key",
+            )
+
+        evt = mock_post.call_args.args[1]
+        value_lines = evt["value"]
+        # Bob's row should appear in restoredback_ entries
+        assert any("restoredback_name" in line and "Bob" in line for line in value_lines)
+        assert evt["restoredback_row_count"] == 1
+        assert evt["removedback_row_count"] == 0
+
+    def test_audit_event_records_removed_rows_as_removedback(self, tmp_path):
+        """Rows present in current but not version → removedback_ lines."""
+        current = [
+            {"name": "Alice", "value": "1"},
+            {"name": "Bob", "value": "2"},
+        ]
+        version = [{"name": "Alice", "value": "1"}]  # version doesn't have Bob
+        csv_path, vf, vd = _setup_csv_with_version(tmp_path, current, version)
+
+        with patch.object(wl_audit_module, "post_audit_event") as mock_post:
+            mock_post.return_value = (True, "")
+            revert_csv_pipeline(
+                csv_path=csv_path,
+                version_filename=vf,
+                version_display=vd,
+                revert_reason="remove Bob via revert",
+                analyst="tester",
+                session_key="key",
+            )
+
+        evt = mock_post.call_args.args[1]
+        value_lines = evt["value"]
+        assert any("removedback_name" in line and "Bob" in line for line in value_lines)
+        assert evt["removedback_row_count"] == 1
+        assert evt["restoredback_row_count"] == 0
+
+    def test_audit_event_records_edited_rows_as_changedback(self, tmp_path):
+        """Same row keys but different values → changedback_ lines."""
+        current = [{"name": "Alice", "value": "current_value"}]
+        version = [{"name": "Alice", "value": "old_value"}]
+        csv_path, vf, vd = _setup_csv_with_version(tmp_path, current, version)
+
+        with patch.object(wl_audit_module, "post_audit_event") as mock_post:
+            mock_post.return_value = (True, "")
+            revert_csv_pipeline(
+                csv_path=csv_path,
+                version_filename=vf,
+                version_display=vd,
+                revert_reason="restore old value",
+                analyst="tester",
+                session_key="key",
+            )
+
+        evt = mock_post.call_args.args[1]
+        value_lines = evt["value"]
+        # Should contain a changedback_value line showing the field change
+        assert any("changedback_value" in line for line in value_lines)
+        assert evt["editedback_row_count"] == 1
+
+    def test_audit_event_skips_hidden_columns(self, tmp_path):
+        """Headers starting with `_` are not surfaced in value lines."""
+        headers = ("name", "_internal_id", "value")
+        current = [{"name": "Alice", "_internal_id": "x1", "value": "1"}]
+        version = [{"name": "Alice", "_internal_id": "y1", "value": "1"},
+                   {"name": "Bob", "_internal_id": "y2", "value": "2"}]
+        csv_path, vf, vd = _setup_csv_with_version(tmp_path, current, version, headers=headers)
+
+        with patch.object(wl_audit_module, "post_audit_event") as mock_post:
+            mock_post.return_value = (True, "")
+            revert_csv_pipeline(
+                csv_path=csv_path,
+                version_filename=vf,
+                version_display=vd,
+                revert_reason="restore Bob",
+                analyst="tester",
+                session_key="key",
+            )
+
+        evt = mock_post.call_args.args[1]
+        value_lines = evt["value"]
+        # Hidden _internal_id must not appear in any audit value line
+        assert not any("_internal_id" in line for line in value_lines), (
+            "value_lines should skip _-prefixed columns: {}".format(value_lines)
+        )
+        # But the visible columns should appear
+        assert any("name" in line for line in value_lines)
+
+    def test_outer_oserror_returns_error_dict(self, tmp_path):
+        """OSError during read_csv → returns error dict (lines 643-650)."""
+        # Use a directory as csv_path → read_csv will raise (IsADirectoryError
+        # / PermissionError depending on OS; both are OSError subclasses).
+        target = tmp_path / "fake.csv"
+        target.mkdir()  # directory, not a file
+        (tmp_path / "_versions").mkdir()
+
+        with patch.object(wl_audit_module, "post_audit_event"):
+            result = revert_csv_pipeline(
+                csv_path=str(target),
+                version_filename="anything.csv",
+                version_display="any",
+                revert_reason="testing oserror path",
+                analyst="tester",
+                session_key="key",
+            )
+
+        assert result["success"] is False
+        # The OSError branch wraps the message with "Failed to revert CSV"
+        # OR the generic Exception branch wraps with "Unexpected error".
+        # Either way, an error is returned.
+        assert result["error"] != ""
+        assert result["data"] == {}
+
+    def test_generic_exception_returns_error_dict(self, tmp_path):
+        """Non-OSError exception in pipeline → generic-exception branch (651-658)."""
+        current = [{"name": "Alice", "value": "1"}]
+        version = [{"name": "Bob", "value": "2"}]
+        csv_path, vf, vd = _setup_csv_with_version(tmp_path, current, version)
+
+        # Inject a RuntimeError by patching compute_diff (called inside pipeline)
+        with patch.object(wl_versions_module, "compute_diff",
+                          side_effect=RuntimeError("synthetic failure")), \
+             patch.object(wl_audit_module, "post_audit_event"):
+            result = revert_csv_pipeline(
+                csv_path=csv_path,
+                version_filename=vf,
+                version_display=vd,
+                revert_reason="trigger generic exception",
+                analyst="tester",
+                session_key="key",
+            )
+
+        assert result["success"] is False
+        assert "Unexpected error during revert" in result["error"]
+        assert "synthetic failure" in result["error"]
+
+    def test_revert_removes_source_version_from_manifest(self, tmp_path):
+        """After revert, the source version entry is removed from manifest
+        (avoids duplicate when the revert snapshot is later added)."""
+        current = [{"name": "Alice", "value": "1"}]
+        version = [{"name": "Bob", "value": "2"}]
+        csv_path, vf, vd = _setup_csv_with_version(tmp_path, current, version)
+
+        with patch.object(wl_audit_module, "post_audit_event"):
+            revert_csv_pipeline(
+                csv_path=csv_path,
+                version_filename=vf,
+                version_display=vd,
+                revert_reason="cleanup test",
+                analyst="tester",
+                session_key="key",
+            )
+
+        # Read the manifest post-revert: source version should be gone
+        manifest, _ = read_version_manifest(csv_path)
+        version_files = [
+            v.get("filename", "") for v in manifest.get("versions", [])
+        ]
+        assert vf not in version_files, (
+            "Source version {} should be removed from manifest. Got: {}".format(
+                vf, version_files
+            )
+        )
+
+    def test_revert_pipeline_records_column_position_changes(self, tmp_path):
+        """If column order differs between current and version, moveback_column lines appear."""
+        # current has columns in order [name, value]; version has [value, name]
+        current_headers = ("name", "value")
+        version_headers = ("value", "name")
+        current = [{"name": "Alice", "value": "1"}]
+        version = [{"value": "1", "name": "Alice"}]
+
+        csv_path = tmp_path / "test.csv"
+        versions_dir = tmp_path / "_versions"
+        versions_dir.mkdir()
+        _write_csv_helper(str(csv_path), list(current_headers), current)
+        vf = "test_20260101_120000.csv"
+        _write_csv_helper(str(versions_dir / vf), list(version_headers), version)
+        manifest_path = versions_dir / "test_versions.json"
+        manifest_path.write_text(json.dumps({
+            "versions": [{
+                "filename": vf,
+                "display": "01-01-2026 12:00:00",
+                "timestamp": "2026-01-01T12:00:00Z",
+                "analyst": "t",
+                "action": "save",
+                "row_count": 1,
+                "col_count": 2,
+            }]
+        }))
+
+        with patch.object(wl_audit_module, "post_audit_event") as mock_post:
+            mock_post.return_value = (True, "")
+            result = revert_csv_pipeline(
+                csv_path=str(csv_path),
+                version_filename=vf,
+                version_display="01-01-2026 12:00:00",
+                revert_reason="restore column order",
+                analyst="tester",
+                session_key="key",
+            )
+
+        evt = mock_post.call_args.args[1]
+        value_lines = evt["value"]
+        # At least one moveback_column line should appear (columns swapped)
+        moveback_col_lines = [l for l in value_lines if "moveback_column" in l]
+        assert len(moveback_col_lines) > 0, (
+            "expected moveback_column lines when column order differs; got: {}"
+            .format(value_lines)
+        )
+        assert evt["moveback_column_count"] >= 1
