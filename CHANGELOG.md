@@ -64,6 +64,75 @@ Detailed per-round entries below.
 
 ---
 
+## Unreleased — 2026-05-19 (revert_csv replay delegation + coverage push)
+
+### Build — 662 → 663
+
+`bin/wl_replay.py :: _execute_replay_revert_csv` now delegates to the
+canonical `revert_csv_pipeline` in `bin/wl_versions.py`, matching the
+pattern already used by the `create_rule` / `delete_rule` /
+`delete_csv` handlers. The previous body had three dormant bugs:
+
+1. `get_versions_dir()` was called with no arguments (the signature
+   requires `csv_path: str`), always raising `TypeError` that was
+   caught silently as `"revert_failed"`.
+2. `read_version_manifest(csv_file)` was passed a filename instead
+   of a full path.
+3. The handler read `version_id` from the request item, but the
+   approval queue actually stores `version_filename`.
+
+The bugs were dormant in production because `wl_handler.py` short-
+circuits revert approvals at `process_approval` and never routed
+through `execute_approved_action` for `action_type="revert"`. The
+dispatch table now contains both `"revert"` and `"revert_csv"`
+aliases pointing to the same handler, so a future refactor that
+consolidates approval paths will Just Work instead of tripping on
+the stale dispatch keys.
+
+This is a structural correctness fix, not a customer-visible
+behavior change. No migration is required.
+
+### Tests — unit-testable backend coverage 78.0% → 80.12%
+
+51 new unit tests across `tests/unit/test_hmac_key.py`,
+`tests/unit/test_versions.py`, `tests/unit/test_rules.py`, and
+`tests/unit/test_limits.py`. The HMAC-registry regression tests
+were also relocated from the top-level `tests/` directory into
+`tests/unit/` so they are picked up by the default
+`pytest tests/unit/` collection (the previous location was
+outside `pytest.ini`'s `testpaths`, so the 22 existing tests were
+silently excluded from CI coverage runs).
+
+Per-module gains:
+
+| Module | Before | After | Delta |
+| --- | --- | --- | --- |
+| `wl_hmac_key` | 72% | 97% | +25pp |
+| `wl_rules` | 74% | 88% | +14pp |
+| `wl_replay` | 20% | 92% | +72pp* |
+| `wl_versions` | 43% | 80% | +37pp |
+| `wl_presence` | 40% | 100% | +60pp |
+| `wl_ratelimit` | 27% | 85% | +58pp |
+| `wl_rbac` | 54% | 100% | +46pp |
+| `wl_audit` | 84% | 89% | +5pp |
+
+\* `wl_replay` gain combines G3c (18 new tests) and the d267ea3
+  delegation refactor (the previously-uncovered broken body was
+  replaced by a smaller, fully-tested delegation path).
+
+Modules still below 80% — deferred to v1.1 backlog or covered by the
+integration suite: `wl_csv` (60%, security boundary), `wl_limits`
+(67%), `wl_trash` (65%).
+
+Test suite: 716 → 789 (+73 tests).
+
+`bin/wl_handler.py` was NOT modified during this work — it is
+FORBIDDEN as a unit-test or mutation target per the hardening rules.
+Its 3260 statements are exercised by the integration suite in
+`tests/integration/` against a live Splunk container.
+
+---
+
 ## Unreleased — 2026-05-14 (Phase 0.0: AppInspect de-risk + targeted fixes)
 
 ### Build — 659 → 660
