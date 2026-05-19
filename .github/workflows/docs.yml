@@ -149,6 +149,15 @@ jobs:
         uses: actions/upload-pages-artifact@v5
         with:
           path: site/
+          # upload-pages-artifact v4.0.0 introduced a "hidden files are
+          # excluded by default" change. MkDocs Material writes
+          # `.nojekyll` to `site/` so GitHub Pages skips Jekyll
+          # processing — without that file, GitHub Pages would 404 on
+          # mkdocs-emitted paths starting with `_` (assets/_static
+          # paths, etc.). Setting include-hidden-files: true preserves
+          # v3 behavior and ensures the deploy is correct when Phase
+          # 3.4 flips the repo public and this step actually fires.
+          include-hidden-files: true
 
       - name: Deploy to GitHub Pages
         id: deployment
