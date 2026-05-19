@@ -717,3 +717,116 @@ def test_get_limit_status_with_unlimited():
             with patch('wl_limits.get_counter_period_key', return_value='2026-04-01'):
                 status = wl_limits.get_limit_status("jsmith")
                 assert status["row_removal"]["remaining"] == -1
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Lock-path + path helpers (R6-F6 cross-process sequence lock)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.unit
+class TestSanitizeLockUsername:
+    """_sanitize_lock_username strips path-traversal and shell metas (lines 198-201)."""
+
+    def test_normal_alphanumeric_passes_through(self):
+        from wl_limits import _sanitize_lock_username
+        assert _sanitize_lock_username("admin1") == "admin1"
+
+    def test_allowed_punctuation_passes_through(self):
+        from wl_limits import _sanitize_lock_username
+        assert _sanitize_lock_username("admin.test_1-prod") == "admin.test_1-prod"
+
+    def test_empty_string_falls_back_to_anon(self):
+        from wl_limits import _sanitize_lock_username
+        assert _sanitize_lock_username("") == "_anon"
+
+    def test_none_falls_back_to_anon(self):
+        from wl_limits import _sanitize_lock_username
+        assert _sanitize_lock_username(None) == "_anon"
+
+    def test_path_traversal_chars_stripped(self):
+        from wl_limits import _sanitize_lock_username
+        result = _sanitize_lock_username("../etc/passwd")
+        assert "/" not in result
+        assert result == ".._etc_passwd"
+
+    def test_shell_metas_stripped(self):
+        from wl_limits import _sanitize_lock_username
+        result = _sanitize_lock_username("admin;rm -rf /")
+        assert ";" not in result
+        assert "/" not in result
+
+
+@pytest.mark.unit
+class TestAdminDailyLimitLock:
+    """admin_daily_limit_lock cross-process serialization (lines 229-233).
+
+    Note: on Windows fcntl is None and file_lock() is a no-op (no lock file
+    is created). These tests verify the context manager YIELDS correctly
+    and that the per-user lock-path is computed correctly via mocking.
+    """
+
+    def test_lock_yields_and_body_runs(self, tmp_path):
+        """Context manager yields → body runs without TimeoutError."""
+        from wl_limits import admin_daily_limit_lock
+        with patch('wl_limits._get_daily_limits_path',
+                   return_value=str(tmp_path / "_daily_limits.json")):
+            body_ran = False
+            with admin_daily_limit_lock("admin_user_1"):
+                body_ran = True
+            assert body_ran
+
+    def test_lock_path_includes_sanitized_username(self, tmp_path):
+        """Verify the constructed lock path uses sanitized username."""
+        from wl_limits import admin_daily_limit_lock
+        daily_path = str(tmp_path / "_daily_limits.json")
+        captured_path = []
+
+        def fake_file_lock(lock_path, timeout=10):
+            captured_path.append(lock_path)
+            from contextlib import contextmanager
+            @contextmanager
+            def _cm():
+                yield True
+            return _cm()
+
+        with patch('wl_limits._get_daily_limits_path',
+                   return_value=daily_path), \
+             patch('wl_limits.file_lock', side_effect=fake_file_lock):
+            with admin_daily_limit_lock("../etc/passwd"):
+                pass
+        assert len(captured_path) == 1
+        # Path-traversal stripped, sanitized to .._etc_passwd
+        assert ".._etc_passwd" in captured_path[0]
+        assert captured_path[0].endswith(".rmw.lock")
+
+    def test_lock_path_anon_for_empty_user(self, tmp_path):
+        """Empty username → _anon in lock path."""
+        from wl_limits import admin_daily_limit_lock
+        daily_path = str(tmp_path / "_daily_limits.json")
+        captured_path = []
+
+        def fake_file_lock(lock_path, timeout=10):
+            captured_path.append(lock_path)
+            from contextlib import contextmanager
+            @contextmanager
+            def _cm():
+                yield True
+            return _cm()
+
+        with patch('wl_limits._get_daily_limits_path',
+                   return_value=daily_path), \
+             patch('wl_limits.file_lock', side_effect=fake_file_lock):
+            with admin_daily_limit_lock(""):
+                pass
+        assert "._anon.rmw.lock" in captured_path[0]
+
+
+@pytest.mark.unit
+def test_get_daily_limits_path_creates_versions_dir(tmp_path):
+    """_get_daily_limits_path ensures _versions/ dir exists (lines 163-165)."""
+    with patch('wl_limits.OWN_LOOKUPS', str(tmp_path)):
+        from wl_limits import _get_daily_limits_path
+        path = _get_daily_limits_path()
+        assert os.path.isdir(os.path.join(str(tmp_path), "_versions"))
+        assert path.endswith("_daily_limits.json")

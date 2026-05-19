@@ -23,8 +23,10 @@ from wl_rules import (
     write_rules_registry,
     read_csv_mapping,
     get_rule_csv_file,
+    get_rule_for_csv,
     delete_rule_pipeline,
     delete_csv_pipeline,
+    create_rule_pipeline,
 )
 
 
@@ -138,6 +140,44 @@ class TestWriteRulesRegistry:
         content = json.loads(rules_file.read_text())
         assert content == []
 
+    def test_write_rules_registry_cleans_tempfile_on_rename_error(self, tmp_path):
+        """If os.rename fails, the .tmp file is cleaned up and OSError
+        re-raised (covers wl_rules.py lines 126-133).
+        """
+        import wl_rules
+        with patch("wl_rules.OWN_LOOKUPS", str(tmp_path)), \
+             patch.object(wl_rules.os, "rename",
+                          side_effect=OSError("simulated rename failure")):
+            with pytest.raises(OSError, match="simulated rename failure"):
+                write_rules_registry(["rule_x"])
+
+        # Temp file must be cleaned up (covers the inner try/except)
+        temp_file = tmp_path / "_detection_rules.json.tmp"
+        assert not temp_file.exists(), \
+            "temp file was not cleaned up after rename failure"
+
+    def test_write_rules_registry_swallows_cleanup_oserror(self, tmp_path):
+        """If os.remove(temp_path) ALSO fails, the original OSError still
+        propagates (covers the inner OSError-swallowing branch at line 131-132).
+        """
+        import wl_rules
+        call_count = {"remove": 0}
+        original_remove = os.remove
+
+        def flaky_remove(path):
+            call_count["remove"] += 1
+            # First remove call (target file) succeeds; second (temp cleanup) fails
+            if call_count["remove"] >= 1 and path.endswith(".tmp"):
+                raise OSError("cleanup also failed")
+            return original_remove(path)
+
+        with patch("wl_rules.OWN_LOOKUPS", str(tmp_path)), \
+             patch.object(wl_rules.os, "rename",
+                          side_effect=OSError("rename failed")), \
+             patch.object(wl_rules.os, "remove", side_effect=flaky_remove):
+            with pytest.raises(OSError, match="rename failed"):
+                write_rules_registry(["rule_x"])
+
 
 @pytest.mark.unit
 class TestReadCsvMapping:
@@ -233,6 +273,38 @@ class TestGetRuleCsvFile:
             result = get_rule_csv_file("nonexistent_rule")
 
         assert result is None
+
+
+@pytest.mark.unit
+class TestGetRuleForCsv:
+    """Tests for get_rule_for_csv (reverse lookup, lines 183-189)."""
+
+    def test_reverse_lookup_finds_rule(self, tmp_path):
+        """CSV present in mapping → return its rule name."""
+        csv_file = tmp_path / "rule_csv_map.csv"
+        csv_file.write_text(
+            "rule_name,csv_file,app_context\n"
+            "rule_x,DR_x.csv,\n"
+            "rule_y,DR_y.csv,wl_manager\n"
+        )
+        with patch("wl_rules.MAPPING_FILE", str(csv_file)):
+            assert get_rule_for_csv("DR_y.csv") == "rule_y"
+            assert get_rule_for_csv("DR_x.csv") == "rule_x"
+
+    def test_reverse_lookup_returns_empty_string_when_csv_missing(self, tmp_path):
+        """CSV not present in any mapping → empty string."""
+        csv_file = tmp_path / "rule_csv_map.csv"
+        csv_file.write_text(
+            "rule_name,csv_file,app_context\nrule_a,DR_a.csv,\n"
+        )
+        with patch("wl_rules.MAPPING_FILE", str(csv_file)):
+            assert get_rule_for_csv("missing.csv") == ""
+
+    def test_reverse_lookup_returns_empty_on_missing_mapping_file(self, tmp_path):
+        """No mapping file at all → empty string (read_csv_mapping returns {})."""
+        nonexistent = tmp_path / "no_such_mapping.csv"
+        with patch("wl_rules.MAPPING_FILE", str(nonexistent)):
+            assert get_rule_for_csv("anything.csv") == ""
 
     def test_get_rule_csv_file_mapping_missing(self):
         """Test looking up CSV when mapping file is missing."""
@@ -486,3 +558,94 @@ class TestDeleteCsvPipeline:
 
         assert result["success"] is True
         assert result["data"]["rule_name"] == "auto_rule"
+
+
+@pytest.mark.unit
+class TestCreateRulePipeline:
+    """Tests for create_rule_pipeline — the 8 validation branches at
+    wl_rules.py:213-261 plus the cross-process-locked happy path.
+    """
+
+    def test_empty_name_raises_value_error(self):
+        with pytest.raises(ValueError, match="required"):
+            create_rule_pipeline("")
+
+    def test_whitespace_only_name_raises_value_error(self):
+        with pytest.raises(ValueError, match="required"):
+            create_rule_pipeline("   ")
+
+    def test_name_too_long_raises_value_error(self):
+        with pytest.raises(ValueError, match="too long"):
+            create_rule_pipeline("a" * 101)
+
+    def test_name_with_non_ascii_raises_value_error(self):
+        with pytest.raises(ValueError, match="ASCII"):
+            create_rule_pipeline("DR_тест")
+
+    def test_name_with_only_special_chars_raises_value_error(self):
+        # Passes the ASCII check (allow_spaces=True permits dots/hyphens/etc)
+        # but fails the "must contain at least one alphanumeric" check.
+        with pytest.raises(ValueError, match="at least one letter"):
+            create_rule_pipeline("---...")
+
+    def test_duplicate_in_mapping_raises_value_error(self, tmp_path):
+        """Rule already present in rule_csv_map.csv → ValueError."""
+        rows = [{"rule_name": "DR_existing", "csv_file": "x.csv",
+                 "app_context": ""}]
+        mapping_path = _setup_mapping(tmp_path, rows)
+        _setup_registry(tmp_path, [])
+
+        with patch("wl_rules.MAPPING_FILE", mapping_path), \
+             patch("wl_rules.OWN_LOOKUPS", str(tmp_path)):
+            with pytest.raises(ValueError, match="already exists in CSV mapping"):
+                create_rule_pipeline("DR_existing")
+
+    def test_duplicate_in_registry_raises_value_error(self, tmp_path):
+        """Rule already registered in _detection_rules.json → ValueError."""
+        mapping_path = _setup_mapping(tmp_path, [])  # empty mapping
+        _setup_registry(tmp_path, ["DR_already_registered"])
+
+        with patch("wl_rules.MAPPING_FILE", mapping_path), \
+             patch("wl_rules.OWN_LOOKUPS", str(tmp_path)):
+            with pytest.raises(ValueError, match="already registered"):
+                create_rule_pipeline("DR_already_registered")
+
+    def test_max_rules_exceeded_raises_value_error(self, tmp_path):
+        """At MAX_DETECTION_RULES limit → ValueError."""
+        from wl_constants import MAX_DETECTION_RULES
+        mapping_path = _setup_mapping(tmp_path, [])
+        # Fill registry to the limit
+        full_registry = [f"DR_{i}" for i in range(MAX_DETECTION_RULES)]
+        _setup_registry(tmp_path, full_registry)
+
+        with patch("wl_rules.MAPPING_FILE", mapping_path), \
+             patch("wl_rules.OWN_LOOKUPS", str(tmp_path)):
+            with pytest.raises(ValueError, match="Maximum number"):
+                create_rule_pipeline("DR_one_too_many")
+
+    def test_happy_path_appends_to_registry(self, tmp_path):
+        """Valid new rule → success, persisted to registry."""
+        mapping_path = _setup_mapping(tmp_path, [])
+        _setup_registry(tmp_path, ["DR_existing"])
+
+        with patch("wl_rules.MAPPING_FILE", mapping_path), \
+             patch("wl_rules.OWN_LOOKUPS", str(tmp_path)):
+            result = create_rule_pipeline("DR_new")
+            # Verify registered
+            assert result["success"] is True
+            assert result["detection_rule"] == "DR_new"
+            assert "registered" in result["message"]
+            # Verify persisted
+            persisted = read_rules_registry()
+            assert "DR_new" in persisted
+            assert "DR_existing" in persisted  # original kept
+
+    def test_name_stripped_of_surrounding_whitespace(self, tmp_path):
+        """Whitespace around a valid name is stripped before validation."""
+        mapping_path = _setup_mapping(tmp_path, [])
+        _setup_registry(tmp_path, [])
+
+        with patch("wl_rules.MAPPING_FILE", mapping_path), \
+             patch("wl_rules.OWN_LOOKUPS", str(tmp_path)):
+            result = create_rule_pipeline("  DR_padded  ")
+        assert result["detection_rule"] == "DR_padded"

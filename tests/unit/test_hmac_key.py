@@ -27,7 +27,7 @@ from typing import Dict, List, Optional
 from unittest import mock
 
 # Make ``bin/`` importable when tests are run from the repo root.
-_BIN_DIR = os.path.join(os.path.dirname(__file__), "..", "bin")
+_BIN_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "bin")
 if _BIN_DIR not in sys.path:
     sys.path.insert(0, _BIN_DIR)
 
@@ -355,6 +355,59 @@ class TestParityWithExistingModules(unittest.TestCase):
         shared_key = wl_hmac_key.derive_hash_registry_key()
         csv_key = wl_csv._derive_hash_registry_key()  # type: ignore[attr-defined]
         self.assertEqual(shared_key, csv_key)
+
+
+class TestEdgeCases(unittest.TestCase):
+    """Cover the last 3 missing branches (lines 128, 160-165)."""
+
+    def test_read_returns_empty_dict_when_top_level_is_not_dict(self) -> None:
+        """Top-level JSON list → fail-closed empty dict (line 128)."""
+        from wl_hmac_key import read_expected_hashes
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "registry.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(["not", "a", "dict"], fh)
+            self.assertEqual(read_expected_hashes(path), {})
+
+    def test_write_cleans_up_tempfile_on_replace_failure(self) -> None:
+        """write_expected_hashes deletes <path>.tmp when os.replace fails
+        (covers lines 160-165 — the try/except/cleanup branch).
+        """
+        import wl_hmac_key
+        from wl_hmac_key import write_expected_hashes
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "registry.json")
+            # Patch os.replace inside the module to fail; the with-open
+            # block has already created and closed <path>.tmp by then,
+            # so the cleanup branch (lines 161-164) runs.
+            with mock.patch.object(wl_hmac_key.os, "replace",
+                                   side_effect=OSError("simulated EXDEV")):
+                with self.assertRaises(OSError):
+                    write_expected_hashes(path, {"x.csv": "deadbeef"})
+            # Temp file must NOT be left behind
+            self.assertFalse(os.path.isfile(path + ".tmp"),
+                             "tempfile leaked after write failure")
+            # Real file must not exist either (os.replace was patched to fail)
+            self.assertFalse(os.path.isfile(path),
+                             "registry file created despite replace failure")
+
+    def test_write_handles_double_failure_in_cleanup(self) -> None:
+        """If os.remove inside the cleanup branch ALSO fails, the original
+        exception still propagates (covers the inner try/except at lines
+        162-164 — the OSError-swallowing branch).
+        """
+        import wl_hmac_key
+        from wl_hmac_key import write_expected_hashes
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "registry.json")
+            with mock.patch.object(wl_hmac_key.os, "replace",
+                                   side_effect=OSError("simulated EXDEV")), \
+                 mock.patch.object(wl_hmac_key.os, "remove",
+                                   side_effect=OSError("cleanup also failed")):
+                with self.assertRaises(OSError) as cm:
+                    write_expected_hashes(path, {"x.csv": "deadbeef"})
+            # Original error propagates, cleanup OSError is swallowed
+            self.assertIn("simulated EXDEV", str(cm.exception))
 
 
 if __name__ == "__main__":

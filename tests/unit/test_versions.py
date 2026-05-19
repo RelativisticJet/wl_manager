@@ -186,6 +186,29 @@ class TestReadVersionManifest:
         assert result == {}
         assert "expected list or dict" in error.lower()
 
+    def test_read_version_manifest_oserror_returns_error(self, tmp_path):
+        """OSError reading manifest (e.g., permission denied) → ({}, error str).
+
+        Covers wl_versions.py:126-127 — the OSError branch in
+        read_version_manifest's outer try/except. We mock the inner
+        `open` call to raise PermissionError (an OSError subclass).
+        """
+        csv_path = str(tmp_path / "test.csv")
+        # Create a real manifest path first so _get_version_manifest_path
+        # produces a valid string (and os.path.isfile returns True), but
+        # then make `open` fail.
+        manifest_path = str(tmp_path / "_versions" / "test_versions.json")
+        os.makedirs(os.path.dirname(manifest_path), exist_ok=True)
+        with open(manifest_path, "w") as fh:
+            fh.write('{"versions": []}')
+
+        with patch("builtins.open",
+                   side_effect=PermissionError("locked by other process")):
+            result, error = read_version_manifest(csv_path)
+        assert result == {}
+        assert "failed to read manifest" in error.lower()
+        assert "locked by other process" in error.lower()
+
 
 @pytest.mark.unit
 class TestWriteVersionManifest:
