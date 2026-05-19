@@ -25,6 +25,8 @@ from wl_trash import (
     list_trash,
     restore_from_trash,
     restore_from_trash_pipeline,
+    restore_csv_from_trash,
+    restore_rule_from_trash,
     purge_trash_item,
     auto_cleanup_trash,
     get_trash_dir,
@@ -621,3 +623,242 @@ class TestRestoreFromTrashPipeline:
 
         assert result["success"] is False
         assert "already exists" in result["error"]
+
+
+@pytest.mark.unit
+class TestRestoreCsvFromTrash:
+    """Tests for restore_csv_from_trash (covers lines 469-509 +
+    _restore_mapping_for_csv helper, currently the biggest coverage gap
+    in wl_trash.py)."""
+
+    def _make_trash_item(self, tmp_path, csv_name="test.csv",
+                        app_ctx="", rule_name=""):
+        """Helper: build a trash item directory with the CSV inside."""
+        lookups = tmp_path / "lookups"
+        lookups.mkdir(exist_ok=True)
+        trash = lookups / "_trash"
+        trash.mkdir(exist_ok=True)
+        trash_id = "test__csv_20260519_120000"
+        item_dir = trash / trash_id
+        item_dir.mkdir()
+        (item_dir / csv_name).write_text("header\nvalue1\nvalue2")
+        # Add a version snapshot too — should be restored to _versions/
+        (item_dir / "test_20260519_115500.csv").write_text("old\n")
+        meta = {
+            "item_type": "csv",
+            "name": csv_name,
+            "app_context": app_ctx,
+            "rule_name": rule_name,
+        }
+        return trash_id, str(item_dir), meta, lookups
+
+    def test_restore_csv_name_conflict_returns_error(self, tmp_path):
+        """If a file with the same name already exists at the dest, refuse."""
+        trash_id, item_dir, meta, lookups = self._make_trash_item(tmp_path)
+        # Create a file at the destination
+        existing = lookups / "test.csv"
+        existing.write_text("conflicting\n")
+
+        with patch("wl_trash.build_csv_path",
+                   return_value=str(existing)):
+            result_meta, error = restore_csv_from_trash(
+                trash_id, item_dir, meta)
+
+        assert "already exists" in error
+        assert result_meta is meta
+
+    def test_restore_csv_happy_path(self, tmp_path):
+        """CSV restored to dest, version snapshots moved to _versions/."""
+        trash_id, item_dir, meta, lookups = self._make_trash_item(tmp_path)
+        dest = lookups / "test.csv"
+        versions_dir = lookups / "_versions"
+
+        with patch("wl_trash.OWN_LOOKUPS", str(lookups)), \
+             patch("wl_trash.build_csv_path", return_value=str(dest)):
+            result_meta, error = restore_csv_from_trash(
+                trash_id, item_dir, meta)
+
+        assert error == ""
+        # CSV moved to destination
+        assert dest.exists()
+        assert "value1" in dest.read_text()
+        # Version snapshot moved to _versions/
+        assert versions_dir.exists()
+        assert (versions_dir / "test_20260519_115500.csv").exists()
+
+    def test_restore_csv_with_rule_recreates_mapping(self, tmp_path):
+        """rule_name in metadata triggers _restore_mapping_for_csv."""
+        trash_id, item_dir, meta, lookups = self._make_trash_item(
+            tmp_path, rule_name="DR_restored")
+        dest = lookups / "test.csv"
+        mapping_path = lookups / "rule_csv_map.csv"
+        rules_path = lookups / "_detection_rules.json"
+
+        with patch("wl_trash.OWN_LOOKUPS", str(lookups)), \
+             patch("wl_trash.MAPPING_FILE", str(mapping_path)), \
+             patch("wl_trash.build_csv_path", return_value=str(dest)):
+            result_meta, error = restore_csv_from_trash(
+                trash_id, item_dir, meta)
+
+        assert error == ""
+        # Mapping created with the rule→CSV link
+        assert mapping_path.exists()
+        mapping_content = mapping_path.read_text()
+        assert "DR_restored" in mapping_content
+        assert "test.csv" in mapping_content
+        # Rule appended to registry
+        assert rules_path.exists()
+        registered = json.loads(rules_path.read_text())
+        assert "DR_restored" in registered
+
+    def test_restore_csv_no_rule_skips_mapping_update(self, tmp_path):
+        """If meta has empty rule_name, _restore_mapping_for_csv returns early."""
+        trash_id, item_dir, meta, lookups = self._make_trash_item(
+            tmp_path, rule_name="")
+        dest = lookups / "test.csv"
+        mapping_path = lookups / "rule_csv_map.csv"
+
+        with patch("wl_trash.OWN_LOOKUPS", str(lookups)), \
+             patch("wl_trash.MAPPING_FILE", str(mapping_path)), \
+             patch("wl_trash.build_csv_path", return_value=str(dest)):
+            result_meta, error = restore_csv_from_trash(
+                trash_id, item_dir, meta)
+
+        assert error == ""
+        # No mapping file created
+        assert not mapping_path.exists()
+
+
+@pytest.mark.unit
+class TestRestoreRuleFromTrash:
+    """Tests for restore_rule_from_trash (covers lines 575-647)."""
+
+    def _make_rule_trash_item(self, tmp_path, rule_name="DR_restored",
+                              csv_names=("DR_a.csv", "DR_b.csv")):
+        """Helper: build a trash item dir for a rule with associated CSVs."""
+        lookups = tmp_path / "lookups"
+        lookups.mkdir(exist_ok=True)
+        trash = lookups / "_trash"
+        trash.mkdir(exist_ok=True)
+        trash_id = "DR_restored__rule_20260519_120000"
+        item_dir = trash / trash_id
+        item_dir.mkdir()
+        # Each CSV stored under the trash item dir
+        for csv_name in csv_names:
+            (item_dir / csv_name).write_text(f"hdr\n{csv_name}_row\n")
+        # Also a version snapshot
+        (item_dir / "extra_version.csv").write_text("v\n")
+        meta = {
+            "item_type": "rule",
+            "name": rule_name,
+            "associated_csvs": [
+                {"csv_file": c, "app_context": ""} for c in csv_names
+            ],
+        }
+        return trash_id, str(item_dir), meta, lookups
+
+    def test_restore_rule_already_registered_returns_error(self, tmp_path):
+        """If rule_name is already in _detection_rules.json, refuse."""
+        trash_id, item_dir, meta, lookups = self._make_rule_trash_item(
+            tmp_path)
+        rules_path = lookups / "_detection_rules.json"
+        rules_path.write_text(json.dumps(["DR_restored"]))  # already present
+        mapping_path = lookups / "rule_csv_map.csv"
+
+        with patch("wl_trash.OWN_LOOKUPS", str(lookups)), \
+             patch("wl_trash.MAPPING_FILE", str(mapping_path)):
+            result_meta, error = restore_rule_from_trash(
+                trash_id, item_dir, meta)
+
+        assert "already exists" in error
+        assert result_meta is meta
+
+    def test_restore_rule_already_in_mapping_returns_error(self, tmp_path):
+        """If rule_name is present in mapping CSV (even without registry), refuse."""
+        trash_id, item_dir, meta, lookups = self._make_rule_trash_item(
+            tmp_path)
+        mapping_path = lookups / "rule_csv_map.csv"
+        mapping_path.write_text(
+            "rule_name,csv_file,app_context\nDR_restored,other.csv,\n")
+
+        with patch("wl_trash.OWN_LOOKUPS", str(lookups)), \
+             patch("wl_trash.MAPPING_FILE", str(mapping_path)):
+            result_meta, error = restore_rule_from_trash(
+                trash_id, item_dir, meta)
+
+        assert "already exists" in error
+
+    def test_restore_rule_happy_path(self, tmp_path):
+        """All CSVs restored, mappings recreated, rule re-registered."""
+        trash_id, item_dir, meta, lookups = self._make_rule_trash_item(
+            tmp_path)
+        rules_path = lookups / "_detection_rules.json"
+        mapping_path = lookups / "rule_csv_map.csv"
+
+        # Compute destinations for each CSV
+        def fake_build(csv_file, app_context=""):
+            return str(lookups / csv_file)
+
+        with patch("wl_trash.OWN_LOOKUPS", str(lookups)), \
+             patch("wl_trash.MAPPING_FILE", str(mapping_path)), \
+             patch("wl_trash.build_csv_path", side_effect=fake_build):
+            result_meta, error = restore_rule_from_trash(
+                trash_id, item_dir, meta)
+
+        assert error == ""
+        # Each CSV restored
+        assert (lookups / "DR_a.csv").exists()
+        assert (lookups / "DR_b.csv").exists()
+        # Version snapshot moved to _versions/
+        assert (lookups / "_versions" / "extra_version.csv").exists()
+        # Rule registered
+        registered = json.loads(rules_path.read_text())
+        assert "DR_restored" in registered
+        # Mapping has both CSVs
+        mapping_text = mapping_path.read_text()
+        assert "DR_a.csv" in mapping_text
+        assert "DR_b.csv" in mapping_text
+
+    def test_restore_rule_handles_non_list_registry(self, tmp_path):
+        """If _detection_rules.json is malformed (not a list), treat as empty."""
+        trash_id, item_dir, meta, lookups = self._make_rule_trash_item(
+            tmp_path)
+        rules_path = lookups / "_detection_rules.json"
+        # Write a malformed registry (a dict, not a list)
+        rules_path.write_text(json.dumps({"not": "a list"}))
+        mapping_path = lookups / "rule_csv_map.csv"
+
+        def fake_build(csv_file, app_context=""):
+            return str(lookups / csv_file)
+
+        with patch("wl_trash.OWN_LOOKUPS", str(lookups)), \
+             patch("wl_trash.MAPPING_FILE", str(mapping_path)), \
+             patch("wl_trash.build_csv_path", side_effect=fake_build):
+            result_meta, error = restore_rule_from_trash(
+                trash_id, item_dir, meta)
+
+        # Treated as empty registry → restore succeeds
+        assert error == ""
+        registered = json.loads(rules_path.read_text())
+        assert "DR_restored" in registered
+
+    def test_restore_rule_with_no_associated_csvs(self, tmp_path):
+        """Rule with empty associated_csvs list still restores the rule entry."""
+        trash_id, item_dir, meta, lookups = self._make_rule_trash_item(
+            tmp_path, csv_names=())
+        # Remove the version file too — minimal restore
+        for f in os.listdir(item_dir):
+            if f != "metadata.json":
+                os.remove(os.path.join(item_dir, f))
+        meta["associated_csvs"] = []
+        rules_path = lookups / "_detection_rules.json"
+        mapping_path = lookups / "rule_csv_map.csv"
+
+        with patch("wl_trash.OWN_LOOKUPS", str(lookups)), \
+             patch("wl_trash.MAPPING_FILE", str(mapping_path)):
+            result_meta, error = restore_rule_from_trash(
+                trash_id, item_dir, meta)
+
+        assert error == ""
+        registered = json.loads(rules_path.read_text())
+        assert "DR_restored" in registered
