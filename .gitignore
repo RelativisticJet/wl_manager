@@ -23,6 +23,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+coverage.json
 
 # Splunk local configuration (should not be committed)
 local/
