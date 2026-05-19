@@ -285,6 +285,65 @@ host-side leftover at `wl_manager/.mutmut-cache` was also removed.
 
 ---
 
+## 2026-05-19 wl_audit.py fresh-run results (item E)
+
+Mutmut run with the corrected selector
+(`tests/unit/test_audit.py tests/unit/test_view_audit_dedup.py`)
+on a fresh `:ro`-mount + tmpfs container with the cache-leak fix
+from item D in effect.
+
+**Result: 90 mutations applied, 35 survived, 55 killed.
+Effective mutation score: 61%.**
+
+This is the highest kill rate of any module in this v1.1 sweep
+(wl_validation 92%, wl_csv 24%, wl_audit 61%). The reason:
+`wl_audit.py` is small (191 lines) and focused (a single
+responsibility: post audit events to the `wl_audit` Splunk index
+via REST), and the two test files
+(`test_audit.py` + `test_view_audit_dedup.py`, 562 lines combined)
+provide solid coverage of the event-building logic.
+
+### Triage on sampled survivors
+
+Sampled 9 representative survivors. The pattern divides cleanly
+into 4 classes:
+
+| Class | Example mutants | Killable? | Action |
+|---|---|---|---|
+| Module-level import fallbacks | 1 (`urllib = None → urllib = ""`) | Equivalent in practice | Skip — urllib is always available in the test env |
+| Log / error message text mutations | 22, 42, 72, 78 | Low value | Skip — pinning exact log text adds fragility without security value |
+| HTTP boundary edge cases | 68 (`200 <= status_code < 300` → `<= 300`) | Killable but unusual | Skip — HTTP 300 (Multiple Choices) is rarely seen and not load-bearing |
+| Event-building + HTTP path | 17 (kwarg filter), 55 (auth header template), 88 (None error_msg) | Killable, higher value | Defer to v1.1 item G |
+
+### Higher-value survivors (deferred to item G)
+
+- **Mutant 17** (line 88): kwarg filter `("app_context", "comment")`
+  → `("XXapp_contextXX", "comment")`. Mutated version doesn't filter
+  `app_context`, so it would be added to the event dict redundantly
+  with the explicit `event["app_context"] = ...` write earlier. The
+  resulting event would have `app_context` twice. Killable by
+  asserting `len(event) == expected_field_count` in test_audit.
+
+- **Mutant 55** (line 156): HTTP Authorization header template
+  `"Splunk %s"` → `"XXSplunk %sXX"`. Production code would send
+  malformed auth header; Splunk REST API would reject with 401.
+  Tests mock urlopen and don't inspect the actual header value.
+  Killable by mock-asserting the header value.
+
+- **Mutant 88** (line 189): `error_msg = str(e)` → `error_msg = None`
+  in the generic exception handler. Caller receives `(False, None)`
+  instead of `(False, "real error text")`, masking diagnostics. Test
+  could assert `error_msg is not None and len(error_msg) > 0` in the
+  exception path.
+
+These ~3-5 higher-value survivors are in the integration-tested HTTP
+send path. Closing them via unit tests would require mocking the
+urllib.request layer — a different style of test than the existing
+event-construction unit tests. Defer to v1.1 item G as part of the
+broader test-coverage push.
+
+---
+
 ## Recommended improvements
 
 ### CLOSED (landed in v1.1 prep, 2026-05-19)
@@ -325,11 +384,18 @@ host-side leftover at `wl_manager/.mutmut-cache` was also removed.
    results (item D)" section above. Closing the ~100-150 genuine
    survivors is deferred to v1.1 item G (test coverage push).
 
+5. ~~**Add `bin/wl_audit.py` mutation pass.**~~ — DONE. Result: 35
+   surviving mutants of 90 (kill rate 61%). The estimate "37 needs
+   re-validation" was close — fresh run dropped to 35. See
+   "2026-05-19 wl_audit.py fresh-run results (item E)" section
+   below. Most survivors are log/error message text (low value to
+   kill) or HTTP-path mutations that are integration-tested rather
+   than unit-tested. The ~5 higher-value survivors involve event-
+   building and HTTP send logic and are deferred to v1.1 item G.
+
 ### Open (queued for v1.1 release prep)
 
-1. **Add `bin/wl_audit.py` mutation pass.** The 37 reported survivors
-   on `wl_audit.py` from a prior session need the same re-validation
-   under the correct selector before deciding what to do with them.
+_(none — all mutmut work items closed as of 2026-05-19)_
 
 ---
 
