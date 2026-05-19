@@ -317,7 +317,7 @@ into 4 classes:
 
 ### Higher-value survivors (deferred to item G)
 
-- **Mutant 17** (line 88): kwarg filter `("app_context", "comment")`
+- **Mutant 17** (line 91): kwarg filter `("app_context", "comment")`
   → `("XXapp_contextXX", "comment")`. Mutated version doesn't filter
   `app_context`, so it would be added to the event dict redundantly
   with the explicit `event["app_context"] = ...` write earlier. The
