@@ -23,10 +23,19 @@ jobs:
       contents: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      # actions/checkout@v6 + setup-python@v6 close §8 side-finding #1
+      # from the 2026-05-13 Sigstore dry-run: the previous v4/v5 pins
+      # depended on Node 20, which GitHub deprecates 2026-09-16. v6 of
+      # both actions moves to Node 24. No flag changes for our usage
+      # (default checkout, python-version=3.11). cosign-installer@v3
+      # is intentionally left untouched — that action is signing-
+      # critical and the 2026-05-13 §8 verification is keyed to its
+      # behavior. v3→v4 would require re-doing the §8 dry-run on a
+      # fresh throwaway tag, scheduled for a dedicated cycle.
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
