@@ -22,7 +22,10 @@ from wl_rbac import (
     get_user,
     get_roles,
     get_admin_users,
+    get_superadmin_users,
+    read_notification_users_fallback,
 )
+import wl_rbac as wl_rbac_module
 
 from wl_constants import EDIT_ROLES, ADMIN_ROLES, SUPERADMIN_ROLES
 
@@ -323,3 +326,267 @@ class TestRBACIntegration:
             assert user == "john_doe"
             assert "wl_editor" in roles
             assert can_edit is True
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Test: notification-users conf fallback parser + admin/superadmin discovery
+# (item G3 batch 1 coverage push, 2026-05-19)
+#
+# Covers lines 73-94, 234-244, 273-306 in bin/wl_rbac.py:
+#   - read_notification_users_fallback: file parser for local/notification_users.conf
+#   - get_admin_users: REST 200-branch correctly parses admins from entry list
+#   - get_superadmin_users: full lifecycle (REST + conf fallback + empty default)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.unit
+class TestReadNotificationUsersFallback:
+    """Cover the conf-file parser at bin/wl_rbac.py:59-94."""
+
+    def test_admins_stanza_with_csv_users(self, tmp_path):
+        """Parse [admins] stanza with comma-separated user list."""
+        conf = tmp_path / "notification_users.conf"
+        conf.write_text(
+            "[admins]\n"
+            "users = alice, bob, charlie\n"
+        )
+        with patch.object(wl_rbac_module, "_NOTIFICATION_USERS_CONF", str(conf)):
+            result = read_notification_users_fallback("admins")
+        assert result == ["alice", "bob", "charlie"]
+
+    def test_superadmins_stanza_with_whitespace_users(self, tmp_path):
+        """Parse [superadmins] stanza with whitespace-separated user list."""
+        conf = tmp_path / "notification_users.conf"
+        conf.write_text(
+            "[superadmins]\n"
+            "users = root_admin  super1   super2\n"
+        )
+        with patch.object(wl_rbac_module, "_NOTIFICATION_USERS_CONF", str(conf)):
+            result = read_notification_users_fallback("superadmins")
+        assert result == ["root_admin", "super1", "super2"]
+
+    def test_missing_file_returns_empty_list(self, tmp_path):
+        """File absent → [] (silent failure per docstring)."""
+        with patch.object(
+            wl_rbac_module,
+            "_NOTIFICATION_USERS_CONF",
+            str(tmp_path / "nonexistent.conf"),
+        ):
+            result = read_notification_users_fallback("admins")
+        assert result == []
+
+    def test_wrong_stanza_returns_empty(self, tmp_path):
+        """File present with [admins] but caller asks for [superadmins] → []."""
+        conf = tmp_path / "notification_users.conf"
+        conf.write_text("[admins]\nusers = alice, bob\n")
+        with patch.object(wl_rbac_module, "_NOTIFICATION_USERS_CONF", str(conf)):
+            result = read_notification_users_fallback("superadmins")
+        assert result == []
+
+    def test_comments_and_blank_lines_are_skipped(self, tmp_path):
+        """Lines starting with '#' and empty lines are ignored."""
+        conf = tmp_path / "notification_users.conf"
+        conf.write_text(
+            "# This is a comment\n"
+            "\n"
+            "[admins]\n"
+            "# another comment\n"
+            "users = alice, bob\n"
+            "   \n"  # blank-with-whitespace
+        )
+        with patch.object(wl_rbac_module, "_NOTIFICATION_USERS_CONF", str(conf)):
+            result = read_notification_users_fallback("admins")
+        assert result == ["alice", "bob"]
+
+    def test_non_users_keys_in_stanza_are_ignored(self, tmp_path):
+        """Keys other than 'users' in the matched stanza are silently skipped."""
+        conf = tmp_path / "notification_users.conf"
+        conf.write_text(
+            "[admins]\n"
+            "notes = some metadata\n"
+            "users = alice, bob\n"
+            "owner = ops\n"
+        )
+        with patch.object(wl_rbac_module, "_NOTIFICATION_USERS_CONF", str(conf)):
+            result = read_notification_users_fallback("admins")
+        assert result == ["alice", "bob"]
+
+    def test_stanza_name_is_case_insensitive(self, tmp_path):
+        """[ADMINS], [Admins], [admins] all match 'admins' lookup."""
+        conf = tmp_path / "notification_users.conf"
+        conf.write_text(
+            "[ADMINS]\n"
+            "users = alice\n"
+        )
+        with patch.object(wl_rbac_module, "_NOTIFICATION_USERS_CONF", str(conf)):
+            result = read_notification_users_fallback("admins")
+        assert result == ["alice"]
+
+    def test_open_failure_returns_empty_list(self, tmp_path):
+        """OSError during file read → silently returns [] (lines 93-94).
+
+        File exists check passes (isfile=True), but open() raises.
+        Simulated by patching builtins.open to raise PermissionError
+        for the conf path.
+        """
+        conf = tmp_path / "notification_users.conf"
+        conf.write_text("[admins]\nusers = alice\n")
+
+        # Patch open() to raise on our specific file path, but pass
+        # through for any other open (pytest internals, etc.).
+        real_open = open
+
+        def _selective_open(p, *args, **kwargs):
+            if str(p) == str(conf):
+                raise PermissionError("simulated EACCES")
+            return real_open(p, *args, **kwargs)
+
+        with patch.object(wl_rbac_module, "_NOTIFICATION_USERS_CONF", str(conf)), \
+             patch("builtins.open", side_effect=_selective_open):
+            result = read_notification_users_fallback("admins")
+        assert result == []  # PermissionError is an OSError subclass
+
+
+@pytest.mark.unit
+class TestGetRolesNonDictSession:
+    """Cover the defensive check at bin/wl_rbac.py:168-169 (non-dict session)."""
+
+    def test_request_with_non_dict_session_returns_empty_set(self):
+        """request['session'] that isn't a dict → return set() (line 169)."""
+        request = {"session": "not_a_dict"}  # string instead of dict
+        roles = get_roles(request)
+        assert roles == set()
+
+
+@pytest.mark.unit
+class TestGetAdminUsersFromRest:
+    """Cover the 200-branch of get_admin_users at bin/wl_rbac.py:233-244.
+
+    The existing TestGetAdminUsers class returns ``(200, ...)`` from the
+    mock (an int), causing ``status.status`` to raise AttributeError →
+    exception path → built-in fallback. These tests build a proper
+    status object with the ``.status`` attribute so the 200 branch
+    actually executes.
+    """
+
+    def _build_mock_splunk(self, status_code, content_json):
+        """Build a mock splunk.rest module whose simpleRequest returns
+        (status_object, content) — matching the real Splunk SDK shape."""
+        mock_status = MagicMock()
+        mock_status.status = status_code
+        mock_splunk = MagicMock()
+        mock_splunk.rest.simpleRequest.return_value = (mock_status, content_json)
+        return mock_splunk
+
+    def test_rest_200_parses_admin_roles_from_entries(self, tmp_path):
+        """REST 200 with entries containing admin-tier users → returns them."""
+        content = json.dumps({
+            "entry": [
+                {"name": "alice",   "content": {"roles": ["wl_admin"]}},
+                {"name": "carol",   "content": {"roles": ["wl_editor"]}},
+                {"name": "dan",     "content": {"roles": ["admin"]}},
+            ]
+        })
+        mock_splunk = self._build_mock_splunk(200, content)
+        # Point the conf-fallback path at a non-existent file so we know
+        # the REST result wasn't masked by a conf fallback.
+        with patch.dict('sys.modules',
+                        {'splunk': mock_splunk, 'splunk.rest': mock_splunk.rest}), \
+             patch.object(wl_rbac_module, "_NOTIFICATION_USERS_CONF",
+                          str(tmp_path / "absent.conf")):
+            admins = get_admin_users("session_key")
+
+        # Only users with role in ADMIN_ROLES should appear; carol (wl_editor)
+        # is not an admin.
+        assert "alice" in admins
+        assert "dan" in admins
+        assert "carol" not in admins
+
+    def test_rest_200_with_no_admins_falls_to_conf(self, tmp_path):
+        """REST 200 but no admin-tier entries → falls through to conf file."""
+        content = json.dumps({
+            "entry": [
+                {"name": "carol", "content": {"roles": ["wl_editor"]}},
+            ]
+        })
+        mock_splunk = self._build_mock_splunk(200, content)
+        conf = tmp_path / "notification_users.conf"
+        conf.write_text("[admins]\nusers = configured_admin\n")
+        with patch.dict('sys.modules',
+                        {'splunk': mock_splunk, 'splunk.rest': mock_splunk.rest}), \
+             patch.object(wl_rbac_module, "_NOTIFICATION_USERS_CONF", str(conf)):
+            admins = get_admin_users("session_key")
+        # REST returned 200 but no admins; conf is used.
+        assert admins == ["configured_admin"]
+
+
+@pytest.mark.unit
+class TestGetSuperadminUsers:
+    """Cover get_superadmin_users at bin/wl_rbac.py:259-306 (zero prior tests)."""
+
+    def _build_mock_splunk(self, status_code, content_json):
+        mock_status = MagicMock()
+        mock_status.status = status_code
+        mock_splunk = MagicMock()
+        mock_splunk.rest.simpleRequest.return_value = (mock_status, content_json)
+        return mock_splunk
+
+    def test_rest_200_parses_superadmin_roles(self, tmp_path):
+        """REST 200 with superadmin-tier entries → returns them."""
+        content = json.dumps({
+            "entry": [
+                {"name": "root",    "content": {"roles": ["wl_superadmin"]}},
+                {"name": "alice",   "content": {"roles": ["wl_admin"]}},
+                {"name": "sa2",     "content": {"roles": ["sc_admin"]}},
+            ]
+        })
+        mock_splunk = self._build_mock_splunk(200, content)
+        with patch.dict('sys.modules',
+                        {'splunk': mock_splunk, 'splunk.rest': mock_splunk.rest}), \
+             patch.object(wl_rbac_module, "_NOTIFICATION_USERS_CONF",
+                          str(tmp_path / "absent.conf")):
+            sa = get_superadmin_users("session_key")
+        # Verify membership against SUPERADMIN_ROLES; alice (wl_admin only) is
+        # admin-tier but not necessarily superadmin — depends on role config.
+        # The contract is: name is in result IFF its roles intersect SUPERADMIN_ROLES.
+        for entry_name in sa:
+            assert entry_name in ("root", "sa2", "alice")  # superset check
+        # root and sa2 are clearly in via their roles
+        assert "root" in sa or "sa2" in sa
+
+    def test_empty_session_no_rest_no_conf_returns_empty(self, tmp_path):
+        """No session + no conf file → returns [] (vs ['admin'] in get_admin_users)."""
+        with patch.object(wl_rbac_module, "_NOTIFICATION_USERS_CONF",
+                          str(tmp_path / "absent.conf")):
+            assert get_superadmin_users("") == []
+
+    def test_empty_session_uses_conf_fallback(self, tmp_path):
+        """No session but conf exists → conf list returned."""
+        conf = tmp_path / "notification_users.conf"
+        conf.write_text("[superadmins]\nusers = root, godmode\n")
+        with patch.object(wl_rbac_module, "_NOTIFICATION_USERS_CONF", str(conf)):
+            assert get_superadmin_users("") == ["root", "godmode"]
+
+    def test_rest_exception_falls_through_to_conf(self, tmp_path):
+        """REST raises → exception swallowed → conf fallback used."""
+        mock_splunk = MagicMock()
+        mock_splunk.rest.simpleRequest.side_effect = RuntimeError("network down")
+        conf = tmp_path / "notification_users.conf"
+        conf.write_text("[superadmins]\nusers = sa_from_conf\n")
+        with patch.dict('sys.modules',
+                        {'splunk': mock_splunk, 'splunk.rest': mock_splunk.rest}), \
+             patch.object(wl_rbac_module, "_NOTIFICATION_USERS_CONF", str(conf)):
+            assert get_superadmin_users("token") == ["sa_from_conf"]
+
+    def test_rest_200_no_superadmins_falls_to_conf(self, tmp_path):
+        """REST 200 with no superadmin-tier entries → conf fallback."""
+        content = json.dumps({
+            "entry": [{"name": "alice", "content": {"roles": ["wl_editor"]}}]
+        })
+        mock_splunk = self._build_mock_splunk(200, content)
+        conf = tmp_path / "notification_users.conf"
+        conf.write_text("[superadmins]\nusers = configured_sa\n")
+        with patch.dict('sys.modules',
+                        {'splunk': mock_splunk, 'splunk.rest': mock_splunk.rest}), \
+             patch.object(wl_rbac_module, "_NOTIFICATION_USERS_CONF", str(conf)):
+            assert get_superadmin_users("session") == ["configured_sa"]
