@@ -57,6 +57,7 @@ define([
             });
             _state.allRules = Object.keys(ruleSet).sort();
             renderRuleList(_state.allRules);
+            renderEmptyInstallBanner();
 
             // Auto-select rule + CSV from URL params
             var urlParams = new URLSearchParams(window.location.search);
@@ -89,6 +90,84 @@ define([
         .fail(function () {
             showMsg("Failed to load detection rules.", "error");
         });
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Empty-install Getting Started banner
+    //
+    // Shown above the dropdowns toolbar when ALL of:
+    //   1. _state.allRules is empty (mapping + registered_rules both empty)
+    //   2. canCreateRules is true (admin-only; analysts can't act on the CTA)
+    //   3. localStorage flag wl_empty_install_banner_dismissed != "1"
+    // Called from loadRules(); idempotent (removes any prior instance first).
+    // ══════════════════════════════════════════════════════════════════
+    var EMPTY_BANNER_ID  = "wl-empty-install-banner";
+    var EMPTY_BANNER_KEY = "wl_empty_install_banner_dismissed";
+
+    function renderEmptyInstallBanner() {
+        $("#" + EMPTY_BANNER_ID).remove();
+
+        if (!_state || !_state.allRules || _state.allRules.length > 0) { return; }
+        if (!canCreateRules) { return; }
+        try {
+            if (window.localStorage &&
+                window.localStorage.getItem(EMPTY_BANNER_KEY) === "1") {
+                return;
+            }
+        } catch (e) {
+            // localStorage blocked (private-mode / strict CSP) — keep banner visible
+        }
+
+        var $dropdowns = $("#wl-dropdowns");
+        if (!$dropdowns.length) { return; }
+
+        var $banner = $(
+            '<div id="' + EMPTY_BANNER_ID + '" class="wl-alert wl-alert-info wl-empty-install-banner" ' +
+                 'role="region" aria-label="Getting started">' +
+                '<strong>Welcome to Whitelist Manager.</strong> ' +
+                'No detection rules are mapped yet. ' +
+                '<button type="button" class="btn btn-primary wl-empty-install-cta">' +
+                    '+ Create your first detection rule' +
+                '</button> ' +
+                '<a href="https://github.com/RelativisticJet/wl_manager#readme" ' +
+                   'target="_blank" rel="noopener noreferrer" class="wl-empty-install-docs">' +
+                    'Read the docs' +
+                '</a>' +
+                '<span class="wl-alert-close" role="button" tabindex="0" ' +
+                      'aria-label="Dismiss welcome banner" title="Dismiss">×</span>' +
+            '</div>'
+        );
+
+        $banner.on("click", ".wl-empty-install-cta", function () {
+            if (_actions && typeof _actions.showNewRuleModal === "function") {
+                _actions.showNewRuleModal();
+                // Hide banner for this session — admin took action. Non-sticky
+                // (no localStorage flag): if the modal is cancelled and state
+                // is still empty, the banner reappears on the next page load.
+                $banner.remove();
+            }
+        });
+
+        function dismiss() {
+            try {
+                if (window.localStorage) {
+                    window.localStorage.setItem(EMPTY_BANNER_KEY, "1");
+                }
+            } catch (e) {
+                // ignore — banner will re-appear on next load
+            }
+            $banner.remove();
+        }
+
+        $banner.on("click", ".wl-alert-close", dismiss);
+        $banner.on("keydown", ".wl-alert-close", function (e) {
+            if (e.key === "Enter" || e.key === " " || e.which === 13 || e.which === 32) {
+                e.preventDefault();
+                dismiss();
+            }
+        });
+
+        $dropdowns.before($banner);
     }
 
     // ══════════════════════════════════════════════════════════════════

@@ -183,16 +183,21 @@ Apples-to-apples diff against
 | warning         | 6 → 6        | 5 → 5   |
 | success         | 160 → 160    | 157 → 157 |
 
-**Zero drift.** Every code change between build 660 and the
-1.0.0-rc1 candidate (Phase 0 docs migration, R6-F8 KV-presence
-migration, §5a items: FUNDING.yml stub + gitleaks workflow + SSH tag
-signing docs) is AppInspect-neutral.
+**Zero drift (origin: 2026-05-14, build 660 baseline).** Every code
+change between that snapshot and the 1.0.0-rc1 candidate as of
+2026-05-14 (Phase 0 docs migration, R6-F8 KV-presence migration, §5a
+items: FUNDING.yml stub + gitleaks workflow + SSH tag signing docs) is
+AppInspect-neutral.
 
 The reason: every change either lived in `docs/`, `.github/`, or
 `tests/` (all excluded from the `.spl` by `scripts/package.sh`), or
 touched runtime code in `bin/` without introducing a new AppInspect
 trigger (KV-store usage was already declared in `collections.conf`
 before the migration).
+
+> **Note**: changes shipped after 2026-05-14 (e.g. the empty-install
+> banner introduced in build 661) need their own AppInspect re-run
+> before the v1.0.0 release. See `docs/RELEASE_CHECKLIST.md`.
 
 ---
 

@@ -625,6 +625,30 @@ body.wl-resizing * {
     color: var(--wl-warn-text);
 }
 
+/* ── Empty-install Getting Started banner ────────────────────────────── */
+.wl-empty-install-banner {
+    position: relative;
+    margin: 0 0 12px 0;
+    /* override the toast box-shadow inherited from .wl-alert — this banner
+       is inline above the toolbar, not a floating notification */
+    box-shadow: none;
+}
+
+.wl-empty-install-banner .wl-empty-install-cta {
+    margin-left: 8px;
+    vertical-align: baseline;
+}
+
+.wl-empty-install-banner .wl-empty-install-docs {
+    margin-left: 8px;
+    color: var(--wl-info-text);
+    text-decoration: underline;
+}
+
+.wl-empty-install-banner .wl-empty-install-docs:hover {
+    color: var(--wl-link);
+}
+
 /* ── Diff Panel ─────────────────────────────────────────────────────── */
 
 .wl-diff {
