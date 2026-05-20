@@ -1,8 +1,22 @@
 /**
  * Shared helpers for multi-role E2E tests.
+ *
+ * Browser selection: set the env var WL_E2E_BROWSER to one of
+ * "chromium" (default), "firefox", or "webkit". Each browser
+ * requires its own Playwright build — `npx playwright@<minor>
+ * install <browser>` downloads it. The chromium-1208 path
+ * resolver here mirrors the pre-2026-05-20 behavior; the
+ * firefox-1511 path resolver was added when the refactor landed.
+ *
+ * Why explicit executablePath on Windows: when the host already
+ * has playwright-CLI Chromium installs (which it does — see
+ * docs/SPLUNK_QUIRKS.md), playwright-core's auto-resolver
+ * sometimes mis-picks the version. Hard-coding the Windows path
+ * removes the ambiguity. On Linux runners executablePath stays
+ * undefined and playwright-core auto-resolves.
  */
 const path = require("node:path");
-const { chromium } = require("playwright-core");
+const { chromium, firefox, webkit } = require("playwright-core");
 
 function resolveChromiumExecutable() {
     if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
@@ -14,7 +28,40 @@ function resolveChromiumExecutable() {
     return undefined;
 }
 
-const CHROME = resolveChromiumExecutable();
+function resolveFirefoxExecutable() {
+    if (process.env.PLAYWRIGHT_FIREFOX_EXECUTABLE_PATH) {
+        return process.env.PLAYWRIGHT_FIREFOX_EXECUTABLE_PATH;
+    }
+    if (process.platform === "win32" && process.env.LOCALAPPDATA) {
+        return path.join(process.env.LOCALAPPDATA, "ms-playwright", "firefox-1511", "firefox", "firefox.exe");
+    }
+    return undefined;
+}
+
+function resolveWebkitExecutable() {
+    if (process.env.PLAYWRIGHT_WEBKIT_EXECUTABLE_PATH) {
+        return process.env.PLAYWRIGHT_WEBKIT_EXECUTABLE_PATH;
+    }
+    return undefined;  // No Windows path pin — webkit not currently in scope.
+}
+
+// Resolved at module load. To override, set WL_E2E_BROWSER before
+// requiring this module (typical: env-var prefix on the test command).
+const BROWSER_NAME = (process.env.WL_E2E_BROWSER || "chromium").toLowerCase();
+const BROWSER_REGISTRY = {
+    chromium: { engine: chromium, exec: resolveChromiumExecutable() },
+    firefox:  { engine: firefox,  exec: resolveFirefoxExecutable() },
+    webkit:   { engine: webkit,   exec: resolveWebkitExecutable() },
+};
+if (!BROWSER_REGISTRY[BROWSER_NAME]) {
+    throw new Error(
+        `WL_E2E_BROWSER='${BROWSER_NAME}' not recognized. ` +
+        `Valid values: chromium, firefox, webkit.`
+    );
+}
+const BROWSER = BROWSER_REGISTRY[BROWSER_NAME].engine;
+const CHROME = BROWSER_REGISTRY[BROWSER_NAME].exec;  // legacy name preserved
+                                                      // for in-file callers
 const BASE = "http://localhost:8000";
 const REST = "https://localhost:8089";
 
@@ -54,7 +101,7 @@ function summary(label) {
 async function createSession(user, pass) {
     const launchOpts = { headless: true };
     if (CHROME) launchOpts.executablePath = CHROME;
-    const browser = await chromium.launch(launchOpts);
+    const browser = await BROWSER.launch(launchOpts);
     const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1440, height: 900 } });
     const page = await context.newPage();
     page.__errors = [];

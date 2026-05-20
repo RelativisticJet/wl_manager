@@ -1,8 +1,31 @@
-"""Playwright E2E test fixtures for Whitelist Manager."""
+"""Playwright E2E test fixtures for Whitelist Manager.
+
+Browser selection: set WL_E2E_BROWSER to "chromium" (default),
+"firefox", or "webkit". The fixtures honor this env var via
+getattr(playwright, browser_name). Mirrors the JS-side helper in
+lib_helpers.cjs; both must stay in sync if a new browser is added.
+"""
+import os
 import pytest
 import time
 from typing import Dict, Any
 from playwright.sync_api import sync_playwright, Page
+
+
+def _resolve_browser_engine(playwright):
+    """Return the playwright browser engine matching WL_E2E_BROWSER.
+
+    Defaults to chromium. Raises ValueError on unknown values rather
+    than silently falling back, so a typo doesn't produce
+    "tests pass on chromium when you thought you were on firefox".
+    """
+    name = os.environ.get("WL_E2E_BROWSER", "chromium").lower()
+    if name not in ("chromium", "firefox", "webkit"):
+        raise ValueError(
+            f"WL_E2E_BROWSER={name!r} not recognized. "
+            f"Valid: chromium, firefox, webkit."
+        )
+    return getattr(playwright, name)
 
 
 @pytest.fixture(scope="session")
@@ -18,9 +41,13 @@ def browser_context_args():
 def browser():
     """Provide Playwright browser with authenticated Splunk context."""
     playwright = sync_playwright().start()
-    browser_instance = playwright.chromium.launch(
+    engine = _resolve_browser_engine(playwright)
+    # `--disable-web-resources` is a Chromium-only flag. Firefox and
+    # WebKit reject it. Apply only when the engine is chromium.
+    launch_args = ['--disable-web-resources'] if engine is playwright.chromium else []
+    browser_instance = engine.launch(
         headless=True,
-        args=['--disable-web-resources']
+        args=launch_args,
     )
     context = browser_instance.new_context(
         base_url="http://localhost:8000",
@@ -49,9 +76,13 @@ def browser():
 def admin_browser():
     """Provide a second browser instance for admin user in multi-user tests."""
     playwright = sync_playwright().start()
-    browser_instance = playwright.chromium.launch(
+    engine = _resolve_browser_engine(playwright)
+    # `--disable-web-resources` is a Chromium-only flag. Firefox and
+    # WebKit reject it. Apply only when the engine is chromium.
+    launch_args = ['--disable-web-resources'] if engine is playwright.chromium else []
+    browser_instance = engine.launch(
         headless=True,
-        args=['--disable-web-resources']
+        args=launch_args,
     )
     context = browser_instance.new_context(
         base_url="http://localhost:8000",
