@@ -36,12 +36,30 @@ const H = require("./lib_helpers.cjs");
             const groups = Array.from(document.querySelectorAll(
                 "#wl-dropdowns > .wl-dropdown-group"
             ));
-            return groups.map((g) => ({
-                label: (g.querySelector(".wl-dropdown-label") || {}).textContent
-                    || "(no label)",
-                width: Math.round(g.getBoundingClientRect().width),
-                visible: g.offsetParent !== null,
-            }));
+            return groups.map((g) => {
+                // Each group's "control" is the visible input/select/dropdown:
+                //  - Detection Rule: <input class="wl-search-input">
+                //  - CSV File:       <div class="wl-csv-display">
+                //  - Revert:         <select class="wl-select">
+                //  - Search:         <input class="wl-search-field">
+                // We measure the OUTERMOST control element because that's
+                // the box whose bottom-edge the user sees aligning across
+                // the row. Without this normalization, a height delta in
+                // any one widget pushes that group's bottom below the
+                // others — caught visually in 2026-05-20 screenshot.
+                const ctrl = g.querySelector(
+                    ".wl-csv-display, .wl-search-input, .wl-search-field, .wl-select"
+                );
+                const cRect = ctrl ? ctrl.getBoundingClientRect() : null;
+                return {
+                    label: (g.querySelector(".wl-dropdown-label") || {}).textContent
+                        || "(no label)",
+                    width: Math.round(g.getBoundingClientRect().width),
+                    visible: g.offsetParent !== null,
+                    controlHeight: cRect ? Math.round(cRect.height) : null,
+                    controlBottom: cRect ? Math.round(cRect.bottom) : null,
+                };
+            });
         });
 
         await H.test("All 4 dropdowns are visible", () => {
@@ -60,6 +78,45 @@ const H = require("./lib_helpers.cjs");
             if (unique.length !== 1 || unique[0] !== 300) {
                 throw new Error(
                     `dropdowns must all be 300px wide; got: ` +
+                    JSON.stringify(measurements)
+                );
+            }
+        });
+
+        await H.test("All 4 dropdown controls share the same height", () => {
+            // Origin: 2026-05-20 build-665. Before the fix, .wl-csv-display
+            // (a <div> in the CSV-File widget) rendered ~36px while the
+            // other three (<input>/<select>) rendered ~32px — same padding
+            // + border but <div> uses a taller inherited line-height. The
+            // 4px differential pushed the CSV-File's bottom edge below its
+            // neighbours and was caught visually in the user's screenshot.
+            // We allow 1px rounding tolerance because subpixel layout can
+            // produce values like 31.9 / 32.0 / 32.1 across engines.
+            const heights = measurements.map((m) => m.controlHeight);
+            const min = Math.min.apply(null, heights);
+            const max = Math.max.apply(null, heights);
+            if (max - min > 1) {
+                throw new Error(
+                    `dropdown control heights diverge by ${max - min}px ` +
+                    `(min=${min}, max=${max}); expected <= 1px tolerance. ` +
+                    JSON.stringify(measurements)
+                );
+            }
+        });
+
+        await H.test("All 4 dropdown controls share the same bottom edge", () => {
+            // The user-visible failure mode is BOTTOM-EDGE misalignment,
+            // not control height per se. Even if heights matched, a
+            // top-edge offset would still produce a bottom-edge drift.
+            // This is the assertion that most directly matches what
+            // the screenshot showed.
+            const bottoms = measurements.map((m) => m.controlBottom);
+            const min = Math.min.apply(null, bottoms);
+            const max = Math.max.apply(null, bottoms);
+            if (max - min > 1) {
+                throw new Error(
+                    `dropdown control bottom edges diverge by ${max - min}px ` +
+                    `(min=${min}, max=${max}). ` +
                     JSON.stringify(measurements)
                 );
             }

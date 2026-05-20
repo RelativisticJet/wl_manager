@@ -197,7 +197,23 @@
 /* CSV custom dropdown display */
 .wl-csv-display {
     width: 100%;
-    padding: 7px 30px 7px 10px;
+    /* Height: pinned to 32px so the CSV-File widget aligns
+       baseline-with-baseline against the other three controls
+       in the dropdown row (Detection Rule input, Revert <select>,
+       Search input). Without this, the <div> renders ~36px because
+       <div>'s inherited line-height is taller than the form-control
+       baseline that <input>/<select> use, so a 13px font + 7px
+       vertical padding produces ~36px instead of 32px. The 4px
+       differential pushes the CSV-File's bottom edge below its
+       neighbours — caught visually in the user's 2026-05-20
+       screenshot, fixed in build 665. Padding kept at 7px so the
+       arrow chevron has room and the visual styling stays
+       consistent with the searchable inputs; the 32px height
+       constraint just bounds the box. */
+    height: 32px;
+    padding: 0 30px 0 10px;
+    display: flex;
+    align-items: center;
     font-size: 13px;
     border: 1px solid var(--wl-border);
     border-radius: 3px;
