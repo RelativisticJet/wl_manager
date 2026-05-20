@@ -4,6 +4,79 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [1.0.0-rc1] - 2026-05-20
+
+First public release candidate. Bumps `default/app.conf [launcher].version`
+and `app.manifest:info.id.version` to `1.0.0-rc1`, build `668`. The
+`Unreleased — *` entries below this section are the per-session
+development log spanning the rc1 release window (Phase 0.0 →
+Phase 2.15); they are preserved verbatim for historical context. The
+list here is the user-facing rollup.
+
+### Customer-visible highlights since the last tagged release
+
+- **Admin-tier audit-pollution defense (builds 666–668).** Three new
+  daily-action caps added so that a compromised or malicious admin/
+  superadmin account cannot drown the `wl_audit` index in noise:
+  - `row_reorder` and `column_reorder` — shared 50/period cap across
+    admins AND superadmins (single counter, not per-tier).
+  - `log_event_emit` — 30/period cap on the `log_event` REST action
+    (closes the last uncapped audit-emitting endpoint).
+  - Both keys are runtime-tunable from Control Panel → Admin Settings;
+    `LIMIT_KEYS` allow-list in `_action_set_admin_limits` includes them.
+- **UI polish (build 668 cycle).** CSV-File dropdown height aligned to
+  match sibling dropdowns (32 px, not 36 px); all dropdown groups
+  clamped to uniform 300 px width.
+- **Accessibility — Phase 2.15 closure.** axe-core / Playwright a11y
+  sweep run against all three dashboards (`whitelist_manager`,
+  `control_panel`, `audit`). Zero new app-owned violations; all four
+  remaining flags are Splunk-bundled framework DOM (paginator,
+  progressbar, find input, dev-license badge) and are explicitly
+  documented in `tests/a11y/baseline.json` with rule-level
+  rationales.
+- **CI / supply-chain.** Node-20 sweep across 14 GitHub Actions
+  workflows ahead of the 2026-09-16 Node-16 deprecation; `checkout`
+  bumped to v6, `setup-python` to v6; release workflow's
+  `cosign-installer` action documented for future bumpers
+  (`--bundle` flag dependency).
+- **Test infrastructure.** E2E browser parameterized via
+  `WL_E2E_BROWSER` (`chromium` / `firefox` / `webkit`); LC06/LC08
+  Firefox flake closed; mutation-coverage batches added for
+  `wl_csv` / `wl_limits` / `wl_trash` with documented kill-rate
+  methodology in `docs/MUTATION_TESTING.md`.
+- **Backend correctness.** `bin/wl_replay.py :: _execute_replay_revert_csv`
+  delegates to canonical `revert_csv_pipeline` (closes three dormant
+  bugs that were unreachable in production but would have surfaced
+  on any future approval-flow refactor — originally shipped in the
+  2026-05-19 build cycle).
+
+### Verification at rc1 cut
+
+- AppInspect 4.2.0 local CLI against build 668: standalone
+  160/0/0/6 (success/error/failure/manual_check), cloud 157/0/0/5
+  — zero drift vs `docs/APPINSPECT_FINDINGS.md` §3 baseline.
+- §3.5 version-tag consistency pre-flight: passes (`app.conf
+  [launcher].version` = `app.conf [id].version` = `app.manifest
+  info.id.version` = `1.0.0-rc1`; `[package].id` = `[id].name` =
+  `wl_manager`).
+- Test suite: 789 unit + integration tests across all backend modules
+  (`pytest tests/unit/ tests/integration/`); E2E suite 274/274 + audit
+  dropdown 7/7 against the wl_manager_test container.
+- Sigstore keyless signing: dry-run verified 2026-05-13 on tag
+  `v0.0.0-sigstore-test`; rc1 release will be signed by the
+  `release.yml` workflow on tag push.
+
+### Known limitations
+
+- This is `1.0.0-rc1`, not GA. Per `docs/PUBLIC_RELEASE_PLAN.md`
+  Phase 3.6, a 4-week public hold period follows the public-repo flip
+  before `v1.0.0` is cut.
+- F-M3 (Splunkbase author identity sync) is closed for the GitHub
+  release but the Splunkbase listing submission is a separate Phase 4
+  task (post-hold).
+
+---
+
 ## Status — Security hardening track CLOSED at build 629 (2026-04-29)
 
 After 9 progressive rounds (builds 552 → 629), the security-hardening

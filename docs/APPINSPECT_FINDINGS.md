@@ -224,6 +224,18 @@ suppressed via `.appinspect_api.expect.yaml`) is hosted-API-only
 and will be re-verified by the next CI run after the GitHub Actions
 billing block clears.
 
+### 4.1.1 v1.0.0-rc1 tag-cut verification (2026-05-20)
+
+Re-run on the same build-668 codebase after F-M4 (`app.manifest`
+`releaseDate` 2026-05-17 → 2026-05-20) and the CHANGELOG
+`[1.0.0-rc1]` release-header insert. Output JSON at
+`.planning/appinspect/appinspect-{standalone,cloud}-rc1.json`.
+Numbers are identical to §4.1 (160/0/0/6 standalone, 157/0/0/5
+cloud) — manifest releaseDate is metadata only, not exercised by
+any AppInspect check, and CHANGELOG.md does not ship in the .spl
+payload. This is the §3.5 pre-flight + AppInspect dry-run gate
+referenced from `docs/RELEASE_CHECKLIST.md` for the rc1 cut.
+
 ---
 
 ## 5. Cloud API + dynamic checks (Phase 1.6 first API run)

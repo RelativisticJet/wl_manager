@@ -14,7 +14,7 @@
         "company": null
       }
     ],
-    "releaseDate": "2026-05-17",
+    "releaseDate": "2026-05-20",
     "description": "Manage detection-rule CSV whitelists with diff-based audit trail. Provides a web-based interface for viewing, editing, adding, and removing whitelist entries with full change tracking, expiration management, and role-based access control.",
     "classification": {
       "intendedAudience": "Security Operations",
