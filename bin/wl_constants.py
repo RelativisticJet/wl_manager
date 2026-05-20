@@ -387,6 +387,21 @@ DEFAULT_LIMITS: dict = {
     "row_reorder": 10,
     "column_reorder": 10,
     "revert": 3,
+    # Build 667 (2026-05-20): log_event_emit cap.
+    # `log_event` (bin/wl_handler.py::_log_event) writes one audit
+    # event per call for the frontend-emitted "csv_exported" /
+    # "csv_imported" / "audit_exported" actions. It accepts ANY role
+    # (dispatch entry is `(None, ...)`), so a rogue user at any tier
+    # can loop calls to inflate index=wl_audit volume — the same
+    # audit-trail-pollution surface that drove the build-666 reorder
+    # cap, but on a different action. Legitimate export+import even
+    # for heavy power users is single-digit per day; 30 catches
+    # automation/abuse without false positives. Capped at the
+    # ANALYST tier (this DEFAULT_LIMITS dict) by design — every tier
+    # increments the analyst counter for log_event_emit, so the cap
+    # applies uniformly per the user's "all tiers" choice in
+    # 2026-05-20 follow-up planning.
+    "log_event_emit": 30,
     # Reset schedule (configurable)
     "reset_frequency": "daily",     # never, daily, weekly, monthly, yearly
     "reset_time_utc": "00:00",      # HH:MM in UTC

@@ -71,6 +71,7 @@ def mock_limit_config():
         "row_reorder": 10,
         "column_reorder": 10,
         "revert": 3,
+        "log_event_emit": 30,
         "reset_frequency": "daily",
         "reset_time_utc": "00:00",
         "reset_day_of_week": 0,
@@ -1604,3 +1605,157 @@ class TestAdminReorderCaps:
                 "wladmin1", "row_reorder", action_count=1000000)
         assert allowed is True
         assert maximum == -1
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Build 667 (2026-05-20): superadmin reorder cap + log_event_emit cap
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Build 666 capped row_reorder/column_reorder for the wladmin tier only;
+# superadmins were exempt by design. Build 667 reversed that exemption
+# per user direction — defense-in-depth (a rogue superadmin must now
+# either stay under the cap OR call set_admin_limits to raise it; the
+# latter is itself rate-limited + audited). Same default 50 cap as
+# wladmin; cap math + counter + namespace are all unchanged from build
+# 666, so the existing tests still verify the math. THIS section pins
+# the new design intent at the unit level — DEFAULT_ADMIN_LIMITS still
+# holds 50 (same dict serves both tiers in build 667), and any future
+# refactor that re-introduces a tier-specific default must also pass
+# these tests.
+
+@pytest.mark.unit
+class TestSuperadminReorderCapBuild667:
+    """Pins build-667 design: same cap applies to admin AND superadmin
+    tiers, no per-tier differentiation in `DEFAULT_ADMIN_LIMITS`.
+    """
+
+    def test_admin_limits_no_separate_superadmin_keys(self):
+        """If a future refactor introduces `superadmin_row_reorder` or
+        a tiered `DEFAULT_SUPERADMIN_LIMITS` dict, this test fails —
+        which is the intended signal that the build-667 simplification
+        ("single shared cap") has been reversed and the DECISION_LOG
+        needs a new row.
+        """
+        from wl_constants import DEFAULT_ADMIN_LIMITS
+        keys = set(DEFAULT_ADMIN_LIMITS.keys())
+        assert "superadmin_row_reorder" not in keys, (
+            "Build 667 design uses a SHARED cap for admin and "
+            "superadmin tiers. A separate `superadmin_row_reorder` "
+            "key would re-tier the system — if intentional, update "
+            "DECISION_LOG.md with a new reversal row before "
+            "removing this test."
+        )
+        assert "superadmin_column_reorder" not in keys
+        # Sanity: the existing keys are still there.
+        assert "row_reorder" in keys
+        assert "column_reorder" in keys
+
+    def test_superadmin_at_cap_blocks_next_reorder(self):
+        """Functional check: check_admin_daily_limit, called with a
+        superadmin username, still enforces the cap. Build 666 had
+        this check gated by a caller-side `not is_superadmin()` guard
+        in _save_csv — build 667 dropped that guard, so the SAME
+        function call now blocks. We test the wl_limits layer here;
+        the _save_csv guard removal is tested via integration.
+        """
+        from wl_limits import check_admin_daily_limit
+        counters = {
+            "2026-05-20": {
+                "superadmin1": {"admin_row_reorder": 50}
+            }
+        }
+        with patch("wl_limits.read_admin_limits",
+                   return_value={"row_reorder": 50}), \
+             patch("wl_limits.get_admin_counter_period_key",
+                   return_value="2026-05-20"), \
+             patch("wl_limits.read_daily_limits",
+                   return_value=counters):
+            allowed, _, _ = check_admin_daily_limit(
+                "superadmin1", "row_reorder")
+        assert allowed is False, (
+            "Build 667: superadmin1 at cap of 50 must be denied the "
+            "51st reorder. If this passes, the cap function is "
+            "still tier-discriminating somewhere it shouldn't be."
+        )
+
+
+@pytest.mark.unit
+class TestLogEventEmitCap:
+    """Pins the build-667 log_event_emit cap (default 30 / period
+    across all tiers). The cap is consulted inside
+    bin/wl_handler.py::_log_event before _index_audit fires; this
+    suite verifies the wl_limits layer math, mirroring the analyst-
+    reorder cap test pattern above.
+    """
+
+    def test_default_limits_includes_log_event_emit_30(self):
+        """Cap default is 30 per period (build 667)."""
+        from wl_constants import DEFAULT_LIMITS
+        assert DEFAULT_LIMITS["log_event_emit"] == 30, (
+            "DEFAULT_LIMITS['log_event_emit'] must default to 30 "
+            "per period (Option C, 2026-05-20). Changing this is a "
+            "public-facing config change — update DECISION_LOG.md."
+        )
+
+    def test_log_event_emit_below_cap_allows(self):
+        """current=15, max=30 → 15+1 <= 30 → allowed."""
+        from wl_limits import check_daily_limit
+        counters = {
+            "2026-05-20": {"u": {"log_event_emit": 15}}
+        }
+        with patch("wl_limits.read_limit_config",
+                   return_value={"log_event_emit": 30}), \
+             patch("wl_limits.read_daily_limits",
+                   return_value=counters), \
+             patch("wl_limits.get_counter_period_key",
+                   return_value="2026-05-20"):
+            allowed, current, maximum = check_daily_limit(
+                "u", "log_event_emit")
+        assert allowed is True
+        assert current == 15
+        assert maximum == 30
+
+    def test_log_event_emit_at_cap_blocks_next(self):
+        """current=30, max=30, action_count=1 → 30+1 > 30 → denied."""
+        from wl_limits import check_daily_limit
+        counters = {
+            "2026-05-20": {"u": {"log_event_emit": 30}}
+        }
+        with patch("wl_limits.read_limit_config",
+                   return_value={"log_event_emit": 30}), \
+             patch("wl_limits.read_daily_limits",
+                   return_value=counters), \
+             patch("wl_limits.get_counter_period_key",
+                   return_value="2026-05-20"):
+            allowed, _, _ = check_daily_limit("u", "log_event_emit")
+        assert allowed is False, (
+            "30/30 log_event_emit must block the 31st call — that's "
+            "the audit-trail-pollution defense Option C added in "
+            "build 667."
+        )
+
+    def test_log_event_emit_increment_writes_analyst_namespace(self):
+        """The counter MUST land under `log_event_emit` (analyst
+        namespace, NOT `admin_log_event_emit`). Single counter for
+        all tiers is the build-667 design — admin and superadmin
+        users both increment the same counter so the cap shares
+        across tiers.
+        """
+        from wl_limits import increment_daily_limit
+        captured = {}
+        def _writer(counters):
+            captured["data"] = counters
+        with patch("wl_limits.read_daily_limits",
+                   return_value={}), \
+             patch("wl_limits.get_counter_period_key",
+                   return_value="2026-05-20"), \
+             patch("wl_limits.write_daily_limits", side_effect=_writer):
+            increment_daily_limit("wladmin1", "log_event_emit", count=1)
+        slice_ = captured["data"]["2026-05-20"]["wladmin1"]
+        assert slice_.get("log_event_emit") == 1
+        assert "admin_log_event_emit" not in slice_, (
+            "Build 667: log_event_emit increments ONLY the analyst "
+            "counter, even for admin/superadmin users. A separate "
+            "admin counter would break the 'shared cap across tiers' "
+            "design."
+        )

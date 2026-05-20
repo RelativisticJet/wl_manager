@@ -2217,20 +2217,22 @@ require([
         return '<span>' + c + '</span>';
     }
 
-    // Build 666 (2026-05-20): tier-aware cell renderer. Picks the
-    // correct counter + cap pair for the user's tier:
-    //   - superadmin: no cap applies anywhere → plain count
-    //   - admin + adminCapped column: admin counter + admin limit
-    //   - admin + non-adminCapped column: no cap → plain count
-    //   - analyst: existing analyst counter + analyst limit path
+    // Build 666→667 (2026-05-20): tier-aware cell renderer. Picks
+    // the correct counter + cap pair for the user's tier:
+    //   - admin OR superadmin + adminCapped column: admin counter +
+    //     admin limit (build 667 collapsed the two tiers — both
+    //     enforce the same cap for reorder ops; rationale in
+    //     docs/DECISION_LOG.md 2026-05-20 reversal row).
+    //   - admin OR superadmin + non-adminCapped column: no cap →
+    //     plain muted count (those actions have per-action wrappers
+    //     elsewhere for admins, and superadmin is exempt by design
+    //     for everything-but-reorder).
+    //   - analyst: existing analyst counter + analyst limit path.
     // This is the single point where the audit-trail-pollution UI
     // bug gets fixed; everything downstream just renders strings.
     function usageCellHtmlForUser(username, col, analystCount) {
         var tier = userTier(username);
-        if (tier === "superadmin") {
-            return exemptCellHtml(analystCount);
-        }
-        if (tier === "admin") {
+        if (tier === "superadmin" || tier === "admin") {
             if (col.adminCapped) {
                 var adminSlice = cachedAdminUsage[username] || {};
                 var adminCount = adminSlice["admin_" + col.key] || 0;

@@ -4806,7 +4806,7 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                         "disabled": maximum == 0,
                     })
 
-        # ── Admin-tier cap for reorder ops (build 666, 2026-05-20) ────
+        # ── Admin-tier cap for reorder ops (build 666→667, 2026-05-20) ─
         # Row/column reorders are non-destructive but emit one audit
         # event per drag. Without a cap, a rogue admin could pollute
         # index=wl_audit indefinitely to bury malicious actions in
@@ -4814,14 +4814,17 @@ class WhitelistHandler(PersistentServerConnectionApplication):
         # wrapper) doesn't fire here because add_row/remove_rows/reorder
         # all flow through _save_csv WITHOUT the csv_save wrapper.
         # Pattern matches the analyst block above: same shape, scoped
-        # to admin-tier non-superadmin users, scoped to the two reorder
-        # action types only (other action_counts entries already cap
-        # via the analyst gate for analysts and via per-action wrapper
-        # caps for admins on save/revert/create/delete). Superadmins
-        # stay exempt by design (CLAUDE.md decision-log + 2026-05-20
-        # Option-C analysis).
-        if (not _from_approval and is_admin_user
-                and not is_superadmin(user_roles)):
+        # to ALL admin-tier users (both wladmin AND superadmin per the
+        # 2026-05-20 follow-up decision — see DECISION_LOG.md "Reversal"
+        # row), scoped to the two reorder action types only (other
+        # action_counts entries already cap via the analyst gate for
+        # analysts and via per-action wrapper caps for admins on
+        # save/revert/create/delete). Build 666 originally exempted
+        # superadmins; build 667 dropped that exemption per user
+        # direction — defense-in-depth, a rogue superadmin must now
+        # also call set_admin_limits to raise the cap (which itself is
+        # audited + rate-limited at 5/day).
+        if not _from_approval and is_admin_user:
             for limit_action in limit_actions:
                 if limit_action not in ("row_reorder", "column_reorder"):
                     continue
@@ -4923,15 +4926,14 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             else:
                 actual_count = 1
             _increment_daily_limit(user, limit_action, count=actual_count)
-            # Build 666 (2026-05-20): mirror the analyst-counter
+            # Build 666→667 (2026-05-20): mirror the analyst-counter
             # increment to the admin-counter store for reorder ops on
-            # admin-tier non-superadmin users. The admin store is what
+            # ALL admin-tier users (incl. superadmin per the build-667
+            # reversal — see DECISION_LOG.md). The admin store is what
             # `_check_admin_daily_limit` (above) consults, so without
             # this mirror the new admin cap would never enforce in
             # practice — the check would always see current=0.
-            # Superadmins skip the mirror per the same design rule
-            # (cap-exempt → no admin counter mutation).
-            if (is_admin_user and not is_superadmin(user_roles)
+            if (is_admin_user
                     and limit_action in ("row_reorder", "column_reorder")):
                 _increment_admin_daily_limit(
                     user, limit_action, count=actual_count)
@@ -7689,13 +7691,42 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     # Log frontend-originated events (export / import)
     # ------------------------------------------------------------------
     def _log_event(self, request, payload):
-        """Log a frontend-originated audit event (export/import)."""
+        """Log a frontend-originated audit event (export/import).
+
+        Build 667 (2026-05-20): rate-limited at the analyst tier via
+        the `log_event_emit` counter (default 30/period — see
+        DEFAULT_LIMITS in wl_constants.py). Every tier increments the
+        same analyst counter for this action, so the cap applies
+        uniformly. Origin: 2026-05-20 user follow-up to the build-666
+        reorder cap — `log_event` was the only remaining uncapped
+        audit-emitting action callable by any role.
+        """
         allowed_actions = {"audit_exported", "csv_exported", "csv_imported"}
         event_action = payload.get("event_action", "")
         if event_action not in allowed_actions:
             return self._resp(400, {"error": "Invalid event action"})
 
         user = get_user(request)
+
+        # Rate-limit BEFORE the audit write — otherwise an attacker
+        # can flood the index with one event per request even though
+        # we'd return 429 to the next call. The cap fires at every
+        # tier (analyst counter is consulted for every user) per the
+        # user's "all tiers" choice; uniformity simplifies reasoning
+        # about the defense.
+        allowed, current, maximum = _check_daily_limit(
+            user, "log_event_emit", action_count=1)
+        if not allowed:
+            return self._resp(429, {
+                "error": _daily_limit_error_msg(
+                    "log_event_emit", 1, current, maximum,
+                    contact="your admin"),
+                "limit_type": "log_event_emit",
+                "current": current,
+                "maximum": maximum,
+                "disabled": maximum == 0,
+            })
+
         ts = int(time.time())
 
         evt = {
@@ -7728,6 +7759,12 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             evt["import_mode"] = payload.get("import_mode", "")
 
         self._index_audit(request, evt)
+        # Build 667 (2026-05-20): increment counter AFTER successful
+        # audit write so a failed audit doesn't burn the cap (matches
+        # the _save_csv pattern at ~line 4924). Sequential — no
+        # check-then-increment race since the same handler call
+        # serializes both within one PersistentScriptHandler worker.
+        _increment_daily_limit(user, "log_event_emit", count=1)
         return self._resp(200, {"status": "ok"})
 
     # ------------------------------------------------------------------
