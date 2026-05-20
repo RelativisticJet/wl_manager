@@ -81,9 +81,40 @@ const RULE_200  = "DR_" + TAG + "_" + "a".repeat(200 - 3 - TAG.length - 1);
                 rejection_reason: "Stress-test cleanup before fresh run"
             });
         }
+        // History-seeding: guarantee the Approval Queue's "Recent History"
+        // table is non-empty before LC06/LC08 run. Without this, a fresh
+        // environment (no prior debris to reject above) produces zero
+        // resolved-history rows; the History table HTML is then conditional
+        // (control_panel.js line 520: `if (historyTotal)`) and `nth(1)`
+        // falls through to a different tab's hidden table — LC06/LC08
+        // see Analyst Settings' "Recent Activity" headers ['Timestamp',
+        // 'Admin','Changes'] instead and fail with a misleading error.
+        // Discovered 2026-05-20 via Firefox cross-browser run (LC06/LC08
+        // flake on truly-fresh containers). Cost: one extra rejected row.
+        if (targets.length === 0) {
+            // Submit a benign create_rule then reject it from the admin
+            // session so it lands in Recent History.
+            const aSession = await H.createSession(ANALYST_USER, ANALYST_PASS);
+            const seed = await H.restCall(aSession.page, "POST", {
+                action: "create_rule",
+                detection_rule: "DR_WLLONGCONTENT_HISTORY_SEED",
+                approval_reason: TAG + " history-seed (LC00 bootstrap)",
+                comment: TAG + " history-seed (LC00 bootstrap)",
+            });
+            await aSession.browser.close();
+            if (seed.request_id) {
+                await H.restCall(cleanup.page, "POST", {
+                    action: "process_approval",
+                    request_id: seed.request_id,
+                    decision: "reject",
+                    rejection_reason: "LC00 history-seed (intentional)"
+                });
+            }
+        }
         await cleanup.browser.close();
         H.log("\u{1F9F9}", `  Rejected ${targets.length} ` +
-            `pre-existing stress-test rows`);
+            `pre-existing stress-test rows` +
+            (targets.length === 0 ? " (seeded one for history)" : ""));
     });
 
     // -- Submit stress requests as analyst1 --
@@ -155,9 +186,19 @@ const RULE_200  = "DR_" + TAG + "_" + "a".repeat(200 - 3 - TAG.length - 1);
     await bPage.waitForSelector("table.wl-table tbody tr", { timeout: 10000 });
 
     // -- Layout structure: new Inspect columns --
+    // SELECTOR SCOPE: anchor to `#wl-cp-approval-queue` because the
+    // Control Panel renders every tab's HTML into the DOM and toggles
+    // `display:none` for inactive tabs. Playwright locators match by
+    // DOM presence (not visibility), so an unscoped `table.wl-table`
+    // also picks up the "Recent Activity" tables in `#wl-cp-daily-limits`
+    // and `#wl-cp-admin-limits` (headers `[Timestamp,Admin,Changes]`,
+    // no Inspect column, no overflow-x wrapper). Discovered 2026-05-20
+    // via Firefox cross-browser run; the prior unscoped selector passed
+    // on Chromium only because of stale resolved-history data from
+    // earlier runs.
     await H.test("LC05 Pending table has Inspect column", async () => {
         const headers = await bPage.locator(
-            "table.wl-table"
+            "#wl-cp-approval-queue table.wl-table"
         ).first().locator("thead th").allInnerTexts();
         if (!headers.includes("Inspect")) {
             throw new Error("Pending table missing 'Inspect' column. Headers: "
@@ -167,12 +208,16 @@ const RULE_200  = "DR_" + TAG + "_" + "a".repeat(200 - 3 - TAG.length - 1);
 
     await H.test("LC06 Recent History table has Inspect column",
         async () => {
-            const tableCount = await bPage.locator("table.wl-table").count();
+            const tableCount = await bPage.locator(
+                "#wl-cp-approval-queue table.wl-table"
+            ).count();
             if (tableCount < 2) {
-                throw new Error(`Expected >=2 tables, found ${tableCount}`);
+                throw new Error(`Expected >=2 tables in #wl-cp-approval-queue, ` +
+                    `found ${tableCount}. The History table renders only when ` +
+                    `resolved requests exist; LC00 should have seeded one.`);
             }
             const headers = await bPage.locator(
-                "table.wl-table"
+                "#wl-cp-approval-queue table.wl-table"
             ).nth(1).locator("thead th").allInnerTexts();
             if (!headers.includes("Inspect")) {
                 throw new Error("Recent History missing 'Inspect' column. " +
@@ -198,10 +243,15 @@ const RULE_200  = "DR_" + TAG + "_" + "a".repeat(200 - 3 - TAG.length - 1);
 
     await H.test("LC08 Pending + History tables have overflow-x:auto wrappers",
         async () => {
-            // We check that each table's parent is a DIV with overflow.
-            // boundingBox + tagName via locator avoid evaluating in-page.
+            // Same scoping rationale as LC05/LC06 — see comment above.
+            // Without `#wl-cp-approval-queue`, `nth(1)` falls through to
+            // the Analyst Settings "Recent Activity" table, which is NOT
+            // wrapped in an overflow-x DIV and trips this assertion
+            // (Firefox first-run failure mode, 2026-05-20).
             for (let i = 0; i < 2; i++) {
-                const tableLoc = bPage.locator("table.wl-table").nth(i);
+                const tableLoc = bPage.locator(
+                    "#wl-cp-approval-queue table.wl-table"
+                ).nth(i);
                 const wrap = tableLoc.locator("xpath=..");
                 const tag = await wrap.evaluate((node) => node.tagName);
                 const ovx = await wrap.evaluate(
@@ -222,8 +272,12 @@ const RULE_200  = "DR_" + TAG + "_" + "a".repeat(200 - 3 - TAG.length - 1);
     await H.test("LC09 Long-rule cell stays within max-width", async () => {
         // Find the row with the WLLONGCONTENT marker and check column 4
         // (Detection Rule) bounding-box width. Use locator filter, not
-        // page-level evaluation.
-        const stressRows = bPage.locator("table.wl-table tbody tr").filter({
+        // page-level evaluation. Scoped to the Pending table (first
+        // table under #wl-cp-approval-queue) so the LC00 short-content
+        // history seed row doesn't dilute the long-content sample.
+        const stressRows = bPage.locator(
+            "#wl-cp-approval-queue table.wl-table"
+        ).first().locator("tbody tr").filter({
             hasText: TAG
         });
         const rowCount = await stressRows.count();
@@ -252,10 +306,13 @@ const RULE_200  = "DR_" + TAG + "_" + "a".repeat(200 - 3 - TAG.length - 1);
     // -- Show Data modal handles long content --
     await H.test("LC10 Show Data modal stays within viewport for long-rule entry",
         async () => {
-            // Click Show Data on the first stress row
+            // Click Show Data on the first long-content stress row in the
+            // PENDING table specifically (not the LC00 short-content history
+            // seed row, which would silently pass the assertion without
+            // exercising the long-content modal path).
             const firstStress = bPage.locator(
-                "table.wl-table tbody tr"
-            ).filter({ hasText: TAG }).first();
+                "#wl-cp-approval-queue table.wl-table"
+            ).first().locator("tbody tr").filter({ hasText: TAG }).first();
             const showBtn = firstStress.locator(".wl-cp-show-data-btn");
             if (await showBtn.count() === 0) {
                 throw new Error("No Show Data button on stress row");
