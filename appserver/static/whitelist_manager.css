@@ -78,7 +78,18 @@
 .wl-dropdown-group {
     display: flex;
     flex-direction: column;
-    min-width: 300px;
+    /* Fixed width (not min-width) so that the four dropdown groups
+       render at identical widths regardless of inner-content size.
+       A native <select> reports its intrinsic size as its longest
+       option's text + padding + arrow chrome — so `min-width: 300px`
+       only sets a FLOOR, and a content like "06-04-2026 01:59:41
+       (current)" in the Revert-to-Version <select> would expand its
+       parent group to ~374px while neighbours stayed at 300px. The
+       2026-05-20 user screenshot caught this asymmetry. Switching to
+       explicit `width: 300px` clamps every group to the same width;
+       the native <select>'s open popup still auto-sizes for option
+       readability (browser-controlled, not CSS-controlled). */
+    width: 300px;
 }
 
 .wl-dropdown-label {

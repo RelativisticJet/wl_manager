@@ -11,7 +11,7 @@
 // disk cache. Splunk serves /static/@<server-hash>/... with Cache-Control:
 // public, max-age=31536000; without urlArgs, bumped build numbers don't force
 // a re-fetch and clients run stale JS until they hard-refresh.
-require.config({ urlArgs: "_b=663" });
+require.config({ urlArgs: "_b=664" });
 require([
     "jquery",
     "underscore",
