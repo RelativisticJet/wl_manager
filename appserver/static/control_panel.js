@@ -2144,26 +2144,68 @@ require([
     var cachedUsageData = {};    // stashed between page renders
     var cachedUsageDate = "";
     var cachedUsageLimits = {};
+    // Build 666 (2026-05-20): added admin-tier slices so the Activity
+    // table can pick the right cap per user (analyst vs admin vs
+    // superadmin). Origin: 2026-05-20 user-reported audit-trail-
+    // pollution concern — superadmin1 had "LIMIT" shown at count=16
+    // while in fact no cap fires for that tier.
+    var cachedAdminUsage = {};
+    var cachedAdminLimits = {};
+    var cachedAdminUsers = {};       // username -> true
+    var cachedSuperadminUsers = {};  // username -> true
     var usagePollTimer = null;
 
-    // Column definitions in requested order
+    // Column definitions in requested order. `adminCapped` flags the
+    // two columns where admin-tier non-superadmin users have their
+    // OWN cap (DEFAULT_ADMIN_LIMITS.row_reorder / column_reorder);
+    // for every other column the admin tier has no cap, so we must
+    // not show a "LIMIT" badge against the analyst counter.
     var USAGE_COLUMNS = [
         { key: "row_addition",      label: "Rows Added",         limitKey: "row_addition" },
         { key: "row_edit",          label: "Rows Edited",        limitKey: "row_edit" },
         { key: "bulk_row_edit",     label: "Bulk Rows Edited",   limitKey: "bulk_row_edit" },
         { key: "row_removal",       label: "Rows Removed",       limitKey: "row_removal" },
         { key: "bulk_row_removal",  label: "Bulk Rows Removed",  limitKey: "bulk_row_removal" },
-        { key: "row_reorder",       label: "Rows Reordered",     limitKey: "row_reorder" },
+        { key: "row_reorder",       label: "Rows Reordered",     limitKey: "row_reorder",
+          adminCapped: true },
         { key: "column_addition",   label: "Columns Added",      limitKey: "column_addition" },
         { key: "column_removal",    label: "Columns Removed",    limitKey: "column_removal" },
-        { key: "column_reorder",    label: "Cols Reordered",     limitKey: "column_reorder" },
+        { key: "column_reorder",    label: "Cols Reordered",     limitKey: "column_reorder",
+          adminCapped: true },
         { key: "revert",            label: "Reverted",           limitKey: "revert" }
     ];
+
+    // Tier resolver — superadmin overrides admin overrides analyst.
+    // Both lists come from get_admin_users / get_superadmin_users,
+    // which already gracefully degrade to ["admin"] fallback when
+    // list_users capability isn't granted. If both lookups failed
+    // entirely (e.g. fully restricted RBAC), every user resolves
+    // to "analyst" and existing badge behavior is preserved.
+    function userTier(username) {
+        if (cachedSuperadminUsers[username]) { return "superadmin"; }
+        if (cachedAdminUsers[username]) { return "admin"; }
+        return "analyst";
+    }
+
+    function exemptCellHtml(count) {
+        // No cap applies for this (user, action) — render the count
+        // as plain text with a muted tooltip explaining the absence
+        // of the LIMIT badge. Keeps the count visible (still useful
+        // for audit-trail-volume observation) without misleadingly
+        // claiming the user has been rate-limited. Tooltip text is
+        // intentionally short so it doesn't crowd the cell.
+        return '<span style="color:var(--wl-muted,#888)" ' +
+            'title="No cap configured for this tier">' +
+            (count || 0) + '</span>';
+    }
 
     function usageCellHtml(count, limit) {
         var c = count || 0;
         if (limit === 0) {
-            // Limit is 0 = unlimited
+            // Limit is 0 = unlimited (legacy semantics for analyst
+            // tier; the backend uses 0 to mean "disabled" only on
+            // permission toggles, not on the daily-count limits
+            // surfaced in this table).
             return '<span>' + c + '</span>';
         }
         if (c >= limit) {
@@ -2175,11 +2217,49 @@ require([
         return '<span>' + c + '</span>';
     }
 
+    // Build 666 (2026-05-20): tier-aware cell renderer. Picks the
+    // correct counter + cap pair for the user's tier:
+    //   - superadmin: no cap applies anywhere → plain count
+    //   - admin + adminCapped column: admin counter + admin limit
+    //   - admin + non-adminCapped column: no cap → plain count
+    //   - analyst: existing analyst counter + analyst limit path
+    // This is the single point where the audit-trail-pollution UI
+    // bug gets fixed; everything downstream just renders strings.
+    function usageCellHtmlForUser(username, col, analystCount) {
+        var tier = userTier(username);
+        if (tier === "superadmin") {
+            return exemptCellHtml(analystCount);
+        }
+        if (tier === "admin") {
+            if (col.adminCapped) {
+                var adminSlice = cachedAdminUsage[username] || {};
+                var adminCount = adminSlice["admin_" + col.key] || 0;
+                var adminLimit = cachedAdminLimits[col.limitKey];
+                if (adminLimit === undefined) { adminLimit = 0; }
+                return usageCellHtml(adminCount, adminLimit);
+            }
+            return exemptCellHtml(analystCount);
+        }
+        var analystLimit = cachedUsageLimits[col.limitKey];
+        if (analystLimit === undefined) { analystLimit = 0; }
+        return usageCellHtml(analystCount, analystLimit);
+    }
+
     function loadAnalystUsage(preservePage) {
         restGet({ action: "get_analyst_usage" }).done(function (data) {
             cachedUsageData = data.all_analysts || {};
             cachedUsageDate = data.date || "today";
             cachedUsageLimits = data.limits || {};
+            cachedAdminUsage = data.admin_usage || {};
+            cachedAdminLimits = data.admin_limits || {};
+            cachedAdminUsers = {};
+            (data.admin_users || []).forEach(function (u) {
+                cachedAdminUsers[u] = true;
+            });
+            cachedSuperadminUsers = {};
+            (data.superadmin_users || []).forEach(function (u) {
+                cachedSuperadminUsers[u] = true;
+            });
             if (!preservePage) { usagePage = 0; }
             renderAnalystUsage();
         });
@@ -2231,9 +2311,13 @@ require([
                 html += '<tr><td class="wl-cp-truncate" style="text-align:left" title="' + _.escape(analyst) + '">' + _.escape(analyst) + '</td>';
                 USAGE_COLUMNS.forEach(function (col) {
                     var count = u[col.key] || 0;
-                    var limit = limits[col.limitKey];
-                    if (limit === undefined) { limit = 0; }
-                    html += '<td style="text-align:center">' + usageCellHtml(count, limit) + '</td>';
+                    // Build 666: delegate cell rendering to the
+                    // tier-aware helper so superadmin/admin rows
+                    // don't get misleading LIMIT badges. The local
+                    // `limits` map is still used inside that helper
+                    // for the analyst-tier path.
+                    html += '<td style="text-align:center">' +
+                        usageCellHtmlForUser(analyst, col, count) + '</td>';
                 });
                 html += '<td style="text-align:center"><button type="button" class="btn btn-small wl-cp-reset-analyst" ' +
                     'data-analyst="' + _.escape(analyst) + '">Reset</button></td></tr>';

@@ -428,6 +428,17 @@ DEFAULT_ADMIN_LIMITS: dict = {
     "trash_restore": 10,        # trash restore operations per period
     "trash_purge": 5,           # permanent trash purge operations per period
     "usage_reset": 10,          # analyst usage reset operations per period
+    # Row/column reorder admin caps (build 666, 2026-05-20). Added in
+    # response to user-reported audit-trail-pollution concern:
+    # reorders are non-destructive but EMIT one audit event per drag,
+    # so a rogue admin could indefinitely inflate index=wl_audit volume
+    # to bury malicious actions in noise. Cap at 5× the analyst limit
+    # (which is 10/day per DEFAULT_LIMITS); admins legitimately bulk-
+    # reorder during cleanups but should never need 50+ reorders per
+    # period. Superadmins remain exempt by design (see CLAUDE.md
+    # decision-log + Option-C analysis 2026-05-20).
+    "row_reorder": 50,          # row reorder operations per period
+    "column_reorder": 50,       # column reorder operations per period
     # Reset schedule (independent from analyst reset)
     "reset_frequency": "daily",     # never, daily, weekly, monthly, yearly
     "reset_time_utc": "00:00",      # HH:MM in UTC

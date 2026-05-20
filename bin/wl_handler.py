@@ -2486,7 +2486,8 @@ class WhitelistHandler(PersistentServerConnectionApplication):
     def _action_get_analyst_usage(self, request, query, user, roles):
         """GET action wrapper for get_analyst_usage (admin-only)."""
         payload = {}  # Not used for GET, but kept for signature consistency
-        return self._get_analyst_usage_action(payload)
+        session_key = self._get_session_key(request)
+        return self._get_analyst_usage_action(payload, session_key=session_key)
 
     def _action_get_admin_limits(self, request, query, user, roles):
         """GET action wrapper for get_admin_limits (admin-only)."""
@@ -4805,6 +4806,39 @@ class WhitelistHandler(PersistentServerConnectionApplication):
                         "disabled": maximum == 0,
                     })
 
+        # ── Admin-tier cap for reorder ops (build 666, 2026-05-20) ────
+        # Row/column reorders are non-destructive but emit one audit
+        # event per drag. Without a cap, a rogue admin could pollute
+        # index=wl_audit indefinitely to bury malicious actions in
+        # noise. The user-facing csv_save admin cap (in _action_csv_save
+        # wrapper) doesn't fire here because add_row/remove_rows/reorder
+        # all flow through _save_csv WITHOUT the csv_save wrapper.
+        # Pattern matches the analyst block above: same shape, scoped
+        # to admin-tier non-superadmin users, scoped to the two reorder
+        # action types only (other action_counts entries already cap
+        # via the analyst gate for analysts and via per-action wrapper
+        # caps for admins on save/revert/create/delete). Superadmins
+        # stay exempt by design (CLAUDE.md decision-log + 2026-05-20
+        # Option-C analysis).
+        if (not _from_approval and is_admin_user
+                and not is_superadmin(user_roles)):
+            for limit_action in limit_actions:
+                if limit_action not in ("row_reorder", "column_reorder"):
+                    continue
+                count = action_counts.get(limit_action, 1)
+                allowed, current, maximum = _check_admin_daily_limit(
+                    user, limit_action, action_count=count)
+                if not allowed:
+                    return self._resp(429, {
+                        "error": _daily_limit_error_msg(
+                            limit_action, count, current, maximum,
+                            contact="your super-admin"),
+                        "limit_type": "admin_" + limit_action,
+                        "current": current,
+                        "maximum": maximum,
+                        "disabled": maximum == 0,
+                    })
+
         # ── Server-side approval gate enforcement ─────────────────────
         if not _from_approval and not is_admin_user:
             actual_removed = diff.get("removed_count", 0)
@@ -4889,6 +4923,18 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             else:
                 actual_count = 1
             _increment_daily_limit(user, limit_action, count=actual_count)
+            # Build 666 (2026-05-20): mirror the analyst-counter
+            # increment to the admin-counter store for reorder ops on
+            # admin-tier non-superadmin users. The admin store is what
+            # `_check_admin_daily_limit` (above) consults, so without
+            # this mirror the new admin cap would never enforce in
+            # practice — the check would always see current=0.
+            # Superadmins skip the mirror per the same design rule
+            # (cap-exempt → no admin counter mutation).
+            if (is_admin_user and not is_superadmin(user_roles)
+                    and limit_action in ("row_reorder", "column_reorder")):
+                _increment_admin_daily_limit(
+                    user, limit_action, count=actual_count)
 
         _st = os.stat(path)
         _mt = int(_st.st_mtime)
@@ -7479,24 +7525,68 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "change_history": history,
         })
 
-    def _get_analyst_usage_action(self, payload):
-        """Return daily usage for all analysts or a specific one."""
+    def _get_analyst_usage_action(self, payload, session_key=""):
+        """Return daily usage for all analysts or a specific one.
+
+        Build 666 (2026-05-20) extension: also surfaces admin-tier
+        limits, admin-tier counters, and the list of admin/superadmin
+        usernames so the Activity tab UI can suppress the misleading
+        "LIMIT" badge for users whose tier doesn't enforce the
+        analyst-tier limit (every admin for non-reorder actions, and
+        every superadmin for all actions). Without this, the table
+        showed "LIMIT" against superadmin1 at count=16 even though no
+        cap actually fires for them — origin: 2026-05-20 user-reported
+        audit-trail-pollution concern (Option C).
+        """
         analyst = payload.get("analyst", "")
         counters = _read_daily_limits()
         today = _get_counter_period_key()
+        admin_period = _get_admin_counter_period_key()
         today_data = counters.get(today, {})
+        admin_today_data = counters.get(admin_period, {})
 
         # Include current limits so frontend can show limit-reached badges
         config = _read_limit_config()
         limits = {k: v for k, v in config.items()
                   if k not in ("change_history", "custom_defaults")}
 
+        # Build 666: also surface admin-tier limits (the rendered
+        # value differs from analyst limits and the frontend needs
+        # both to pick the correct cap for each user's tier).
+        admin_cfg = _read_admin_limits()
+        admin_limits = {k: v for k, v in admin_cfg.items()
+                        if k not in ("change_history", "custom_defaults")}
+
+        # Resolve admin/superadmin lists once (REST → conf → ["admin"]
+        # fallback chain inside wl_rbac). Empty session key still returns
+        # the hardcoded fallback so the UI never crashes on a missing
+        # tier hint — it just degrades to "everyone treated as analyst".
+        try:
+            admin_users = sorted(set(get_admin_users(session_key)))
+        except Exception:
+            admin_users = []
+        try:
+            superadmin_users = sorted(set(get_superadmin_users(session_key)))
+        except Exception:
+            superadmin_users = []
+
         if analyst:
+            # Project the per-user admin counter slice (admin_<action>
+            # keys only) so single-analyst lookups also see admin-tier
+            # data without a second round-trip.
+            admin_usage = {
+                k: v for k, v in admin_today_data.get(analyst, {}).items()
+                if k.startswith("admin_")
+            }
             return self._resp(200, {
                 "date": today,
                 "analyst": analyst,
                 "usage": today_data.get(analyst, {}),
                 "limits": limits,
+                "admin_limits": admin_limits,
+                "admin_usage": admin_usage,
+                "admin_users": admin_users,
+                "superadmin_users": superadmin_users,
             })
 
         # Cap response to MAX_TRACKED_ANALYSTS entries (sorted by name)
@@ -7504,10 +7594,27 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             keys = sorted(today_data.keys())[:MAX_TRACKED_ANALYSTS]
             today_data = {k: today_data[k] for k in keys}
 
+        # Build the admin-tier usage map keyed by user, restricted to
+        # users already in today_data so the response stays bounded by
+        # MAX_TRACKED_ANALYSTS (admin counters live under the admin
+        # period key, but a user with admin_* counters always has
+        # analyst-tier counters too — analyst counter increments on
+        # every action regardless of tier, see _save_csv ~line 4924).
+        admin_usage_by_user = {}
+        for u in today_data.keys():
+            slice_ = admin_today_data.get(u, {})
+            adm = {k: v for k, v in slice_.items() if k.startswith("admin_")}
+            if adm:
+                admin_usage_by_user[u] = adm
+
         return self._resp(200, {
             "date": today,
             "all_analysts": today_data,
             "limits": limits,
+            "admin_limits": admin_limits,
+            "admin_usage": admin_usage_by_user,
+            "admin_users": admin_users,
+            "superadmin_users": superadmin_users,
         })
 
     def _reset_daily_usage_action(self, payload, admin_user):

@@ -1414,3 +1414,193 @@ class TestMutationCoverageGroupEIncrementDelta:
             f"5 + 1 must be 6; got "
             f"{captured['data']['2026-05-20']['u']['x']}"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Build 666 (2026-05-20): admin-tier reorder caps (Option C)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Origin: user-reported on 2026-05-20 — superadmin1 was able to drag-
+# reorder 16 rows with the Activity table showing "LIMIT" reached, yet
+# the operation succeeded each time. Root cause: `_save_csv` enforced
+# only the analyst-tier cap, which is intentionally bypassed for the
+# admin+superadmin tier. There was no admin-tier cap for row/column
+# reorder ops at all, so a rogue admin could pollute the audit trail
+# indefinitely to bury malicious actions in noise.
+#
+# Option C added `row_reorder` and `column_reorder` to
+# `DEFAULT_ADMIN_LIMITS` and an admin-cap check in `_save_csv` that
+# fires for admin-tier non-superadmin users only (superadmin stays
+# exempt by design — see CLAUDE.md Decision Log 2026-05-20 row).
+# These tests pin the new behavior at the unit level. The handler-
+# integration coverage lives in the live deploy E2E run.
+
+@pytest.mark.unit
+class TestAdminReorderCaps:
+    """Pins the build-666 admin-tier caps for reorder ops.
+
+    The pattern parallels the analyst-side tests above: assert the
+    default value is what the design picked, then exercise the check
+    + increment functions to confirm enforcement and counter writes
+    go to the admin namespace (``admin_<action>`` prefix), not the
+    analyst counter.
+    """
+
+    def test_default_admin_limits_includes_row_reorder_50(self):
+        """row_reorder admin default is 50 (per Option C design)."""
+        from wl_constants import DEFAULT_ADMIN_LIMITS
+        assert DEFAULT_ADMIN_LIMITS["row_reorder"] == 50, (
+            "DEFAULT_ADMIN_LIMITS['row_reorder'] must default to 50 "
+            "ops per period (Option C). A change here is a public-"
+            "facing config change — update CLAUDE.md if intentional."
+        )
+
+    def test_default_admin_limits_includes_column_reorder_50(self):
+        """column_reorder admin default is 50 (per Option C design)."""
+        from wl_constants import DEFAULT_ADMIN_LIMITS
+        assert DEFAULT_ADMIN_LIMITS["column_reorder"] == 50, (
+            "DEFAULT_ADMIN_LIMITS['column_reorder'] must default to "
+            "50 ops per period (Option C)."
+        )
+
+    def test_check_admin_row_reorder_below_cap_allows(self):
+        """current=10, max=50 → 10+1 <= 50 → allowed."""
+        from wl_limits import check_admin_daily_limit
+        counters = {
+            "2026-05-20": {
+                "wladmin1": {"admin_row_reorder": 10}
+            }
+        }
+        with patch("wl_limits.read_admin_limits",
+                   return_value={"row_reorder": 50}), \
+             patch("wl_limits.get_admin_counter_period_key",
+                   return_value="2026-05-20"), \
+             patch("wl_limits.read_daily_limits",
+                   return_value=counters):
+            allowed, current, maximum = check_admin_daily_limit(
+                "wladmin1", "row_reorder")
+        assert allowed is True
+        assert current == 10
+        assert maximum == 50
+
+    def test_check_admin_row_reorder_at_cap_blocks_next(self):
+        """current=50, max=50, action_count=1 → 50+1 > 50 → denied."""
+        from wl_limits import check_admin_daily_limit
+        counters = {
+            "2026-05-20": {
+                "wladmin1": {"admin_row_reorder": 50}
+            }
+        }
+        with patch("wl_limits.read_admin_limits",
+                   return_value={"row_reorder": 50}), \
+             patch("wl_limits.get_admin_counter_period_key",
+                   return_value="2026-05-20"), \
+             patch("wl_limits.read_daily_limits",
+                   return_value=counters):
+            allowed, current, maximum = check_admin_daily_limit(
+                "wladmin1", "row_reorder")
+        assert allowed is False, (
+            "Once an admin has done 50 reorders in the period, the "
+            "51st must be blocked — that is the audit-trail-"
+            "pollution defense Option C added."
+        )
+        assert current == 50
+
+    def test_check_admin_column_reorder_separate_counter(self):
+        """row_reorder and column_reorder must NOT share a counter.
+
+        A rogue admin who has burned the row_reorder cap should still
+        be checked independently for column_reorder. Sharing the
+        counter would either be too permissive (one cap, two action
+        types using it up) or too restrictive (collision blocks both
+        when only one was used). The separate ``admin_<action>``
+        namespace already enforces this; the test pins it.
+        """
+        from wl_limits import check_admin_daily_limit
+        counters = {
+            "2026-05-20": {
+                "wladmin1": {"admin_row_reorder": 50}
+            }
+        }
+        with patch("wl_limits.read_admin_limits",
+                   return_value={
+                       "row_reorder": 50,
+                       "column_reorder": 50,
+                   }), \
+             patch("wl_limits.get_admin_counter_period_key",
+                   return_value="2026-05-20"), \
+             patch("wl_limits.read_daily_limits",
+                   return_value=counters):
+            allowed, current, maximum = check_admin_daily_limit(
+                "wladmin1", "column_reorder")
+        assert allowed is True, (
+            "Burning the row_reorder cap must not impact the "
+            "column_reorder counter (separate namespaces)."
+        )
+        assert current == 0
+
+    def test_increment_admin_row_reorder_writes_admin_namespace(self):
+        """The counter MUST land under ``admin_row_reorder``, not
+        ``row_reorder`` — otherwise the analyst-tier counter would
+        get double-incremented (since `_save_csv` already increments
+        the analyst counter unconditionally for every user).
+        """
+        from wl_limits import increment_admin_daily_limit
+        captured = {}
+        def _writer(counters):
+            captured["data"] = counters
+        with patch("wl_limits.read_daily_limits",
+                   return_value={}), \
+             patch("wl_limits.get_admin_counter_period_key",
+                   return_value="2026-05-20"), \
+             patch("wl_limits.write_daily_limits", side_effect=_writer):
+            increment_admin_daily_limit("wladmin1", "row_reorder", count=3)
+        slice_ = captured["data"]["2026-05-20"]["wladmin1"]
+        assert slice_.get("admin_row_reorder") == 3, (
+            "Counter must be written under admin_row_reorder, not "
+            "row_reorder (separate from the analyst counter to "
+            "preserve the audit-trail-pollution defense semantics)."
+        )
+        assert "row_reorder" not in slice_, (
+            "The admin increment must NOT touch the analyst "
+            "counter key — that's the caller's responsibility "
+            "via increment_daily_limit (which fires elsewhere in "
+            "_save_csv unconditionally for every user)."
+        )
+
+    def test_admin_reorder_zero_max_blocks_all(self):
+        """If a superadmin sets admin row_reorder to 0 (disabled),
+        every reorder by an admin must be blocked — same
+        sentinel semantics as every other admin limit (see
+        ``test_admin_limit_respects_zero_semantics`` above)."""
+        from wl_limits import check_admin_daily_limit
+        with patch("wl_limits.read_admin_limits",
+                   return_value={"row_reorder": 0}), \
+             patch("wl_limits.read_daily_limits", return_value={}):
+            allowed, current, maximum = check_admin_daily_limit(
+                "wladmin1", "row_reorder")
+        assert allowed is False
+        assert maximum == 0
+
+    def test_admin_reorder_minus_one_max_unlimited(self):
+        """-1 = unlimited (sentinel parity with analyst tier).
+
+        A superadmin who wants to disable the audit-trail-pollution
+        defense for a specific admin should set the limit to -1, not
+        a giant number. This test pins the sentinel so a future
+        refactor doesn't quietly drop the short-circuit.
+        """
+        from wl_limits import check_admin_daily_limit
+        # If the short-circuit fires, read_daily_limits must NOT be
+        # consulted — patch with a side_effect that explodes if hit.
+        def _explode():
+            raise AssertionError(
+                "counter lookup should be skipped when max=-1")
+        with patch("wl_limits.read_admin_limits",
+                   return_value={"row_reorder": -1}), \
+             patch("wl_limits.read_daily_limits",
+                   side_effect=_explode):
+            allowed, current, maximum = check_admin_daily_limit(
+                "wladmin1", "row_reorder", action_count=1000000)
+        assert allowed is True
+        assert maximum == -1
