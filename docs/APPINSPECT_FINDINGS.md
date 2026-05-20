@@ -199,6 +199,31 @@ before the migration).
 > banner introduced in build 661) need their own AppInspect re-run
 > before the v1.0.0 release. See `docs/RELEASE_CHECKLIST.md`.
 
+### 4.1 Build-668 spot-check (2026-05-20)
+
+Local CLI re-run on `wl_manager-1.0.0-rc1.spl` packaged from
+`default/app.conf` `build = 668` (HEAD `c53552e`). Output JSON
+preserved at `.planning/appinspect/build668/`. Numbers below are
+identical to the 2026-05-14 baseline AND the 2026-05-17 hosted-API
+run (§5 below), so the build-666/667/668 audit-trail-pollution
+defense work (admin reorder cap + log_event cap + LIMIT_KEYS
+expansion + UI form additions) is AppInspect-neutral.
+
+| Profile                    | error | failure | future_failure | warning | success |
+|----------------------------|-------|---------|----------------|---------|---------|
+| splunk-platform-standalone | 0     | 0       | 0              | 6       | 160     |
+| cloud                      | 0     | 0       | 0              | 5       | 157     |
+
+**Zero drift.** The four added action-types (admin_row_reorder,
+admin_column_reorder, log_event_emit cap, LIMIT_KEYS allow-list
+expansion) live inside existing handler code paths and configurable
+limit infrastructure — AppInspect's static checks have no triggers
+that fire on new dispatch entries or new limit keys at the source
+level. The remaining surface (an additional dynamic SLIM failure
+suppressed via `.appinspect_api.expect.yaml`) is hosted-API-only
+and will be re-verified by the next CI run after the GitHub Actions
+billing block clears.
+
 ---
 
 ## 5. Cloud API + dynamic checks (Phase 1.6 first API run)
