@@ -470,32 +470,92 @@ production code is shaped:
   in one shot, not a single mutant — the leverage is in pinning
   the contract, not in matching one mutmut-ID-to-one-test.
 
-**Result of the 2026-05-20 batch (committed 2358a27 + 5cbb221).**
+**Tests added in the 2026-05-20 batch (committed 2358a27 + 5cbb221).**
 
-| Module | New tests | Test groups | Status |
+| Module | New tests | Test groups | Unit-suite status |
 |---|---|---|---|
-| `bin/wl_csv.py` | 15 | A-E (all five clusters) | All 15 pass; full module 79/79 |
-| `bin/wl_limits.py` | 16 | A-E (Group E adapted to increment-delta) | All 16 pass; full module 92/92 |
-| `bin/wl_trash.py` | 10 | A-C (no audit-emission in trash → no Group E) | All 10 pass; full module 45/45 |
+| `bin/wl_csv.py` | 15 | A-E (all five clusters) | 79/79 pass |
+| `bin/wl_limits.py` | 16 | A-E (Group E adapted to increment-delta) | 92/92 pass |
+| `bin/wl_trash.py` | 10 | A-C (no audit-emission in trash → no Group E) | 45/45 pass |
 
-Post-batch mutmut re-runs to confirm the kill-rate delta are
-queued separately (the cache was destroyed between runs to pick
-up new tests, so this is the cost of clean measurement).
+**Post-batch mutmut measurements.**
 
-**Documented non-targets.** The remaining ~30% equivalent mutants
-in each module are NOT in scope. Honest reporting to reviewers is:
+| Module | Baseline kill rate | Post-batch kill rate | Delta | Notes |
+|---|---|---|---|---|
+| `bin/wl_csv.py` | 50.5% (358/723 survivors) | **53.4% (336/723 survivors + 1 timed out)** | +2.9% | Re-ran 2026-05-20 with clean tmpfs/cache. 22 mutations newly killed. |
+| `bin/wl_limits.py` | 52.6% (203/428 survivors) | NOT YET RE-RUN | — | Container time-constrained; queued for v1.1. |
+| `bin/wl_trash.py` | 53.2% (177/378 survivors) | NOT YET RE-RUN | — | Container time-constrained; queued for v1.1. |
 
-- "Kill rate ~70% on killable mutations" (post-batch target)
-- "Remaining ~30% are equivalent or near-equivalent (string-wraps
-  on internal log messages, buffer-size off-by-ones, JSON-indent
-  values)"
-- "Triage methodology and a survivor classification are in
-  `docs/MUTATION_TESTING.md` (this section)"
+**Honest reading of the wl_csv result.**
 
-This is the answer to the original reputation question: a 70%
-kill rate with a documented triage is professional; a 95% kill
-rate achieved by writing tests for `indent=2` vs `indent=3` is
-not.
+The +2.9% delta is much smaller than the ~70% kill rate that the
+five-cluster methodology TARGETS. Three reasons surfaced when the
+22 newly-killed mutations were compared against survivor IDs:
+
+1. **Many "killable-looking" mutations are functionally equivalent.**
+   `bin/wl_csv.py` calls `startswith("_")` in THREE adjacent lines
+   (`visible_headers`, `old_vis_set`, `new_vis_set`). Mutmut
+   generated one mutation per line. The Group B test
+   `test_compute_diff_excludes_underscore_prefixed_metadata_columns`
+   kills the mutations on lines 537-538 (`old_vis_set`/`new_vis_set`
+   — they affect `common_headers` and surface in `edited_count`),
+   but leaves the mutation on line 534 (`visible_headers`) alive
+   because that variable is only used for the cosmetic
+   `text_diff` output, not for actual row comparison. Reviewers
+   reading the mutmut output as a binary pass/fail would call this
+   a survivor; readers who trace the call graph would call it
+   equivalent.
+
+2. **Many mutations are in code paths only exercised by integration
+   tests.** `save_csv_pipeline` and `create_csv_pipeline` orchestrate
+   versioning, audit emission, FIM registry updates, and atomic
+   writes. A large fraction of their internal branches are reached
+   only when the actual Splunk container is present. Unit tests
+   mock `wl_versions.snapshot_version` and `wl_audit.post_audit_event`
+   to side-step those dependencies — which means any mutation INSIDE
+   the calls that hit those mocked functions is unreachable from
+   a unit test.
+
+3. **The cluster-leverage assumption was optimistic.** The
+   five-cluster methodology aims for one test killing N related
+   mutations. In practice, mutmut's mutation generator produces
+   variants the tests don't pin in the way I projected (e.g.
+   `"diff"` → `"XXdiffXX"` IS killed, but `"added"` → `"XXaddedXX"`
+   is killed too only because Group B explicitly enumerated that
+   key, while `"removed_count"` → `"XXremoved_countXX"` survives
+   because the Group D `REQUIRED_KEYS` set in test_csv.py only
+   spelled out the top-level envelope, not every nested key).
+
+**What this means for the rc1 release framing.**
+
+The user's original concern was reputation risk if customers ran
+mutmut against the published source and saw ~50% survivors. The
+honest position to take is:
+
+- 53.4% kill rate on `bin/wl_csv.py` (a large data-pipeline file
+  with significant integration-only code) is consistent with
+  mutmut-on-Python projects of this shape.
+- The five-cluster triage documented above tells reviewers what
+  the survivor categories are, so a customer looking at the
+  numbers sees the discipline, not opaque survivors.
+- The remaining work (further test additions to push toward 75%)
+  is scoped as a v1.1 item, NOT a v1.0.0-rc1 blocker.
+
+This is more honest than the earlier framing of this section
+(now corrected) which conflated the methodology TARGET (75% on
+killable) with the measured RESULT (53.4% on all).
+
+**Open items deferred to v1.1.**
+
+- Re-run mutmut on `bin/wl_limits.py` + `bin/wl_trash.py` against
+  the post-batch test files (the 16+10 new tests) so we have a
+  three-module measured set.
+- Triage the 336 wl_csv survivors into "killable / equivalent /
+  integration-only" buckets and write tests for the killable
+  subset.
+- Consider whether a coverage-aware mutator (mutmut's
+  `--use-coverage`) would skip the integration-only paths and
+  give a more interpretable kill rate.
 
 ---
 
