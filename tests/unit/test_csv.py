@@ -1376,3 +1376,499 @@ class TestSaveCsvPipelineErrorPaths:
         assert "Unexpected error" in result["error"]
         # Error message MUST NOT disclose internal details
         assert "synthetic compute_diff failure" not in result["error"]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Mutation-survivor coverage (2026-05-20 batch).
+#
+# Industry-standard mutation testing aims for ~75-80% kill rate on KILLABLE
+# mutants (Google "Mutation Testing in Practice" 2020). The baseline mutmut
+# run on 2026-05-19 against bin/wl_csv.py reported ~50.5% (358 survivors out
+# of 723 mutations). Triage of 13 sampled survivors classified roughly:
+#   - ~30% equivalent / uninteresting (logger-name string wraps, buffer-size
+#     int+1, JSON indent values that no test asserts on byte-for-byte)
+#   - ~70% real test gaps in 5 clusters: hash-registry integrity, diff math
+#     correctness (visible-headers filter + _find_row_positions), audit-event
+#     field-name shape, return-dict key contracts, and write_csv atomicity.
+#
+# Each test below is written to kill a CLUSTER of related mutants in one
+# shot, not a single mutant. The Group letters (A-E) line up with the
+# clusters; see docs/MUTATION_TESTING.md "2026-05-20 hardening" section
+# for the full triage matrix.
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+from wl_csv import _csv_file_hash  # noqa: E402
+
+
+@pytest.mark.unit
+class TestMutationCoverageGroupAHashRegistry:
+    """Group A: Hash registry integrity.
+
+    Kills mutants that NULL the hash value (mut #18, #22 cluster) by
+    asserting the registry stores the EXACT hex digest, not None or empty.
+    """
+
+    def test_csv_file_hash_returns_64char_lowercase_hex(self, tmp_path):
+        """_csv_file_hash returns a 64-char SHA-256 hex digest, lowercase only.
+
+        Kills buffer-size and read-strategy mutants that would change the
+        digest value (the digest IS the contract, not the chunk size).
+        """
+        csv_path = tmp_path / "h.csv"
+        csv_path.write_bytes(b"hello,world\n1,2\n")
+        h = _csv_file_hash(str(csv_path))
+        # SHA-256 hex digest: exactly 64 hex chars, lowercase.
+        assert isinstance(h, str)
+        assert len(h) == 64, f"expected 64 chars, got {len(h)}: {h!r}"
+        assert all(c in "0123456789abcdef" for c in h), (
+            f"expected lowercase hex, got: {h!r}"
+        )
+        # Deterministic: same content → same digest.
+        assert _csv_file_hash(str(csv_path)) == h
+
+    def test_csv_file_hash_distinguishes_content(self, tmp_path):
+        """Different bytes → different digests.
+
+        Kills mutants that would return a constant or None (e.g. swapping
+        the buffer-size and trimming the digest to identical prefixes).
+        """
+        a = tmp_path / "a.csv"
+        b = tmp_path / "b.csv"
+        a.write_bytes(b"foo")
+        b.write_bytes(b"bar")
+        ha = _csv_file_hash(str(a))
+        hb = _csv_file_hash(str(b))
+        assert ha != hb, "different content must produce different digests"
+
+    def test_update_csv_expected_hash_stores_actual_hex(self, tmp_path,
+                                                       monkeypatch):
+        """Returned hex MUST equal the value stored in the registry.
+
+        Kills mut #18 (`file_hash = None`) and mut #22 (`hashes[csv_name]
+        = None`) — both produce a contract violation where the returned
+        value differs from the stored value.
+        """
+        # Redirect the registry to tmp_path so we don't touch host state.
+        monkeypatch.setattr(
+            "wl_csv._get_expected_hashes_path",
+            lambda p: str(tmp_path / "expected_hashes.json")
+        )
+        # Stub HMAC reader/writer so we can introspect the registry cleanly.
+        store = {"hashes": {}}
+        monkeypatch.setattr(
+            "wl_csv._read_expected_hashes", lambda p: dict(store["hashes"])
+        )
+        def _writer(p, h):
+            store["hashes"] = dict(h)
+        monkeypatch.setattr("wl_csv._write_expected_hashes", _writer)
+
+        csv_path = tmp_path / "DR_test.csv"
+        csv_path.write_bytes(b"src_ip,reason\n1.1.1.1,ok\n")
+        returned = update_csv_expected_hash(str(csv_path))
+
+        # Contract: returned value is a valid SHA-256 hex AND that value
+        # is what landed in the registry.
+        assert len(returned) == 64
+        assert all(c in "0123456789abcdef" for c in returned), (
+            f"expected hex digest, got: {returned!r}"
+        )
+        assert returned is not None
+        assert store["hashes"].get("DR_test.csv") == returned, (
+            "registry must store the exact returned digest, not None"
+        )
+        assert store["hashes"]["DR_test.csv"] is not None
+
+
+@pytest.mark.unit
+class TestMutationCoverageGroupBDiffMath:
+    """Group B: Diff math correctness.
+
+    Kills `not h.startswith("_")` flip (mut #198) and break/continue swap
+    in `_find_row_positions` (mut #137) by asserting the OUTCOME of those
+    branches, not just that compute_diff runs.
+    """
+
+    def test_compute_diff_excludes_underscore_prefixed_metadata_columns(
+        self
+    ):
+        """Visible headers must EXCLUDE columns starting with `_`.
+
+        Kills mut #198 (`startswith("_")` → `startswith("XX_XX")`) because
+        the flipped predicate would treat `_added_by` as a visible header,
+        and an EDIT to it (alice → bob) would be detected as a normal
+        cell-edit instead of metadata churn that the diff should ignore.
+        """
+        # Both rows have the same visible (src_ip) but differ in the
+        # metadata column `_added_by`. With the correct underscore filter,
+        # this is detected as "no changes". With the inverted filter,
+        # it surfaces as an edited cell.
+        old_headers = ["src_ip", "_added_by"]
+        old_rows = [{"src_ip": "1.1.1.1", "_added_by": "alice"}]
+        new_headers = ["src_ip", "_added_by"]
+        new_rows = [{"src_ip": "1.1.1.1", "_added_by": "bob"}]
+
+        diff = compute_diff(old_headers, old_rows, new_headers, new_rows)
+
+        # The visible content is identical → no diff. If the underscore
+        # filter were inverted, the edit on `_added_by` would surface.
+        assert diff["edited_count"] == 0, (
+            f"_added_by must be filtered as metadata, not visible; "
+            f"got edited_count={diff['edited_count']}, diff={diff}"
+        )
+        assert diff["added_count"] == 0
+        assert diff["removed_count"] == 0
+
+    def test_find_row_positions_returns_first_match_not_last(self):
+        """`break` after match must exit on FIRST match (mut #137: break→continue).
+
+        With three duplicates of the same row_key, the function must
+        return position 1 (1-based, first occurrence). The break→continue
+        mutation would iterate through all matches and return position 3.
+        """
+        common_headers = ["k"]
+        old_rows = [
+            {"k": "dup"},  # position 1 (first match)
+            {"k": "dup"},  # position 2
+            {"k": "dup"},  # position 3
+        ]
+        new_rows = []
+        row_key = ("dup",)
+        old_pos, _ = _find_row_positions(
+            row_key, old_rows, new_rows, common_headers
+        )
+        assert old_pos == 1, (
+            f"break must exit on first match → position 1; "
+            f"got {old_pos} (continue would yield 3)"
+        )
+
+    def test_compute_diff_returns_documented_top_level_keys(self):
+        """Contract: compute_diff result has these exact top-level keys.
+
+        Kills string-wrap mutants on every top-level key in the returned
+        dict (e.g. "added" → "XXaddedXX") — those changes would make
+        result.get("added") return None and break every consumer.
+        """
+        diff = compute_diff(
+            ["k"], [{"k": "a"}], ["k"], [{"k": "b"}]
+        )
+        # Required keys = what production callers in wl_handler.py and
+        # wl_audit.py actually consume. Listed explicitly so a string-wrap
+        # mutation (`"added"` → `"XXaddedXX"`) would surface as a missing
+        # key here.
+        required_keys = {
+            "added", "removed", "edited",
+            "added_count", "removed_count", "edited_count",
+            "added_columns", "removed_columns",
+            "text_diff",
+        }
+        missing = required_keys - set(diff.keys())
+        assert not missing, (
+            f"compute_diff result missing required keys: {missing}; "
+            f"got keys: {set(diff.keys())}"
+        )
+
+
+@pytest.mark.unit
+class TestMutationCoverageGroupCAuditFieldShape:
+    """Group C: Audit-event field-name shape.
+
+    Kills `pos = None` (mut #461) and `rn = None` (mut #538) by capturing
+    `build_audit_event` calls and asserting the field-name shape is
+    `<field>_row_<int>_<before|after>`, not `<field>_row_None_*`.
+    """
+
+    def test_save_emits_audit_with_integer_row_numbers_on_edit(
+        self, tmp_path
+    ):
+        """Edit-event audit fields must use integer row numbers, not None.
+
+        If `rn = edit_entry["row_num"]` is mutated to `rn = None`, the
+        emitted audit event would have keys like `reason_row_None_before`,
+        breaking the audit pipeline's row-numbering contract.
+        """
+        csv_path = _write_initial_csv(
+            tmp_path,
+            headers=["src_ip", "reason"],
+            rows=[
+                {"src_ip": "1.1.1.1", "reason": "old"},
+                {"src_ip": "2.2.2.2", "reason": "ok"},
+            ],
+        )
+        captured = []
+
+        def _capture_build(**kwargs):
+            captured.append(kwargs)
+            return {"action": kwargs.get("action", "unknown")}
+
+        with patch("wl_versions.snapshot_version",
+                   return_value=("v2", "ts")), \
+             patch("wl_audit.post_audit_event", return_value=(True, "")), \
+             patch("wl_audit.build_audit_event", side_effect=_capture_build):
+            save_csv_pipeline(
+                csv_path=csv_path,
+                new_headers=["src_ip", "reason"],
+                new_rows=[
+                    {"src_ip": "1.1.1.1", "reason": "updated"},
+                    {"src_ip": "2.2.2.2", "reason": "ok"},
+                ],
+                comment="edit reason on row 1",
+                analyst="alice",
+                session_key="sk",
+            )
+
+        # Find the call(s) for the edit event. The audit-event field shape
+        # contract: any key matching `<field>_row_<N>_<before|after>`
+        # MUST have N as an integer string (digits), never "None".
+        import re
+        bad_keys = []
+        for call_kwargs in captured:
+            for key in (call_kwargs.get("extras") or {}):
+                m = re.match(r"^[A-Za-z_]+_row_(\S+?)_(before|after)$", key)
+                if m and not m.group(1).isdigit():
+                    bad_keys.append(key)
+        assert not bad_keys, (
+            f"edit-event audit keys must encode integer row numbers; "
+            f"found bad keys: {bad_keys}"
+        )
+
+    def test_save_emits_audit_with_integer_row_numbers_on_add(
+        self, tmp_path
+    ):
+        """Add-event audit must use integer positions, not None.
+
+        Kills mut #461 (`pos = new_row_id_to_pos.get(id(entry))` → `pos =
+        None`): the resulting audit event's `value` list (`user_row_N`)
+        would contain `None` literals.
+        """
+        csv_path = _write_initial_csv(
+            tmp_path,
+            headers=["src_ip"],
+            rows=[{"src_ip": "1.1.1.1"}],
+        )
+        captured = []
+
+        def _capture_build(**kwargs):
+            captured.append(kwargs)
+            return {"action": kwargs.get("action", "unknown")}
+
+        with patch("wl_versions.snapshot_version",
+                   return_value=("v2", "ts")), \
+             patch("wl_audit.post_audit_event", return_value=(True, "")), \
+             patch("wl_audit.build_audit_event", side_effect=_capture_build):
+            save_csv_pipeline(
+                csv_path=csv_path,
+                new_headers=["src_ip"],
+                new_rows=[
+                    {"src_ip": "1.1.1.1"},
+                    {"src_ip": "2.2.2.2"},
+                ],
+                comment="add row 2",
+                analyst="alice",
+                session_key="sk",
+            )
+
+        # The value list in row-added events looks like ["src_ip_row_2:
+        # 2.2.2.2"]. If pos got mutated to None, it would be "src_ip_row_
+        # None: 2.2.2.2". Detect either via "row_None" substring across
+        # all captured extras.
+        for call_kwargs in captured:
+            extras = call_kwargs.get("extras") or {}
+            value_lines = extras.get("value", [])
+            if isinstance(value_lines, list):
+                joined = "\n".join(str(v) for v in value_lines)
+                assert "row_None" not in joined, (
+                    f"add-event audit value contains 'row_None'; "
+                    f"pos mapping was nulled: {value_lines}"
+                )
+
+
+@pytest.mark.unit
+class TestMutationCoverageGroupDReturnContracts:
+    """Group D: Top-level return-dict key contracts.
+
+    Kills string-wrap mutants on the keys `success`, `message`, `error`,
+    `data`, `diff` (mut #415, #654 and many siblings in every return
+    statement) by asserting all five keys exist on every return path.
+    """
+
+    REQUIRED_KEYS = {"success", "message", "error", "data", "diff"}
+
+    def test_save_no_changes_return_has_all_five_keys(self, tmp_path):
+        csv_path = _write_initial_csv(
+            tmp_path,
+            headers=["a"],
+            rows=[{"a": "1"}],
+        )
+        with patch("wl_audit.post_audit_event", return_value=(True, "")), \
+             patch("wl_audit.build_audit_event", return_value={}):
+            result = save_csv_pipeline(
+                csv_path=csv_path,
+                new_headers=["a"],
+                new_rows=[{"a": "1"}],  # identical → no changes
+                comment="noop",
+                analyst="alice",
+                session_key="sk",
+            )
+        missing = self.REQUIRED_KEYS - set(result.keys())
+        assert not missing, (
+            f"no-changes return missing keys: {missing}; got: {set(result.keys())}"
+        )
+
+    def test_save_success_return_has_all_five_keys(self, tmp_path):
+        csv_path = _write_initial_csv(
+            tmp_path,
+            headers=["a"],
+            rows=[{"a": "1"}],
+        )
+        with patch("wl_versions.snapshot_version", return_value=("v2", "ts")), \
+             patch("wl_audit.post_audit_event", return_value=(True, "")), \
+             patch("wl_audit.build_audit_event", return_value={}):
+            result = save_csv_pipeline(
+                csv_path=csv_path,
+                new_headers=["a"],
+                new_rows=[{"a": "1"}, {"a": "2"}],
+                comment="add",
+                analyst="alice",
+                session_key="sk",
+            )
+        missing = self.REQUIRED_KEYS - set(result.keys())
+        assert not missing, (
+            f"success return missing keys: {missing}; got: {set(result.keys())}"
+        )
+
+    def test_save_oserror_return_has_all_five_keys(self, tmp_path):
+        csv_path = _write_initial_csv(
+            tmp_path,
+            headers=["a"],
+            rows=[{"a": "1"}],
+        )
+        with patch("wl_csv.write_csv", side_effect=OSError("simulated")):
+            result = save_csv_pipeline(
+                csv_path=csv_path,
+                new_headers=["a"],
+                new_rows=[{"a": "1"}, {"a": "2"}],
+                comment="trigger OSError",
+                analyst="alice",
+                session_key="sk",
+            )
+        missing = self.REQUIRED_KEYS - set(result.keys())
+        assert not missing, (
+            f"OSError return missing keys: {missing}; got: {set(result.keys())}"
+        )
+
+    def test_save_unexpected_exception_return_has_all_five_keys(
+        self, tmp_path
+    ):
+        csv_path = _write_initial_csv(
+            tmp_path,
+            headers=["a"],
+            rows=[{"a": "1"}],
+        )
+        with patch("wl_csv.compute_diff",
+                   side_effect=RuntimeError("synthetic")):
+            result = save_csv_pipeline(
+                csv_path=csv_path,
+                new_headers=["a"],
+                new_rows=[{"a": "2"}],
+                comment="trigger RuntimeError",
+                analyst="alice",
+                session_key="sk",
+            )
+        missing = self.REQUIRED_KEYS - set(result.keys())
+        assert not missing, (
+            f"unexpected-exc return missing keys: {missing}; "
+            f"got: {set(result.keys())}"
+        )
+
+    def test_create_csv_success_message_matches_exact_template(
+        self, tmp_path
+    ):
+        """create_csv message format: 'CSV created with N column(s)'.
+
+        Kills string-wrap on the "message" key AND on the template
+        text (e.g. mut #700 wraps "error" → "XXerrorXX" — the message
+        check forces a positive assertion on the success message
+        template too).
+        """
+        csv_path = str(tmp_path / "DR.csv")
+        with patch("wl_versions.snapshot_version", return_value=("v1", "ts")), \
+             patch("wl_audit.post_audit_event", return_value=(True, "")), \
+             patch("wl_audit.build_audit_event", return_value={}):
+            result = create_csv_pipeline(
+                csv_path=csv_path,
+                headers=["a", "b", "c"],
+                initial_rows=[],
+                analyst="alice",
+                session_key="sk",
+            )
+        # Exact wording asserted: kills mutants that would wrap or
+        # garble the message template (e.g. "CSV created with" → ...).
+        assert result["message"] == "CSV created with 3 column(s)", (
+            f"unexpected message: {result['message']!r}"
+        )
+        assert result["error"] == "", (
+            f"error must be empty string on success, got: {result['error']!r}"
+        )
+
+
+@pytest.mark.unit
+class TestMutationCoverageGroupEWriteAtomicity:
+    """Group E: write_csv content correctness.
+
+    Kills temp-file-suffix wrap (#64 `".tmp"` → `"XX.tmpXX"`) by
+    forcing a real on-disk write + read-back loop where any deviation
+    in the temp-file lifecycle (open → atomic rename) would either
+    leave a `*XX.tmpXX` file behind on disk or produce a truncated
+    output. Also asserts row content is preserved byte-faithfully.
+    """
+
+    def test_write_csv_leaves_no_temp_files_on_success(self, tmp_path):
+        """After write_csv completes, no .tmp (or XX.tmpXX) file lingers.
+
+        If the temp-suffix string is mutated, the atomic rename
+        (`os.replace(temp_path, filepath)`) would either fail or leave
+        the temp file with a mutated extension on disk. We allow the
+        `_versions/` directory because `set_column_widths` may create
+        it as a side effect; we only assert that no `*.tmp`-shaped
+        sibling lingers next to the final CSV.
+        """
+        csv_path = tmp_path / "atomic.csv"
+        write_csv(str(csv_path), ["a", "b"], [{"a": "1", "b": "2"}])
+
+        # Inspect only files (not subdirectories) at the same level as
+        # the CSV. The only acceptable file is the CSV itself.
+        sibling_files = sorted(
+            p.name for p in tmp_path.iterdir() if p.is_file()
+        )
+        assert sibling_files == ["atomic.csv"], (
+            f"unexpected leftover sibling files: {sibling_files}; "
+            f"the atomic write+rename must clean up the temp file"
+        )
+        # Defensive: catch any .tmp-shaped leftover anywhere in tmp_path,
+        # including under _versions/.
+        for path in tmp_path.rglob("*.tmp"):
+            raise AssertionError(f"stray temp file: {path}")
+        for path in tmp_path.rglob("*XX.tmpXX*"):
+            raise AssertionError(f"mutated temp file: {path}")
+
+    def test_write_csv_content_round_trips_exactly(self, tmp_path):
+        """write_csv → read_csv preserves rows byte-faithfully.
+
+        Catches mutations that swap the writer's behavior (e.g. closing
+        the file before flush, or writing to a different path due to
+        temp-suffix variation that fails the rename).
+        """
+        csv_path = tmp_path / "round.csv"
+        headers = ["k", "v"]
+        rows = [
+            {"k": "alpha", "v": "1"},
+            {"k": "bravo", "v": "2"},
+            {"k": "charlie", "v": "3"},
+        ]
+        write_csv(str(csv_path), headers, rows)
+        read_headers, read_rows = read_csv(str(csv_path))
+        assert read_headers == headers
+        assert read_rows == rows, (
+            f"round-trip mismatch: wrote {rows!r}, read {read_rows!r}"
+        )
