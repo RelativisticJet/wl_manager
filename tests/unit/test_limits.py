@@ -1126,3 +1126,291 @@ class TestIncrementDailyLimitOverflow:
         # `permanent` key kept and u3 added there
         assert "permanent" in written
         assert "u3" in written["permanent"]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Mutation-survivor coverage (2026-05-20 batch).
+#
+# Baseline mutmut on bin/wl_limits.py reported ~52.6% kill rate (203 of 428
+# mutations survived) on 2026-05-19. Survivors cluster in the same five
+# patterns identified for wl_csv (see docs/MUTATION_TESTING.md). Tests
+# below target the contracts most likely to be silently broken by
+# mutations: HMAC checksum integrity, tuple/dict return shapes, boundary
+# precision on 0=disabled / -1=unlimited semantics, and increment-delta
+# correctness.
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.unit
+class TestMutationCoverageGroupAChecksumIntegrity:
+    """Group A: compute_config_checksum integrity (parallels wl_csv Group A).
+
+    A config-integrity checksum must be deterministic, distinguish inputs,
+    and ignore the `_checksum` field (so a signed config can be
+    re-verified without the signature self-referencing).
+    """
+
+    def test_checksum_returns_64char_hex(self):
+        from wl_limits import compute_config_checksum
+        h = compute_config_checksum({"k": "v"})
+        assert isinstance(h, str)
+        assert len(h) == 64, f"expected 64 hex chars, got {len(h)}: {h!r}"
+        assert all(c in "0123456789abcdef" for c in h), (
+            f"expected lowercase hex, got: {h!r}"
+        )
+
+    def test_checksum_deterministic_across_dict_ordering(self):
+        """Reordering keys MUST NOT change the digest (sort_keys=True)."""
+        from wl_limits import compute_config_checksum
+        h1 = compute_config_checksum({"a": 1, "b": 2, "c": 3})
+        h2 = compute_config_checksum({"c": 3, "b": 2, "a": 1})
+        assert h1 == h2, (
+            f"sort_keys=True should make ordering irrelevant; "
+            f"got {h1!r} vs {h2!r}"
+        )
+
+    def test_checksum_distinguishes_inputs(self):
+        from wl_limits import compute_config_checksum
+        h1 = compute_config_checksum({"k": "v1"})
+        h2 = compute_config_checksum({"k": "v2"})
+        assert h1 != h2, "different values must produce different digests"
+
+    def test_checksum_ignores_self_referencing_checksum_field(self):
+        """The function strips `_checksum` before hashing so verification works."""
+        from wl_limits import compute_config_checksum
+        h_clean = compute_config_checksum({"k": "v"})
+        h_with_meta = compute_config_checksum({
+            "k": "v",
+            "_checksum": "anything",
+        })
+        assert h_clean == h_with_meta, (
+            f"_checksum field must be stripped before hashing; "
+            f"got {h_clean!r} vs {h_with_meta!r}"
+        )
+
+
+@pytest.mark.unit
+class TestMutationCoverageGroupBTupleContracts:
+    """Group B: decision-function tuple shape.
+
+    `check_analyst_limit` and `check_admin_limit` both return
+    `Tuple[bool, int, int]` = (allowed, current, max). String wraps or
+    type swaps inside the tuple would change the contract.
+    """
+
+    def test_check_analyst_limit_returns_three_tuple_of_correct_types(self):
+        from wl_limits import check_analyst_limit
+        with patch("wl_limits.read_limit_config",
+                   return_value={"row_removal": 5}), \
+             patch("wl_limits.read_daily_limits",
+                   return_value={"2026-05-20": {"u": {"row_removal": 2}}}), \
+             patch("wl_limits.get_counter_period_key",
+                   return_value="2026-05-20"):
+            ret = check_analyst_limit("u", "row_removal", action_count=1,
+                                      roles=["wl_editor"])
+        assert isinstance(ret, tuple) and len(ret) == 3, (
+            f"expected 3-tuple, got: {ret!r}"
+        )
+        allowed, current, max_count = ret
+        assert isinstance(allowed, bool)
+        assert isinstance(current, int) and not isinstance(current, bool)
+        assert isinstance(max_count, int) and not isinstance(max_count, bool)
+
+    def test_check_analyst_admin_exempt_returns_canonical_sentinel(self):
+        """Admin path returns exactly (True, 0, -1) — fixed sentinel."""
+        from wl_limits import check_analyst_limit
+        with patch("wl_limits.is_admin", return_value=True):
+            ret = check_analyst_limit("admin_user", "row_removal",
+                                      roles=["wl_admin"])
+        assert ret == (True, 0, -1), (
+            f"admin-exempt sentinel must be exactly (True, 0, -1); got {ret!r}"
+        )
+
+    def test_check_analyst_disabled_returns_false_zero_zero(self):
+        """max_count == 0 (disabled) → exactly (False, 0, 0)."""
+        from wl_limits import check_analyst_limit
+        with patch("wl_limits.read_limit_config",
+                   return_value={"row_removal": 0}), \
+             patch("wl_limits.is_admin", return_value=False):
+            ret = check_analyst_limit("u", "row_removal", roles=[])
+        assert ret == (False, 0, 0), (
+            f"disabled-action sentinel must be (False, 0, 0); got {ret!r}"
+        )
+
+    def test_check_analyst_unlimited_returns_true_zero_neg1(self):
+        """max_count == -1 (unlimited) → exactly (True, 0, -1)."""
+        from wl_limits import check_analyst_limit
+        with patch("wl_limits.read_limit_config",
+                   return_value={"row_removal": -1}), \
+             patch("wl_limits.is_admin", return_value=False):
+            ret = check_analyst_limit("u", "row_removal", roles=[])
+        assert ret == (True, 0, -1), (
+            f"unlimited-action sentinel must be (True, 0, -1); got {ret!r}"
+        )
+
+    def test_set_limit_config_returns_bool_str_tuple(self):
+        """`set_limit_config` returns (success: bool, error: str)."""
+        from wl_limits import set_limit_config, DEFAULT_LIMITS
+        # Construct a complete-but-minimal valid config from DEFAULT_LIMITS
+        # so the validator doesn't reject for missing keys.
+        valid_config = dict(DEFAULT_LIMITS)
+        with patch("wl_limits.write_limit_config"):
+            ret = set_limit_config(valid_config)
+        assert isinstance(ret, tuple) and len(ret) == 2, (
+            f"expected 2-tuple, got: {ret!r}"
+        )
+        assert isinstance(ret[0], bool), f"success must be bool, got {ret[0]!r}"
+        assert isinstance(ret[1], str), f"error must be str, got {ret[1]!r}"
+
+
+@pytest.mark.unit
+class TestMutationCoverageGroupCDictContracts:
+    """Group C: `get_limit_status` dict-shape contract.
+
+    For every action key, the inner dict has exactly
+    {current, max, remaining}. A string-wrap on any inner key would
+    surface as a missing key here.
+    """
+
+    REQUIRED_INNER_KEYS = {"current", "max", "remaining"}
+
+    def test_get_limit_status_inner_dict_has_three_keys(self):
+        from wl_limits import get_limit_status
+        with patch("wl_limits.read_limit_config",
+                   return_value={"row_removal": 5}), \
+             patch("wl_limits.read_daily_limits", return_value={}), \
+             patch("wl_limits.get_counter_period_key",
+                   return_value="2026-05-20"), \
+             patch("wl_limits.is_admin", return_value=False):
+            status = get_limit_status("u", roles=[])
+        assert isinstance(status, dict)
+        for action, inner in status.items():
+            missing = self.REQUIRED_INNER_KEYS - set(inner.keys())
+            assert not missing, (
+                f"action={action!r} missing keys: {missing}; "
+                f"inner: {inner!r}"
+            )
+
+    def test_get_limit_status_admin_returns_unlimited_sentinel_per_action(self):
+        """Admin path: every inner dict is exactly {current:0, max:-1, remaining:-1}."""
+        from wl_limits import get_limit_status
+        with patch("wl_limits.read_limit_config", return_value={}), \
+             patch("wl_limits.read_daily_limits", return_value={}), \
+             patch("wl_limits.get_counter_period_key",
+                   return_value="2026-05-20"), \
+             patch("wl_limits.is_admin", return_value=True):
+            status = get_limit_status("admin_user", roles=["wl_admin"])
+        for action, inner in status.items():
+            assert inner == {"current": 0, "max": -1, "remaining": -1}, (
+                f"action={action!r}: admin-unlimited sentinel violated, "
+                f"got {inner!r}"
+            )
+
+    def test_get_limit_status_remaining_clamped_to_zero(self):
+        """When current >= max, remaining must be 0 (not negative)."""
+        from wl_limits import get_limit_status
+        with patch("wl_limits.read_limit_config",
+                   return_value={"row_removal": 3}), \
+             patch("wl_limits.read_daily_limits",
+                   return_value={"2026-05-20":
+                                 {"u": {"row_removal": 7}}}), \
+             patch("wl_limits.get_counter_period_key",
+                   return_value="2026-05-20"), \
+             patch("wl_limits.is_admin", return_value=False):
+            status = get_limit_status("u", roles=[])
+        # If max=3 and current=7, remaining=max(0, 3-7)=0 — NOT -4.
+        assert status["row_removal"]["remaining"] == 0, (
+            f"remaining must be clamped to 0 when over-cap; "
+            f"got {status['row_removal']!r}"
+        )
+
+
+@pytest.mark.unit
+class TestMutationCoverageGroupDBoundaryPrecision:
+    """Group D: boundary precision on cap-comparison.
+
+    `allowed = (current + action_count) <= max_count` is the cap test.
+    Mutations to `<=` vs `<` or `+` vs `-` flip the boundary by one,
+    which the existing "allowed_under_max" / "at_boundary" /
+    "denied_over_max" tests cover for action_count=1 only. The tests
+    below pin behavior at the EXACT boundary for action_count > 1.
+    """
+
+    def test_check_analyst_limit_exactly_at_cap_with_action_count_2(self):
+        """current=3, max=5, action_count=2 → 3+2=5 <= 5 → allowed."""
+        from wl_limits import check_analyst_limit
+        with patch("wl_limits.read_limit_config",
+                   return_value={"row_removal": 5}), \
+             patch("wl_limits.read_daily_limits",
+                   return_value={"2026-05-20": {"u": {"row_removal": 3}}}), \
+             patch("wl_limits.get_counter_period_key",
+                   return_value="2026-05-20"), \
+             patch("wl_limits.is_admin", return_value=False):
+            allowed, current, max_count = check_analyst_limit(
+                "u", "row_removal", action_count=2, roles=[]
+            )
+        assert allowed is True, (
+            f"3+2 == 5 (cap) MUST be allowed; got allowed={allowed}, "
+            f"current={current}, max={max_count}"
+        )
+
+    def test_check_analyst_limit_one_over_cap_with_action_count_2(self):
+        """current=4, max=5, action_count=2 → 4+2=6 > 5 → denied."""
+        from wl_limits import check_analyst_limit
+        with patch("wl_limits.read_limit_config",
+                   return_value={"row_removal": 5}), \
+             patch("wl_limits.read_daily_limits",
+                   return_value={"2026-05-20": {"u": {"row_removal": 4}}}), \
+             patch("wl_limits.get_counter_period_key",
+                   return_value="2026-05-20"), \
+             patch("wl_limits.is_admin", return_value=False):
+            allowed, _, _ = check_analyst_limit(
+                "u", "row_removal", action_count=2, roles=[]
+            )
+        assert allowed is False, (
+            "4+2 = 6 > 5 (cap) MUST be denied"
+        )
+
+
+@pytest.mark.unit
+class TestMutationCoverageGroupEIncrementDelta:
+    """Group E: `increment_daily_limit` adds the EXACT amount, not 1.
+
+    Mutations swapping `current + amount` for `current + 1` or `current
+    - amount` would silently miscount. We assert the persisted counter
+    matches the expected delta.
+    """
+
+    def test_increment_adds_exact_amount_4(self):
+        """amount=4 → counter increases by exactly 4."""
+        from wl_limits import increment_daily_limit
+        captured = {}
+        def _writer(counters):
+            captured["data"] = counters
+        with patch("wl_limits.read_daily_limits",
+                   return_value={"2026-05-20": {"u": {"x": 3}}}), \
+             patch("wl_limits.get_counter_period_key",
+                   return_value="2026-05-20"), \
+             patch("wl_limits.write_daily_limits", side_effect=_writer):
+            increment_daily_limit("u", "x", count=4)
+        assert captured["data"]["2026-05-20"]["u"]["x"] == 7, (
+            f"3 + 4 must be 7; got "
+            f"{captured['data']['2026-05-20']['u']['x']}"
+        )
+
+    def test_increment_default_amount_is_exactly_one(self):
+        """No amount arg → exactly +1 (mutations to +2, +0, *2 would fail)."""
+        from wl_limits import increment_daily_limit
+        captured = {}
+        def _writer(counters):
+            captured["data"] = counters
+        with patch("wl_limits.read_daily_limits",
+                   return_value={"2026-05-20": {"u": {"x": 5}}}), \
+             patch("wl_limits.get_counter_period_key",
+                   return_value="2026-05-20"), \
+             patch("wl_limits.write_daily_limits", side_effect=_writer):
+            increment_daily_limit("u", "x")
+        assert captured["data"]["2026-05-20"]["u"]["x"] == 6, (
+            f"5 + 1 must be 6; got "
+            f"{captured['data']['2026-05-20']['u']['x']}"
+        )

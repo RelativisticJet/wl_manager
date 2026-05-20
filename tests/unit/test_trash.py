@@ -887,3 +887,249 @@ class TestRestoreRuleFromTrash:
         assert error == ""
         registered = json.loads(rules_path.read_text())
         assert "DR_restored" in registered
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Mutation-survivor coverage (2026-05-20 batch).
+#
+# Baseline mutmut on bin/wl_trash.py reported ~53.2% kill rate (177 of 378
+# mutations survived) on 2026-05-19. Survivors cluster in the same five
+# patterns identified for wl_csv (see docs/MUTATION_TESTING.md). Tests
+# below target the contracts most likely to be silently broken by
+# mutations: pipeline return-dict shape, function-return tuple shapes,
+# build_trash_metadata key contracts, and restore-message template.
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.unit
+class TestMutationCoverageGroupAReturnEnvelope:
+    """Group A: restore_from_trash_pipeline 4-key envelope.
+
+    Both branches (success and error) MUST carry {success, message,
+    error, data}. String-wrap mutations on any key would surface as
+    missing.
+    """
+
+    REQUIRED_KEYS = {"success", "message", "error", "data"}
+
+    def test_pipeline_error_branch_has_all_four_keys(self, tmp_path):
+        """Error branch (item not found) still carries the full envelope."""
+        with patch("wl_trash.restore_from_trash",
+                   return_value=({}, "Trash item not found")), \
+             patch("wl_audit.build_audit_event", return_value={}), \
+             patch("wl_audit.post_audit_event", return_value=(True, "")):
+            result = restore_from_trash_pipeline(
+                item_id="nonexistent",
+                analyst="alice",
+                session_key="sk",
+            )
+        missing = self.REQUIRED_KEYS - set(result.keys())
+        assert not missing, (
+            f"error-branch missing keys: {missing}; got: {set(result.keys())}"
+        )
+        assert result["success"] is False
+        assert result["data"] == {}
+
+    def test_pipeline_success_branch_has_all_four_keys(self, tmp_path):
+        """Success branch carries {success, message, error, data}."""
+        with patch("wl_trash.restore_from_trash",
+                   return_value=(
+                       {"item_type": "csv", "name": "test.csv",
+                        "rule_name": "DR"},
+                       "")), \
+             patch("wl_audit.build_audit_event", return_value={}), \
+             patch("wl_audit.post_audit_event", return_value=(True, "")):
+            result = restore_from_trash_pipeline(
+                item_id="trash_123",
+                analyst="alice",
+                session_key="sk",
+            )
+        missing = self.REQUIRED_KEYS - set(result.keys())
+        assert not missing, (
+            f"success-branch missing keys: {missing}; "
+            f"got: {set(result.keys())}"
+        )
+        assert result["success"] is True
+        assert result["error"] == ""
+
+    def test_pipeline_success_message_template_exact_wording(self):
+        """Message template: '{ITEM_TYPE_UPPER} \\'{name}\\' restored from trash'.
+
+        Kills string-wrap mutations on the message template AND on the
+        .upper() call (mutations dropping .upper() would yield lowercase).
+        """
+        with patch("wl_trash.restore_from_trash",
+                   return_value=(
+                       {"item_type": "csv", "name": "test.csv",
+                        "rule_name": "DR"},
+                       "")), \
+             patch("wl_audit.build_audit_event", return_value={}), \
+             patch("wl_audit.post_audit_event", return_value=(True, "")):
+            result = restore_from_trash_pipeline(
+                item_id="trash_123",
+                analyst="alice",
+                session_key="sk",
+            )
+        assert result["message"] == "CSV 'test.csv' restored from trash", (
+            f"message template drift; got: {result['message']!r}"
+        )
+
+    def test_pipeline_success_data_has_item_type_and_name(self):
+        """data dict carries exactly {item_type, item_name} on success."""
+        with patch("wl_trash.restore_from_trash",
+                   return_value=(
+                       {"item_type": "rule", "name": "DR_x",
+                        "rule_name": "DR_x"},
+                       "")), \
+             patch("wl_audit.build_audit_event", return_value={}), \
+             patch("wl_audit.post_audit_event", return_value=(True, "")):
+            result = restore_from_trash_pipeline(
+                item_id="trash_456",
+                analyst="alice",
+                session_key="sk",
+            )
+        assert set(result["data"].keys()) == {"item_type", "item_name"}, (
+            f"data dict shape drift; got: {result['data']!r}"
+        )
+        assert result["data"]["item_type"] == "rule"
+        assert result["data"]["item_name"] == "DR_x"
+
+
+@pytest.mark.unit
+class TestMutationCoverageGroupBTupleContracts:
+    """Group B: function-return tuple shapes.
+
+    Functions that return `Tuple[X, str]` (X = list/dict/bool) must
+    preserve their arity. A mutation that drops or duplicates an
+    element would change the tuple length.
+    """
+
+    def test_list_trash_returns_two_tuple_of_list_and_str(self, tmp_path):
+        """list_trash → (List[Dict], str)."""
+        with patch("wl_trash.get_trash_dir", return_value=str(tmp_path)):
+            ret = list_trash()
+        assert isinstance(ret, tuple) and len(ret) == 2, (
+            f"expected 2-tuple, got: {ret!r}"
+        )
+        items, error = ret
+        assert isinstance(items, list)
+        assert isinstance(error, str)
+
+    def test_purge_trash_item_returns_two_tuple_of_bool_and_str(
+        self, tmp_path
+    ):
+        """purge_trash_item → (bool, str). Test the not-found branch."""
+        with patch("wl_trash.get_trash_dir", return_value=str(tmp_path)):
+            ret = purge_trash_item("nonexistent_id")
+        assert isinstance(ret, tuple) and len(ret) == 2, (
+            f"expected 2-tuple, got: {ret!r}"
+        )
+        success, error = ret
+        assert isinstance(success, bool)
+        assert isinstance(error, str)
+        assert success is False, "purging nonexistent item must return False"
+
+    def test_restore_from_trash_returns_two_tuple_on_not_found(
+        self, tmp_path
+    ):
+        """restore_from_trash for missing id → ({}, "Trash item not found")."""
+        with patch("wl_trash.get_trash_dir", return_value=str(tmp_path)):
+            ret = restore_from_trash("nonexistent_id")
+        assert isinstance(ret, tuple) and len(ret) == 2, (
+            f"expected 2-tuple, got: {ret!r}"
+        )
+        meta, error = ret
+        assert isinstance(meta, dict)
+        assert isinstance(error, str)
+        assert meta == {}, "not-found meta must be empty dict"
+        assert "not found" in error.lower(), (
+            f"expected 'not found' substring; got: {error!r}"
+        )
+
+
+@pytest.mark.unit
+class TestMutationCoverageGroupCMetadataShape:
+    """Group C: build_trash_metadata dict-key contract.
+
+    The metadata dict written to disk for every trash item must carry
+    the documented keys. Mutations that wrap keys (e.g. "item_type" →
+    "XXitem_typeXX") would silently corrupt every trash item.
+    """
+
+    BASE_REQUIRED_KEYS = {
+        "item_type", "name", "deleted_by", "deleted_at",
+        "deleted_at_human", "comment", "expiry_ts", "expiry_human",
+        "retention_days", "rule_name", "app_context",
+    }
+
+    def test_metadata_csv_item_has_base_keys_plus_original_path(self):
+        from wl_trash import build_trash_metadata
+        with patch("wl_trash.read_trash_config",
+                   return_value={"retention_days": 30}):
+            meta = build_trash_metadata(
+                item_type="csv",
+                name="DR_test.csv",
+                user="alice",
+                comment="cleanup",
+                csv_path="/lookups/DR_test.csv",
+                now=1700000000,
+            )
+        missing = self.BASE_REQUIRED_KEYS - set(meta.keys())
+        assert not missing, (
+            f"csv-item missing base keys: {missing}; got: {set(meta.keys())}"
+        )
+        # CSV-item-only key: original_path
+        assert "original_path" in meta, (
+            "csv-item missing 'original_path'"
+        )
+        assert meta["original_path"] == "/lookups/DR_test.csv"
+        # Rule-item-only key MUST NOT be present
+        assert "associated_csvs" not in meta, (
+            "csv-item must NOT have 'associated_csvs' key"
+        )
+
+    def test_metadata_rule_item_has_base_keys_plus_associated_csvs(self):
+        from wl_trash import build_trash_metadata
+        with patch("wl_trash.read_trash_config",
+                   return_value={"retention_days": 30}):
+            meta = build_trash_metadata(
+                item_type="rule",
+                name="DR_test",
+                user="alice",
+                comment="cleanup",
+                associated_csvs=[{"csv_file": "x.csv", "app_context": ""}],
+                now=1700000000,
+            )
+        missing = self.BASE_REQUIRED_KEYS - set(meta.keys())
+        assert not missing, (
+            f"rule-item missing base keys: {missing}; got: {set(meta.keys())}"
+        )
+        assert "associated_csvs" in meta
+        assert meta["associated_csvs"] == [
+            {"csv_file": "x.csv", "app_context": ""}
+        ]
+        # CSV-item-only key MUST NOT be present
+        assert "original_path" not in meta, (
+            "rule-item must NOT have 'original_path' key"
+        )
+
+    def test_metadata_expiry_ts_equals_now_plus_retention_days_seconds(self):
+        """expiry_ts = now + retention_days * 86400 (precise arithmetic).
+
+        Mutations to 86400 (e.g. → 86401) or to the multiplication would
+        shift expiry by the affected amount.
+        """
+        from wl_trash import build_trash_metadata
+        with patch("wl_trash.read_trash_config",
+                   return_value={"retention_days": 7}):
+            meta = build_trash_metadata(
+                item_type="csv",
+                name="x.csv",
+                user="u",
+                comment="",
+                now=1700000000,
+            )
+        assert meta["expiry_ts"] == 1700000000 + 7 * 86400, (
+            f"expiry_ts arithmetic drift; got: {meta['expiry_ts']!r}"
+        )
+        assert meta["retention_days"] == 7
