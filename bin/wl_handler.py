@@ -3180,6 +3180,16 @@ class WhitelistHandler(PersistentServerConnectionApplication):
             "limit_changes", "csv_save", "csv_revert",
             "rule_creation", "csv_creation", "trash_restore",
             "trash_purge", "usage_reset",
+            # Build 668 (2026-05-20): expose the build-667
+            # admin-tier reorder caps for runtime tuning via the
+            # Admin Settings UI. Without these in the allow-list,
+            # the caps stayed frozen at DEFAULT_ADMIN_LIMITS=50 and
+            # a superadmin couldn't tighten the defense or loosen
+            # it for legitimate IR bulk operations. Validation range
+            # (0-100) matches every other admin cap; sentinel
+            # semantics (0=disabled, -1=unlimited) are inherited
+            # from `check_admin_daily_limit` in wl_limits.py.
+            "row_reorder", "column_reorder",
         )
         BOOL_KEYS = (
             "allow_admin_purge_trash", "allow_admin_reset_usage",

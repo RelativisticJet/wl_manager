@@ -1759,3 +1759,47 @@ class TestLogEventEmitCap:
             "admin counter would break the 'shared cap across tiers' "
             "design."
         )
+
+
+@pytest.mark.unit
+class TestSetAdminLimitsAllowListBuild668:
+    """Build 668 (2026-05-20) regression guard.
+
+    Build 667 added `row_reorder` + `column_reorder` to
+    DEFAULT_ADMIN_LIMITS so the cap check picks them up via the
+    fallback. But the Admin Settings UI persists changes via
+    `_action_set_admin_limits`, which has its own hardcoded
+    LIMIT_KEYS tuple. Build 667 missed adding the two new keys
+    there, so attempts to tune the caps via UI returned "no
+    changes" — caught while live-testing as superadmin1 on
+    2026-05-20. Build 668 closed the gap by adding the keys.
+
+    This test pins that fix: a future refactor that re-introduces
+    the asymmetry (e.g., consolidating DEFAULT_ADMIN_LIMITS but
+    forgetting to update the handler's allow-list) breaks loudly.
+    Reads source text rather than introspecting the closure-local
+    tuple — brittle but explicit; the assertion failure message
+    points the maintainer at the exact remediation.
+    """
+
+    def test_limit_keys_includes_reorder_caps(self):
+        import os
+        handler_path = os.path.join(
+            os.path.dirname(__file__), '..', '..', 'bin', 'wl_handler.py')
+        with open(handler_path, 'r', encoding='utf-8') as f:
+            src = f.read()
+        idx = src.find("LIMIT_KEYS = (\n")
+        assert idx >= 0, "LIMIT_KEYS tuple not found in wl_handler.py"
+        close = src.find(")\n", idx)
+        assert close > idx
+        block = src[idx:close]
+        assert '"row_reorder"' in block, (
+            "_action_set_admin_limits.LIMIT_KEYS must include "
+            "'row_reorder' (build 668). Adding it to "
+            "DEFAULT_ADMIN_LIMITS alone leaves the cap un-tunable "
+            "via the Admin Settings UI."
+        )
+        assert '"column_reorder"' in block, (
+            "_action_set_admin_limits.LIMIT_KEYS must include "
+            "'column_reorder' (build 668)."
+        )

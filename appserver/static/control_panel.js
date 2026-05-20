@@ -2683,6 +2683,24 @@ require([
              desc: "Max items an admin can permanently purge from trash per period"},
             {key: "usage_reset", label: "Usage resets per period",
              desc: "Max analyst usage reset operations an admin can perform per period"},
+            // Build 668 (2026-05-20): reorder caps exposed for
+            // tuning. Unlike the other admin caps above, these
+            // apply to BOTH admin AND superadmin tiers per
+            // build-667 design (see DECISION_LOG.md 2026-05-20
+            // reversal row). The desc text calls this out so
+            // operators don't assume the "super-admins are exempt"
+            // line at the top of the section applies here.
+            {key: "row_reorder", label: "Row reorders per period",
+             desc: "Max row drag-reorder operations per period. " +
+                   "Applies to BOTH admin AND superadmin tiers " +
+                   "(build 667 audit-trail-pollution defense). " +
+                   "Default 50. Set 0 to disable; UI range is " +
+                   "0-100 (REST API also supports -1 for unlimited)."},
+            {key: "column_reorder", label: "Column reorders per period",
+             desc: "Max column drag-reorder operations per period. " +
+                   "Applies to BOTH admin AND superadmin tiers " +
+                   "(build 667). Default 50. Set 0 to disable; " +
+                   "UI range is 0-100 (REST API also supports -1)."},
         ];
 
         function buildInfoIcon(text) {
