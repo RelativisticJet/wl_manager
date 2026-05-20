@@ -83,6 +83,46 @@ const H = require("./lib_helpers.cjs");
             }
         });
 
+        // QA round-3 follow-up (2026-05-20): the QA reviewer flagged that
+        // clamping the group to 300px raises the possibility of the
+        // <select>'s CLOSED-state text being truncated (with `...`) if the
+        // selected option's text exceeds what fits in 300px minus padding
+        // and arrow chrome. The OPEN popup is browser-controlled and
+        // auto-sizes to option text, so that's not at risk. But the
+        // closed-state is the default visible state and would be a
+        // user-visible regression if truncated.
+        await H.test("Revert closed-state shows full selected option text", async () => {
+            const truncation = await page.evaluate(() => {
+                const sel = document.querySelector("#wl-revert-select");
+                if (!sel) return { error: "select not found" };
+                const opt = sel.options[sel.selectedIndex];
+                // scrollWidth vs clientWidth tells us if content overflows.
+                // For native <select>, scrollWidth equals the rendered
+                // intrinsic content width; clientWidth equals the visible
+                // box width. If they differ, the visible text is truncated.
+                return {
+                    selectedText: opt ? opt.text : null,
+                    scrollWidth: sel.scrollWidth,
+                    clientWidth: sel.clientWidth,
+                    overflows: sel.scrollWidth > sel.clientWidth,
+                };
+            });
+            // We tolerate up to a 4px scrollWidth/clientWidth gap because
+            // some browsers report the arrow chrome inconsistently in
+            // clientWidth. Beyond 4px is a real truncation signal.
+            if (truncation.scrollWidth > truncation.clientWidth + 4) {
+                throw new Error(
+                    `Revert selected text appears truncated: ` +
+                    `scrollWidth=${truncation.scrollWidth}, ` +
+                    `clientWidth=${truncation.clientWidth}, ` +
+                    `selected="${truncation.selectedText}". ` +
+                    `Either the 300px clamp is too narrow for current ` +
+                    `timestamp format, or the test rule's "current" ` +
+                    `option text changed shape.`
+                );
+            }
+        });
+
         H.summary(`DROPDOWN WIDTH PARITY (${process.env.WL_E2E_BROWSER || "chromium"})`);
     } finally {
         await browser.close();
