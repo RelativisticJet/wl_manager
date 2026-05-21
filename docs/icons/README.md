@@ -76,11 +76,40 @@ uploaded via the Splunkbase publisher web UI, not shipped in the
 `.spl`). Convention is to place them at the repo root under a
 gitignored `dist/` directory or here under `docs/icons/exports/`.
 
-## Inkscape export workflow
+## Automated export (preferred — zero extra install)
 
-[Inkscape](https://inkscape.org) is the recommended editor —
-free, open-source, multi-platform, and has the cleanest SVG → PNG
-pipeline of the free options.
+`scripts/svg2png.js` renders an SVG to a PNG at the requested pixel
+dimensions using the headless Chromium that ships with `playwright-core`
+(already a dev dependency for the E2E test suite). No new toolchain to
+install.
+
+```bash
+# From repo root — re-generate the 4 required Splunk PNGs:
+node scripts/svg2png.js docs/icons/appIcon-light.svg appserver/static/appIcon.png        36
+node scripts/svg2png.js docs/icons/appIcon-light.svg appserver/static/appIcon_2x.png     72
+node scripts/svg2png.js docs/icons/appIcon-dark.svg  appserver/static/appIconAlt.png     36
+node scripts/svg2png.js docs/icons/appIcon-dark.svg  appserver/static/appIconAlt_2x.png  72
+
+# Optional Splunkbase sizes (light variant — Splunkbase doesn't theme):
+node scripts/svg2png.js docs/icons/appIcon-light.svg docs/icons/exports/wl_manager-icon-144.png 144
+node scripts/svg2png.js docs/icons/appIcon-light.svg docs/icons/exports/wl_manager-icon-512.png 512
+```
+
+Why Chromium-based rendering rather than Inkscape / cairosvg / resvg?
+Because the customer-facing renderer of Splunk app icons is also a
+browser — the launcher tile loads the PNG through Chrome's image
+pipeline. Using Chromium for the export step means the PNG we ship
+looks exactly like what end users see, with consistent anti-aliasing
+and transparent-PNG handling.
+
+If `playwright-core`'s Chromium isn't on disk yet (fresh clone with no
+E2E run), install it with `npx playwright install chromium` first.
+
+## Inkscape export workflow (fallback — manual GUI route)
+
+[Inkscape](https://inkscape.org) is a free, open-source, multi-platform
+SVG editor. Use this route if you want to visually tweak the SVG before
+exporting, or if `playwright-core` isn't available on your machine.
 
 ### One-time setup
 
