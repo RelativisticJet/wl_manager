@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Whitelist Manager — app icon (LIGHT THEME variant)
+  Renders best on white / light-gray Splunk launcher backgrounds.
+
+  Visual concept:
+    - Shield silhouette  = security / protection
+    - Checkmark inside   = whitelisted / allowed
+    - Two list rows below checkmark = the CSV list nature of whitelists
+
+  Color rationale:
+    - #1F3A5F navy  : deep, calm, technical — pairs cleanly with Splunk's
+                      brand teal without clashing
+    - #4CAF50 green : universal "approved / allow" affordance,
+                      WCAG-AA contrast against the navy at all sizes
+    - #4A6FA5 mid-blue : list rows, subtle enough not to compete with
+                         the checkmark but visible at 36×36
+
+  Export targets (via Inkscape File → Export PNG):
+    appserver/static/appIcon.png     36×36   (Splunk launcher tile)
+    appserver/static/appIcon_2x.png  72×72   (retina / HiDPI)
+    (Optional) larger sizes for Splunkbase listing: 144×144, 512×512
+
+  ViewBox is 256×256 so all export sizes are clean integer divisions.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     width="256" height="256"
+     role="img"
+     aria-label="Whitelist Manager — shield with checkmark and list rows">
+
+  <!-- Shield: flat top, gently rounded shoulders, point at the bottom -->
+  <path d="M 40 40
+           L 216 40
+           L 216 144
+           Q 216 200 128 232
+           Q 40 200 40 144
+           Z"
+        fill="#1F3A5F"/>
+
+  <!-- Checkmark (upper portion of shield) -->
+  <path d="M 76 130
+           L 116 168
+           L 184 96"
+        fill="none"
+        stroke="#4CAF50"
+        stroke-width="22"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+
+  <!-- Two list-row marks under the checkmark -->
+  <rect x="76"  y="188" width="104" height="6" rx="3" fill="#4A6FA5"/>
+  <rect x="76"  y="204" width="72"  height="6" rx="3" fill="#4A6FA5"/>
+</svg>

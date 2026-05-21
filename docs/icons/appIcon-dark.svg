@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Whitelist Manager — app icon (DARK THEME variant)
+  Renders best on Splunk's dark dashboard background (~#0a1f3d).
+
+  Same silhouette + checkmark + list-rows as appIcon-light.svg.
+  Color shifts:
+    - Shield body:  #1F3A5F navy  →  #2C5282 lighter navy (lifts off dark bg)
+    - Outline ring:                  +2px rim at #6BA5E0 for definition
+    - Checkmark:    #4CAF50 green (unchanged — same allowed-affordance)
+    - List rows:    #4A6FA5         →  #B8C5D6 light gray-blue
+                                     (visible against the lighter shield)
+
+  Export targets (via Inkscape File → Export PNG):
+    appserver/static/appIconAlt.png     36×36
+    appserver/static/appIconAlt_2x.png  72×72
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     width="256" height="256"
+     role="img"
+     aria-label="Whitelist Manager — dark theme variant, shield with checkmark and list rows">
+
+  <!-- Shield body (lifted color for dark backgrounds) -->
+  <path d="M 40 40
+           L 216 40
+           L 216 144
+           Q 216 200 128 232
+           Q 40 200 40 144
+           Z"
+        fill="#2C5282"
+        stroke="#6BA5E0"
+        stroke-width="4"
+        stroke-linejoin="round"/>
+
+  <!-- Checkmark (same green as light variant) -->
+  <path d="M 76 130
+           L 116 168
+           L 184 96"
+        fill="none"
+        stroke="#4CAF50"
+        stroke-width="22"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+
+  <!-- Two list-row marks (lighter blue for visibility on dark bg) -->
+  <rect x="76"  y="188" width="104" height="6" rx="3" fill="#B8C5D6"/>
+  <rect x="76"  y="204" width="72"  height="6" rx="3" fill="#B8C5D6"/>
+</svg>
