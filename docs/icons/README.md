@@ -18,23 +18,38 @@ future maintainability without bloating customer installs.
 
 ## Visual concept
 
-Shield silhouette (security / protection) containing a green
-checkmark (whitelisted / allowed) above two horizontal lines
-representing the CSV list rows. Two-color rule at 36×36: navy
-silhouette + green accent — keeps the symbol legible at small
-sizes without muddling.
+Aqua shield silhouette (security / protection container) holding
+a light-grey document with three list rows (the whitelist itself),
+plus a black circular check badge in the document's bottom-right
+corner (approved / allowed affordance).
+
+Two reads at every size:
+
+1. **At 36×36** — bright aqua shield with a darker inset
+2. **At 144×144+** — distinguishable "secure whitelist document
+   with approval mark" composition
+
+Promoted from `concepts/concept-1-document-with-badge.svg` on
+2026-05-22 after side-by-side comparison of four candidate
+directions.
 
 ## Color palette
 
 | Token | Light SVG | Dark SVG | Role |
 | --- | --- | --- | --- |
-| Shield body | `#1F3A5F` | `#2C5282` (+ `#6BA5E0` rim) | Primary silhouette |
-| Checkmark | `#4CAF50` | `#4CAF50` | "Approved" affordance (Material green) |
-| List rows | `#4A6FA5` | `#B8C5D6` | Subtle "this is a list" hint |
+| Shield body | `#1FB8C9` | `#2DD0E2` (+12% lightness) | Brand primary; aqua shield |
+| Document body | `#D6DCE0` | `#E2E7EC` | Paper fill |
+| Document outline | `#1A1A1A` | `#2A2A2A` | Document border + check badge |
+| Title bar | `#4A5560` | `#5A6570` | Page top affordance (no text) |
+| List rows | `#8A95A0` | `#9AA5B0` | Subtle "this is a list" hint |
+| Check badge bg | `#1A1A1A` | `#1A1A1A` (unchanged) | Approval-mark container |
+| Check mark stroke | `#1FB8C9` | `#2DD0E2` | Matches shield colour for brand echo |
 
-The checkmark green is identical in both variants so the
-"approved" affordance is unmistakable regardless of which Splunk
-theme the launcher is in.
+The check badge bg is the same `#1A1A1A` in both variants to
+preserve maximum contrast against the aqua check stroke. The
+shield colour shifts +12% lightness in the dark variant so the
+icon pops against very dark Splunk navy dashboards without
+changing the brand identity.
 
 ## Required PNG export sizes
 

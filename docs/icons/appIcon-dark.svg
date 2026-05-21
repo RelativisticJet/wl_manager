@@ -3,47 +3,73 @@
   Whitelist Manager — app icon (DARK THEME variant)
   Renders best on Splunk's dark dashboard background (~#0a1f3d).
 
-  Same silhouette + checkmark + list-rows as appIcon-light.svg.
-  Color shifts:
-    - Shield body:  #1F3A5F navy  →  #2C5282 lighter navy (lifts off dark bg)
-    - Outline ring:                  +2px rim at #6BA5E0 for definition
-    - Checkmark:    #4CAF50 green (unchanged — same allowed-affordance)
-    - List rows:    #4A6FA5         →  #B8C5D6 light gray-blue
-                                     (visible against the lighter shield)
+  Same composition as appIcon-light.svg (concept-1 document-with-badge).
+  Palette is tuned for dark backgrounds — all colors lifted slightly
+  so the icon stays vivid against very dark navy without changing the
+  brand mark itself.
 
-  Export targets (via Inkscape File → Export PNG):
-    appserver/static/appIconAlt.png     36×36
-    appserver/static/appIconAlt_2x.png  72×72
+  Light vs Dark palette shifts:
+    Shield:        #1FB8C9  →  #2DD0E2   (+12% lightness, more pop)
+    Document body: #D6DCE0  →  #E2E7EC   (+3% lightness)
+    Outline:       #1A1A1A  →  #2A2A2A   (softer black, less harsh edge)
+    Title bar:     #4A5560  →  #5A6570   (lifted, still readable)
+    List rows:     #8A95A0  →  #9AA5B0   (lifted, still subordinate)
+    Check badge:   #1A1A1A   (unchanged — max contrast against aqua check)
+    Check stroke:  #1FB8C9  →  #2DD0E2   (matches lifted shield)
+
+  Why not identical to the light variant? Splunk's convention is
+  appIcon.png (light bg) + appIconAlt.png (dark bg) as separate files.
+  Even though our aqua works on both backgrounds, providing two
+  optimized files honors the convention and gives slightly better
+  rendering on dark Splunk dashboards.
 -->
 <svg xmlns="http://www.w3.org/2000/svg"
      viewBox="0 0 256 256"
      width="256" height="256"
      role="img"
-     aria-label="Whitelist Manager — dark theme variant, shield with checkmark and list rows">
+     aria-label="Whitelist Manager — dark theme variant, aqua shield with document and check badge">
 
-  <!-- Shield body (lifted color for dark backgrounds) -->
+  <!-- Shield silhouette (brighter aqua for dark backgrounds) -->
   <path d="M 40 40
            L 216 40
            L 216 144
            Q 216 200 128 232
            Q 40 200 40 144
            Z"
-        fill="#2C5282"
-        stroke="#6BA5E0"
-        stroke-width="4"
-        stroke-linejoin="round"/>
+        fill="#2DD0E2"/>
 
-  <!-- Checkmark (same green as light variant) -->
-  <path d="M 76 130
-           L 116 168
-           L 184 96"
+  <!-- Document body (slightly lighter grey for dark-theme pop) -->
+  <rect x="72" y="64" width="112" height="124"
+        rx="6" ry="6"
+        fill="#E2E7EC"
+        stroke="#2A2A2A"
+        stroke-width="4"/>
+
+  <!-- Document title bar (lifted dark grey) -->
+  <rect x="80" y="76" width="60" height="8"
+        rx="4" ry="4"
+        fill="#5A6570"/>
+
+  <!-- Three list rows: bullet + line -->
+  <!-- Row 1 -->
+  <circle cx="86" cy="108" r="4" fill="#9AA5B0"/>
+  <rect x="98" y="105" width="72" height="6" rx="3" fill="#9AA5B0"/>
+  <!-- Row 2 -->
+  <circle cx="86" cy="130" r="4" fill="#9AA5B0"/>
+  <rect x="98" y="127" width="64" height="6" rx="3" fill="#9AA5B0"/>
+  <!-- Row 3 -->
+  <circle cx="86" cy="152" r="4" fill="#9AA5B0"/>
+  <rect x="98" y="149" width="56" height="6" rx="3" fill="#9AA5B0"/>
+
+  <!-- Check badge: black circle (unchanged), aqua check matches the
+       lifted shield color for visual echo across the composition -->
+  <circle cx="170" cy="178" r="18" fill="#1A1A1A"/>
+  <path d="M 160 178
+           L 168 186
+           L 180 172"
         fill="none"
-        stroke="#4CAF50"
-        stroke-width="22"
+        stroke="#2DD0E2"
+        stroke-width="4"
         stroke-linecap="round"
         stroke-linejoin="round"/>
-
-  <!-- Two list-row marks (lighter blue for visibility on dark bg) -->
-  <rect x="76"  y="188" width="104" height="6" rx="3" fill="#B8C5D6"/>
-  <rect x="76"  y="204" width="72"  height="6" rx="3" fill="#B8C5D6"/>
 </svg>

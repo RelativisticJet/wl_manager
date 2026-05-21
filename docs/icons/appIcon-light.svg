@@ -3,18 +3,23 @@
   Whitelist Manager — app icon (LIGHT THEME variant)
   Renders best on white / light-gray Splunk launcher backgrounds.
 
+  Promoted from docs/icons/concepts/concept-1-document-with-badge.svg
+  on 2026-05-22 after maintainer review of four candidate concepts.
+
   Visual concept:
-    - Shield silhouette  = security / protection
-    - Checkmark inside   = whitelisted / allowed
-    - Two list rows below checkmark = the CSV list nature of whitelists
+    - Aqua shield silhouette = security / protection container
+    - Document inside        = the whitelist itself (paper + 3 list rows)
+    - Black check badge      = the "approved / allowed" affordance
 
   Color rationale:
-    - #1F3A5F navy  : deep, calm, technical — pairs cleanly with Splunk's
-                      brand teal without clashing
-    - #4CAF50 green : universal "approved / allow" affordance,
-                      WCAG-AA contrast against the navy at all sizes
-    - #4A6FA5 mid-blue : list rows, subtle enough not to compete with
-                         the checkmark but visible at 36×36
+    - #1FB8C9 aqua       : brand-primary, distinguishes from Splunk's
+                           own teal while staying technical/calm
+    - #D6DCE0 light grey : paper body, high contrast against aqua
+    - #1A1A1A near-black : document outline + check badge, anchors
+                           the composition at small sizes
+    - #4A5560 dark grey  : document title bar, gives the page a
+                           visual top without text
+    - #8A95A0 mid grey   : list rows, subtle "this is a list" hint
 
   Export targets (via Inkscape File → Export PNG):
     appserver/static/appIcon.png     36×36   (Splunk launcher tile)
@@ -22,33 +27,57 @@
     (Optional) larger sizes for Splunkbase listing: 144×144, 512×512
 
   ViewBox is 256×256 so all export sizes are clean integer divisions.
+
+  All inner geometry is verified to stay strictly within the shield
+  path's interior — see docs/icons/README.md for the safe-zone math.
 -->
 <svg xmlns="http://www.w3.org/2000/svg"
      viewBox="0 0 256 256"
      width="256" height="256"
      role="img"
-     aria-label="Whitelist Manager — shield with checkmark and list rows">
+     aria-label="Whitelist Manager — aqua shield containing document with check badge">
 
-  <!-- Shield: flat top, gently rounded shoulders, point at the bottom -->
+  <!-- Shield silhouette (aqua, brand primary) -->
   <path d="M 40 40
            L 216 40
            L 216 144
            Q 216 200 128 232
            Q 40 200 40 144
            Z"
-        fill="#1F3A5F"/>
+        fill="#1FB8C9"/>
 
-  <!-- Checkmark (upper portion of shield) -->
-  <path d="M 76 130
-           L 116 168
-           L 184 96"
+  <!-- Document body (light grey paper with black outline) -->
+  <rect x="72" y="64" width="112" height="124"
+        rx="6" ry="6"
+        fill="#D6DCE0"
+        stroke="#1A1A1A"
+        stroke-width="4"/>
+
+  <!-- Document title bar (dark grey band at top, no text) -->
+  <rect x="80" y="76" width="60" height="8"
+        rx="4" ry="4"
+        fill="#4A5560"/>
+
+  <!-- Three list rows: bullet + line -->
+  <!-- Row 1 -->
+  <circle cx="86" cy="108" r="4" fill="#8A95A0"/>
+  <rect x="98" y="105" width="72" height="6" rx="3" fill="#8A95A0"/>
+  <!-- Row 2 -->
+  <circle cx="86" cy="130" r="4" fill="#8A95A0"/>
+  <rect x="98" y="127" width="64" height="6" rx="3" fill="#8A95A0"/>
+  <!-- Row 3 -->
+  <circle cx="86" cy="152" r="4" fill="#8A95A0"/>
+  <rect x="98" y="149" width="56" height="6" rx="3" fill="#8A95A0"/>
+
+  <!-- Check badge: black circle in document's bottom-right corner,
+       with aqua checkmark matching the shield color for brand echo -->
+  <circle cx="170" cy="178" r="18" fill="#1A1A1A"/>
+  <path d="M 160 178
+           L 168 186
+           L 180 172"
         fill="none"
-        stroke="#4CAF50"
-        stroke-width="22"
+        stroke="#1FB8C9"
+        stroke-width="4"
         stroke-linecap="round"
         stroke-linejoin="round"/>
-
-  <!-- Two list-row marks under the checkmark -->
-  <rect x="76"  y="188" width="104" height="6" rx="3" fill="#4A6FA5"/>
-  <rect x="76"  y="204" width="72"  height="6" rx="3" fill="#4A6FA5"/>
 </svg>

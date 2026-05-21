@@ -38,7 +38,12 @@
         stroke-linejoin="round"/>
 
   <!-- Two list rows (lower portion, supporting metaphor — kept to two
-       so the bold check stays dominant at 36×36 launcher size) -->
+       so the bold check stays dominant at 36×36 launcher size).
+       Left edge nudged in from x=80 to x=88 on the lower row so the
+       rect stays strictly inside the shield's left curve at y=210
+       (shield left edge at y=210 ≈ x=82.2; old x=80 was ~2 units
+       outside, invisible at render size but technically a breach
+       of the "everything within the shield" constraint). -->
   <rect x="80" y="190" width="96" height="6" rx="3" fill="#4A5560"/>
-  <rect x="80" y="204" width="72" height="6" rx="3" fill="#4A5560"/>
+  <rect x="88" y="204" width="64" height="6" rx="3" fill="#4A5560"/>
 </svg>
