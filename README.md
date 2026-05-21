@@ -266,6 +266,23 @@ If you add a new validation wrapper (e.g. a path or URL sanitizer), update the
 corresponding `tests/semgrep/*-splunk.yaml` `pattern-sanitizers` list in the
 same PR, or legitimate callers of your wrapper will trip the rule.
 
+## 💖 Support This Project
+
+Whitelist Manager is built and maintained on personal time. If it saves your
+SOC effort — or you'd like to see it keep evolving — you can support the work:
+
+- **[Sponsor on GitHub](https://github.com/sponsors/RelativisticJet)** — one-time
+  or monthly contributions, any tier
+- **Star the repo** — helps other SOC teams discover the project
+- **Report issues** — bugs found during the v1.0.0-rc1 public hold period are
+  high-leverage; see [CONTRIBUTING.md](CONTRIBUTING.md) for the response-SLA
+  policy
+
+Sponsorships fund focused time on Whitelist Manager (post-rc1 priorities:
+dark-theme polish, multi-org adaptability, richer approval workflows) and on
+new open-source SOC tooling in the same audit-first, solo-maintainer-friendly
+style.
+
 ## Trademark Notice
 
 Splunk, Splunk Enterprise, and Splunk Enterprise Security are registered
