@@ -196,7 +196,7 @@ or new filters here.
 
 ---
 
-## 8. Sigstore Signing — End-to-End Verification [x] DONE — verified 2026-05-13 on tag v0.0.0-sigstore-test
+## 8. Sigstore Signing — End-to-End Verification [x] DONE — verified 2026-05-13 on tag v0.0.0-sigstore-test; re-confirmed 2026-05-20 on production tag v1.0.0-rc1 (all 5 scenarios PASS: legit .spl + SBOM verify OK, tamper test correctly rejected, foreign-signature identity-pin correctly rejected, Rekor entry confirmed at rekor.sigstore.dev)
 
 **Background.** Round 8 (build 629, 2026-04-29) wired Sigstore keyless
 signing into `.github/workflows/release.yml`. The workflow uses GitHub
