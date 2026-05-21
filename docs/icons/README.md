@@ -53,15 +53,27 @@ changing the brand identity.
 
 ## Required PNG export sizes
 
-Splunk's documented icon convention (per the
-`splunk-app-developer-tools` docs):
+Each of the 4 launcher PNGs must ship in **two** locations.
+The Splunk app-developer docs describe `appserver/static/` as the
+canonical app-static path; in practice the Splunk launcher's REST
+proxy at `/servicesNS/<user>/<app>/static/<file>` resolves to the
+**bare `<app>/static/` directory** (no `appserver/` prefix), and falls
+back to `$SPLUNK_HOME/etc/system/static/appIcon.png` (Splunk's generic
+"App" placeholder) when that bare path is missing.
 
-| Filename | Source SVG | Width × Height | Destination directory |
+Shipping in both locations matches what production Splunk apps like
+Splunk Secure Gateway do, and is verified to render correctly on the
+launcher tile + still satisfy the documented `appserver/static/`
+convention that Splunkbase publishing tooling reads. See
+**[Splunk quirk: launcher icon path](#splunk-quirk-launcher-icon-path)**
+below for the empirical evidence.
+
+| Filename | Source SVG | Width × Height | Destination directories |
 | --- | --- | --- | --- |
-| `appIcon.png` | `appIcon-light.svg` | **36 × 36** | `appserver/static/` |
-| `appIcon_2x.png` | `appIcon-light.svg` | **72 × 72** | `appserver/static/` |
-| `appIconAlt.png` | `appIcon-dark.svg` | **36 × 36** | `appserver/static/` |
-| `appIconAlt_2x.png` | `appIcon-dark.svg` | **72 × 72** | `appserver/static/` |
+| `appIcon.png` | `appIcon-light.svg` | **36 × 36** | `static/` **AND** `appserver/static/` |
+| `appIcon_2x.png` | `appIcon-light.svg` | **72 × 72** | `static/` **AND** `appserver/static/` |
+| `appIconAlt.png` | `appIcon-dark.svg` | **36 × 36** | `static/` **AND** `appserver/static/` |
+| `appIconAlt_2x.png` | `appIcon-dark.svg` | **72 × 72** | `static/` **AND** `appserver/static/` |
 
 For Splunkbase listing (carousel header / publisher dashboard),
 also export:
@@ -71,10 +83,33 @@ also export:
 | `wl_manager-icon-144.png` | `appIcon-light.svg` | **144 × 144** | Splunkbase listing thumbnail (light variant only — Splunkbase doesn't theme) |
 | `wl_manager-icon-512.png` | `appIcon-light.svg` | **512 × 512** | High-DPI fallback + future use |
 
-Splunkbase exports live outside `appserver/static/` (they are
+Splunkbase exports live outside both static directories (they are
 uploaded via the Splunkbase publisher web UI, not shipped in the
-`.spl`). Convention is to place them at the repo root under a
-gitignored `dist/` directory or here under `docs/icons/exports/`.
+`.spl`). Convention is to place them under
+`docs/icons/exports/` so they are visible alongside the SVG masters
+but excluded from the customer payload by `scripts/package.sh`.
+
+### Splunk quirk: launcher icon path
+
+This is documented at the top of `CLAUDE.md` under "Splunk Quirks"
+because future Splunk projects will hit it too. Summary:
+
+- The launcher icon `<img>` element loads from
+  `http://<host>/<lang>/splunkd/__raw/servicesNS/<user>/<app>/static/appIcon.png`.
+- That REST endpoint reads from `$SPLUNK_HOME/etc/apps/<app>/static/`,
+  **not** `$SPLUNK_HOME/etc/apps/<app>/appserver/static/`.
+- If the bare `<app>/static/appIcon.png` file is missing, Splunk
+  silently falls back to its system default
+  (`/opt/splunk/etc/system/static/appIcon.png` — a grey rounded
+  square with the text "App"), and the icon `<img>` still reports
+  `complete: true` + `naturalWidth: 36`, so the failure is invisible
+  from the DOM. The only reliable verification is byte-level: pull
+  the served PNG via `curl /servicesNS/.../static/appIcon.png` and
+  `md5sum` it against the source PNG.
+- Dashboards loading their own JS/CSS via relative URLs like
+  `static/whitelist_manager.js` still resolve via the
+  `appserver/static/` path — so `appserver/static/` must continue
+  to hold the JS/CSS, regardless of where the icons live.
 
 ## Automated export (preferred — zero extra install)
 
@@ -84,11 +119,14 @@ dimensions using the headless Chromium that ships with `playwright-core`
 install.
 
 ```bash
-# From repo root — re-generate the 4 required Splunk PNGs:
-node scripts/svg2png.js docs/icons/appIcon-light.svg appserver/static/appIcon.png        36
-node scripts/svg2png.js docs/icons/appIcon-light.svg appserver/static/appIcon_2x.png     72
-node scripts/svg2png.js docs/icons/appIcon-dark.svg  appserver/static/appIconAlt.png     36
-node scripts/svg2png.js docs/icons/appIcon-dark.svg  appserver/static/appIconAlt_2x.png  72
+# From repo root — re-generate the 4 required Splunk PNGs in BOTH locations
+# (see "Splunk quirk: launcher icon path" below for why both are needed):
+for dir in static appserver/static; do
+  node scripts/svg2png.js docs/icons/appIcon-light.svg "$dir/appIcon.png"        36
+  node scripts/svg2png.js docs/icons/appIcon-light.svg "$dir/appIcon_2x.png"     72
+  node scripts/svg2png.js docs/icons/appIcon-dark.svg  "$dir/appIconAlt.png"     36
+  node scripts/svg2png.js docs/icons/appIcon-dark.svg  "$dir/appIconAlt_2x.png"  72
+done
 
 # Optional Splunkbase sizes (light variant — Splunkbase doesn't theme):
 node scripts/svg2png.js docs/icons/appIcon-light.svg docs/icons/exports/wl_manager-icon-144.png 144
@@ -178,27 +216,41 @@ path or add it to `PATH` first.
 
 ## Verifying the PNGs are wired correctly
 
-After exporting, deploy to the dev container and confirm Splunk
-picks them up:
+After exporting, deploy BOTH copies to the dev container and
+confirm Splunk picks them up:
 
 ```bash
-# Deploy the 4 PNGs to the dev container's static/ dir
-MSYS_NO_PATHCONV=1 docker cp appserver/static/appIcon.png        wl_manager_test:/opt/splunk/etc/apps/wl_manager/appserver/static/appIcon.png
-MSYS_NO_PATHCONV=1 docker cp appserver/static/appIcon_2x.png     wl_manager_test:/opt/splunk/etc/apps/wl_manager/appserver/static/appIcon_2x.png
-MSYS_NO_PATHCONV=1 docker cp appserver/static/appIconAlt.png     wl_manager_test:/opt/splunk/etc/apps/wl_manager/appserver/static/appIconAlt.png
-MSYS_NO_PATHCONV=1 docker cp appserver/static/appIconAlt_2x.png  wl_manager_test:/opt/splunk/etc/apps/wl_manager/appserver/static/appIconAlt_2x.png
+# Deploy the 4 PNGs to the dev container — bare static/ AND appserver/static/.
+# Bare static/ is what the launcher REST endpoint actually reads;
+# appserver/static/ is the documented convention that other Splunk
+# tooling (e.g. Splunkbase publisher) still expects.
+for sub in static appserver/static; do
+  for name in appIcon.png appIcon_2x.png appIconAlt.png appIconAlt_2x.png; do
+    MSYS_NO_PATHCONV=1 docker cp "$sub/$name" \
+      "wl_manager_test:/opt/splunk/etc/apps/wl_manager/$sub/$name"
+  done
+done
 
-# Bump the build number in default/app.conf (Splunk caches icon assets
-# under the same urlArgs cache-bust mechanism as JS/CSS — see
-# docs/SPLUNK_QUIRKS.md "Splunk caches static assets aggressively").
-
-# Restart Splunk (icons load at app-startup, not on each page load)
+# Restart Splunk (icons load at app-startup, not on each page load).
 MSYS_NO_PATHCONV=1 docker exec -u splunk wl_manager_test /opt/splunk/bin/splunk restart
 ```
 
 Then load `http://localhost:8000/en-US/app/launcher/home` and
 confirm the Whitelist Manager tile shows the new icon. Toggle to
 Splunk's dark theme to verify the Alt variant is picked up.
+
+**Byte-level verification** (catches the silent-fallback failure
+mode described in "Splunk quirk: launcher icon path" above):
+
+```bash
+# Pull whatever Splunk is actually serving for the launcher and
+# compare to the source PNG. MD5s must match exactly; if they don't,
+# Splunk is serving the system default placeholder and the bare
+# static/ copy is missing.
+MSYS_NO_PATHCONV=1 docker exec wl_manager_test bash -c \
+  "curl -sk -u 'admin:<pw>' 'https://localhost:8089/servicesNS/admin/wl_manager/static/appIcon.png' -o /tmp/served.png && md5sum /tmp/served.png"
+md5sum static/appIcon.png
+```
 
 ## Why we ship SVGs at all (rather than just PNGs)
 
