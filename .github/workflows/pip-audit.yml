@@ -51,8 +51,33 @@ jobs:
         # `--strict` exits non-zero on ANY finding (including those
         # without a known fix). Use `--ignore-vuln <ID>` here to
         # carve out a documented exception with a tracking note.
+        #
+        # Scope: requirements-dev.txt (root unit-test deps) +
+        # requirements/*.txt (CI lockfiles added 2026-05-22). All four
+        # hashed lockfiles are scanned in one run so any new CVE in
+        # the CI dep tree (test/docs/pip-audit/appinspect stacks) is
+        # caught with the same SLA as the root manifest.
+        #
+        # Active carve-outs (each must have a matching DECISION_LOG row):
+        #
+        # GHSA-vfmq-68hx-4jfw / CVE-2026-41066 — lxml XXE via
+        # iterparse() and ETCompatXMLParser() with resolve_entities=True.
+        # Patched in lxml 6.1.0; unreachable here because
+        # splunk-appinspect 4.2.0 hard-pins lxml<6.0.0,>=5.3.0 (see
+        # `pip show splunk-appinspect` Requires-Dist). lxml is invoked
+        # ONLY by appinspect.yml against our own .spl artifact (trusted
+        # input). Reachability of the vuln requires source-commit
+        # access; at that level XXE-via-lxml is far down the threat
+        # list. Re-eval when splunk-appinspect releases a version
+        # allowing lxml>=6.1.0. See DECISION_LOG 2026-05-22 lxml row.
         run: |
-          pip-audit --requirement requirements-dev.txt --strict
+          pip-audit --strict \
+            --ignore-vuln GHSA-vfmq-68hx-4jfw \
+            --requirement requirements-dev.txt \
+            --requirement requirements/test.txt \
+            --requirement requirements/docs.txt \
+            --requirement requirements/pip-audit.txt \
+            --requirement requirements/appinspect.txt
 
       - name: Reminder on failure
         if: failure()
