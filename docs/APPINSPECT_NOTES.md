@@ -209,7 +209,7 @@ The Whitelist Manager app has been thoroughly audited against Splunk AppInspect 
 
 3. **default/authorize.conf**
    - Status: PASS
-   - Roles defined: wl_viewer, wl_editor
+   - Roles defined: `wl_superadmin`, `wl_admin`, `wl_analyst_editor`, `wl_analyst_viewer` (modern 4-tier) plus `wl_editor` / `wl_viewer` (backward-compat aliases that import the new roles — see `default/authorize.conf`)
    - Capabilities properly assigned, no deprecated roles
 
 4. **default/indexes.conf**
@@ -254,7 +254,7 @@ The Whitelist Manager app has been thoroughly audited against Splunk AppInspect 
 | app.conf version matches app.manifest | PASS | Both set to 1.0.0 |
 | restmap.conf endpoint configured correctly | PASS | /custom/wl_manager mapped to handler.py |
 | indexes.conf wl_audit properly defined | PASS | Index exists with correct settings |
-| RBAC roles properly configured | PASS | wl_viewer and wl_editor roles available |
+| RBAC roles properly configured | PASS | 4-tier modern: `wl_superadmin` / `wl_admin` / `wl_analyst_editor` / `wl_analyst_viewer` + backward-compat aliases `wl_editor` / `wl_viewer` |
 | Scheduled searches have valid syntax | PASS | Cron syntax verified |
 
 ---

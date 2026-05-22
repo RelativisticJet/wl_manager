@@ -253,7 +253,7 @@ curl -X POST \
 | 200  | OK - Action succeeded | CSV fetched, saved, or modified successfully |
 | 400  | Bad Request - Validation error | Missing required parameter, invalid filename |
 | 401  | Unauthorized - Not authenticated | Session expired, no session key provided |
-| 403  | Forbidden - Insufficient permissions | User lacks required role (wl_editor, admin, etc.) |
+| 403  | Forbidden - Insufficient permissions | User lacks required role (one of `wl_superadmin`, `wl_admin`, `wl_analyst_editor`, `wl_analyst_viewer` — modern 4-tier — or the backward-compat aliases `wl_editor` / `wl_viewer`; see `default/authorize.conf`) |
 | 404  | Not Found - Resource doesn't exist | CSV file not found, version not found |
 | 429  | Too Many Requests - Limit exceeded | Daily edit limit exceeded |
 | 500  | Server Error - Unexpected exception | Internal error (check Splunk logs) |
@@ -320,14 +320,18 @@ curl -H "X-Splunk-Key: $SESSION_KEY" \
 
 ## RBAC Requirements
 
-Different actions require different Splunk roles:
+Different actions require different Splunk roles. The modern 4-tier
+RBAC ships in `default/authorize.conf`; the older 2-tier aliases
+(`wl_editor`, `wl_viewer`) still work because they import the new
+roles automatically. See `docs/SECURITY_ARCHITECTURE.md` for the
+full RBAC matrix.
 
 | Action Category | Required Roles | Description |
 |-----------------|----------------|-------------|
-| Read (GET) | None | All authenticated users can read |
-| Write (save_csv, add_row, etc.) | `wl_editor`, `admin`, `sc_admin`, `power` | Edit whitelists |
-| Admin (set_daily_limits, etc.) | `admin`, `sc_admin`, `splunk-system-user` | Administrative tasks |
-| Super-admin (reset_factory_defaults) | `splunk-system-user` | System reset operations |
+| Read (GET) | Any authenticated user (anyone with read access to `wl_audit`) | All authenticated users can read CSVs and audit trail |
+| Write (`save_csv`, `add_row`, etc.) | `wl_analyst_editor` (or `wl_editor` alias) — also satisfied by `wl_admin` / `wl_superadmin` | Edit whitelists; subject to per-user daily limits + approval gates |
+| Admin (`set_analyst_limits`, approve requests, manage trash) | `wl_admin` (or `wl_superadmin`) | Approve/reject requests, configure analyst limits, manage trash |
+| Super-admin (`set_admin_limits`, lockdown control, factory reset) | `wl_superadmin` only | Admin-tier limit configuration, Emergency Lockdown activate/deactivate, factory reset |
 
 ## Error Handling
 

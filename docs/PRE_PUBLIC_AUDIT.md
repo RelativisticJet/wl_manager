@@ -985,7 +985,7 @@ Reviewed via direct read (small screenshots) and via PIL crop-then-read on `03-a
 | F-C3 | HIGH | chaos test asserts pre-existence of CSV F-C2 deleted | `tests/integration/test_chaos_save_csv_chain.py:299-302` | V2 prep | CI-blocker if the `integration-tests.yml` workflow is in scope of the green-check; verify before assuming closed |
 | F-H2 | HIGH | git tag namespace collision (v1.0.0 + v2.0.0 lightweight tags exist) | `git tag -l` | A | Phase 3.8 release-cut blocker (not Phase 3.4 flip) |
 | F-M1 | MEDIUM | `mkdocs.yml` ships in `.spl` payload unnecessarily | repo root + `scripts/package.sh` EXCLUDES list | A | No — quality-of-package only |
-| F-M2 | MEDIUM | `sbom.cdx.json` is stale (claims v2.0.0 / build 627; current is v1.0.0-rc1 / build 660) | `sbom.cdx.json` | A | No — fix before Phase 3.2 cut |
+| F-M2 | MEDIUM | `sbom.cdx.json` is stale (claims v2.0.0 / build 627; current is v1.0.0-rc1 — see `default/app.conf` for current build) | `sbom.cdx.json` | A | No — fix before Phase 3.2 cut |
 | F-M3 | MEDIUM | `app.manifest` author identity inconsistency (`RelativisticJet` vs `Oleh Bezsonov`) | `app.manifest` lines `"author":[...]` | A | Splunkbase listing blocker — fix before Phase 4 Splunkbase submit |
 | F-M4 | LOW | `app.manifest` releaseDate predates actual release (`2026-05-17`) | `app.manifest` `releaseDate` field | A | Release-time task |
 | F-M5 | MEDIUM | 7 hardcoded `C:/Users/PC/wl_manager/...` paths in 2 tracked test files | `tests/test_e2e_manual_browser.py:106` + `tests/test_e2e_realworld.py` (×6 lines) | D | No — but breaks every non-maintainer contributor's test runs |
