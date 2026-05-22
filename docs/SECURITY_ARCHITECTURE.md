@@ -32,14 +32,17 @@ The Whitelist Manager is a Splunk application that enables SOC analysts to safel
 
 ### Roles Defined
 
-The application defines four security tiers with progressive permissions:
+The application defines four security tiers with progressive
+permissions. See `default/authorize.conf` for the authoritative
+definition; backward-compat aliases keep older deployments working
+through the renaming.
 
-| Role | Layer | Purpose |
-|------|-------|---------|
-| **wl_viewer** | Read-only | Security analysts viewing whitelist state and audit trail (passive monitoring) |
-| **wl_editor** | Analyst | SOC analysts editing whitelists with approval gates for bulk operations |
-| **wl_admin** | Administrator | Approval authority; controls policy limits and usage thresholds |
-| **wl_superadmin** | System Owner | Manages trash retention, limit policies, and system configuration |
+| Role (modern) | Backward-compat alias | Layer | Purpose |
+|------|------|-------|---------|
+| **wl_analyst_viewer** | wl_viewer | Read-only | Security analysts viewing whitelist state and audit trail (passive monitoring) |
+| **wl_analyst_editor** | wl_editor | Analyst | SOC analysts editing whitelists with approval gates for bulk operations |
+| **wl_admin** | (n/a) | Administrator | Approval authority; controls analyst policy limits and usage thresholds; Control Panel access |
+| **wl_superadmin** | (n/a) | System Owner | Configures admin limits, trash retention, role assignment; activates and deactivates Emergency Lockdown; out-of-band recovery actions |
 
 All roles require Splunk authentication; anonymous access is not supported.
 
@@ -237,6 +240,211 @@ The Whitelist Manager threat surface includes six categories (STRIDE):
 **High-Risk Mitigations (DREAD ≥ 29):**
 - **Concurrent edit collisions:** Optimistic locking with mtime validation + version snapshots + audit trail
 - **Multi-user DoS:** Rate limiting per-user + request size limits + file locking with timeout
+
+---
+
+## Part 2A: Hardening Mechanisms
+
+The controls in this section sit alongside the STRIDE mitigations
+above. They address attacker scenarios that don't fit cleanly into
+a single STRIDE category — insider abuse, post-authentication
+tampering, supply-chain compromise, and recovery-path forgery.
+
+### 2A.1 HMAC-signed state with runtime-derived key
+
+Every tamper-resistant state record carries an HMAC signature.
+The signing key is derived at runtime from the Splunk server
+GUID, cached for 1 hour, and re-derived on cache miss or any
+restart. The key never lives on disk in plaintext and is not
+exported anywhere outside the running process. Operators with
+source-code read access alone cannot forge a valid record.
+
+**Signed records:**
+
+| Record | Storage | Why HMAC matters |
+|---|---|---|
+| Cooldown counters | KV `wl_cooldowns` + filesystem fallback | Prevents an attacker from rewinding their daily-action count by editing the underlying record |
+| FIM baseline | KV `wl_fim_baseline` + `.fim_baseline.json` | Prevents silent re-baselining to hide prior file mutations |
+| CSV expected-hash registry | `.csv_expected_hashes.json` | Prevents bypass of CSV integrity monitoring by editing the expected hashes |
+| Emergency Lockdown sentinel | `_emergency_lockdown.json` | Prevents forging a lockdown-active or lockdown-deactivated state |
+| FIM deploy window token | `_fim_deploy_window.json` | Prevents forging a permanently-open deploy window to suppress alerts |
+
+**Failure-closed behavior:** any record that fails HMAC verification
+is rejected by the handler and treated as if the underlying control
+was tampered with. The FIM script raises a HIGH-severity audit event
+on HMAC failure so the deviation is visible in the dashboard.
+
+**GUID rotation:** disaster recovery on a new host changes the GUID
+and invalidates every signed record. The runbook in
+`docs/RUNBOOKS.md` ("Disaster Recovery — GUID Rotation / Backup
+Restore / Container Clone") documents the rebuild order:
+`reset_cooldowns.sh` → FIM baseline rebuild →
+`bootstrap_csv_hashes` REST action.
+
+### 2A.2 File Integrity Monitoring (FIM)
+
+Two scripted inputs in `default/inputs.conf` provide dual-layer
+detection of out-of-band tampering with the app's code, config,
+and CSV lookups.
+
+**Slow path — `bin/wl_fim.py`** (cryptographic scan, 15-second interval):
+
+- Hashes a curated set of critical files: handler source code,
+  `default/*.conf`, cooldown markers, lockdown state, `instance.cfg`
+- Emits JSON events to `index=wl_audit sourcetype=wl_fim`
+- Maintains a dual-store baseline: filesystem JSON
+  (`.fim_baseline.json`) AND KV `wl_fim_baseline` collection
+- Cross-validates the two stores on every cycle; an attacker who
+  silently rewrites ONE store is caught by divergence alerts
+- Catches mtime-preserving attacks (intentional `touch -r` after
+  modification) that the fast path cannot detect
+
+**Fast path — `bin/wl_fim_watch.py`** (persistent stat-based, ~2s):
+
+- Persistent process (`interval = 0`) polling `os.stat()` for mtime
+  and size changes on all CSV lookups referenced in `rule_csv_map.csv`
+- Re-reads the mapping every 15 seconds + immediately on sentinel
+  CSV changes, so newly added CSVs are picked up within seconds
+- Detects unauthorized modifications via SPL `| outputlookup`,
+  direct filesystem writes, REST lookup edits — all of which bypass
+  the handler's approval gates, rate limits, and audit pipeline
+- Baselines the `lookups/` directory's filesystem mode at startup;
+  any subsequent mode change emits `fim_lookups_dir_mode_changed`
+  CRITICAL — closes the "chmod away the splunk user's read access
+  to silently disable monitoring" attack
+- Auto-bootstraps the expected-hash registry on first run; cannot be
+  silently re-bootstrapped (see laundering correlation below)
+
+**Laundering correlation:** the scheduled search
+`wl_csv_bootstrap_laundering_correlation` fires at severity 5
+(CRITICAL) when a `bootstrap_csv_hash_changed` event for a CSV
+appears within 5 minutes of a `fim_csv_external_modification` for
+the same CSV. This catches the "modify CSV → re-bootstrap to
+suppress detection" sequence.
+
+**Stateful alert dedup:** persistent alert conditions are
+deduplicated via `.fim_alert_state.json` so the audit index isn't
+buried under repetitive notifications for one stuck condition.
+
+### 2A.3 Emergency Lockdown
+
+A `wl_superadmin` can activate a system-wide write freeze via the
+Control Panel. While the lockdown is active, the dispatcher
+short-circuits all non-exempt POST actions with a
+lockdown-active error. The implementation choices:
+
+- **Self-unlock blocked** — deactivation requires a DIFFERENT
+  `wl_superadmin` from the one who activated it. Two-superadmin
+  separation is the strongest defense in this app
+- **Sentinel-protected state** — HMAC-signed state file prevents
+  forging an active or deactivated state
+- **Narrow exempt-action set** — only safety actions
+  (deactivation, notifications, approval-gate probes, presence
+  updates, FIM deploy-window open/close, a few read-only
+  diagnostics) can execute during lockdown
+- **Sentinel files stay HIGH** — even during a deploy window,
+  mutations to cooldown markers, lockdown state, and `instance.cfg`
+  retain HIGH severity. Legitimate deploys never touch them
+- **Out-of-band release** — if both `wl_superadmin` accounts are
+  compromised or unavailable, `scripts/emergency_unlock.sh`
+  releases the lockdown after writing an append-only record to
+  `_recovery_log.jsonl`. That log is tailed into `wl_audit` so
+  even out-of-band recoveries are visible in the audit trail
+
+**Trade-off acknowledged:** deploy windows are lockdown-exempt to
+allow hotfix deploys during incidents. A compromised
+`wl_superadmin` during lockdown could abuse this to cover code-file
+modifications. The exemption is documented in CLAUDE.md "Operational
+Procedures" because operational continuity outweighed defense
+against an already-elevated total-compromise threat.
+
+### 2A.4 Rate limiting + daily limits + approval queue
+
+Three independent throttles backed by the same KV-store-signed
+mechanism (`wl_cooldowns`, `wl_ratelimit_state`):
+
+- **Sliding-window rate limit** — per-user/per-action burst cap
+  (30 writes / 120 reads per 60 seconds by default); enforced at
+  request time, not advisory
+- **Daily limits** — per-tier action counts (analyst vs. admin)
+  configurable via Control Panel; superadmin actions exempt by
+  design (post-compromise attribution falls back to Splunk's own
+  `_audit` index — see Section 2A.7)
+- **Approval queue** — bulk operations and destructive actions
+  (rule/CSV delete, trash purge, bulk edits above threshold) are
+  forced through a dual-approval workflow before execution; analyst
+  cannot self-approve
+
+**Replay safety:** every queued action re-validates preconditions
+(rule exists, CSV exists, no conflicting deletion in flight) at
+EXECUTION time, not just submission. Approving a "create CSV"
+request after the parent rule was deleted silently fails closed
+rather than re-creating the rule.
+
+### 2A.5 Strict-ASCII validation (dual-gate)
+
+Detection rule names, CSV filenames, approval reasons, and
+`app_context` values are validated against `^[A-Za-z0-9_\-. ]+$` at
+TWO independent gates — the outer wrapper that handles the
+"submit_create_delete_approval" request AND the inner choke point
+that processes any approval. The dual placement closes a bypass
+where a direct REST POST to the inner action could skip the outer
+gate.
+
+**Rejected attack classes:**
+
+- Homoglyph attacks (e.g., Cyrillic "а" vs Latin "a") that would
+  let a rule name visually impersonate another
+- Bidi/zero-width attacks that hide characters in filesystem paths
+- Null-byte injection / control-character injection in audit fields
+- Combining-mark + fullwidth attacks that confuse SPL parsing
+
+ASCII was chosen over Unicode normalization (NFC/NFKC) because the
+operational reality of the app — dashboard panels, audit searches,
+`rule_csv_map.csv` exports — is ASCII at every consumer. See
+`docs/DECISION_LOG.md` 2026-04-26 entry for the full rationale.
+
+### 2A.6 Release signing (Sigstore keyless)
+
+`.spl` release artifacts are signed by the GitHub Actions release
+workflow via Sigstore keyless signing. Verification before install
+confirms the artifact came from this repository's release pipeline
+and was not swapped on the Releases page.
+
+The canonical verification command lives in `docs/SBOM.md`. Skipping
+this check exposes operators to a release-channel takeover where an
+attacker who compromises the Releases page can swap both the `.spl`
+AND the SHA-256 sidecar.
+
+**Identity-regex on the signature:** the cosign identity check
+pins the workflow file path AND the repository, so a compromised
+fork's release workflow cannot produce a valid signature for this
+repo's identity.
+
+### 2A.7 Post-compromise attribution via Splunk's `_audit` index
+
+For threats that fall in the "attacker already has `wl_superadmin`
+or built-in `admin`" total-compromise tier, this app's own audit
+trail is not a reliable forensic source (the compromised role can
+deactivate lockdown, reset cooldowns, even re-baseline FIM if it
+has filesystem access).
+
+The fallback is Splunk's own `_audit` index, which lives outside
+this app's control plane and cannot be tampered from inside the
+app. Two optional scheduled searches enrich FIM events with
+`_audit` correlation (see `INSTALLATION.md` Section 2.3):
+
+- `wl_csv_modification_attribution` — names the user and saved
+  search responsible for any CSV write that didn't go through the
+  handler
+- `wl_saved_search_timebomb_monitor` — alerts on any saved search
+  whose definition contains `| outputlookup` targeting one of our
+  CSVs (defense against "create scheduled bomb, ride out lockdown,
+  let it fire later")
+
+Both ship `disabled = true` because they depend on the `_audit`
+read capability that not every site grants — admins enable after
+running the `probe_audit_access` REST endpoint.
 
 ---
 
@@ -577,6 +785,7 @@ Use this checklist when deploying updates or reviewing security posture:
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2026-04-02 | Initial comprehensive security architecture document |
+| 1.1 | 2026-05-22 | Added Part 2A (Hardening Mechanisms): HMAC-signed state, FIM dual-path scripts, Emergency Lockdown, rate-limit + daily-limit + approval-queue triad, strict-ASCII dual-gate validation, Sigstore release signing, post-compromise attribution via Splunk `_audit`. Updated Roles Defined table with modern names + backward-compat aliases. |
 
 ---
 

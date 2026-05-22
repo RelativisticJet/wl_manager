@@ -77,23 +77,46 @@ synced by hand).
 | `wl_fim_common.py` | Shared FIM helpers: GUID resolution, hashing, KV helpers |
 | `wl_hmac_key.py` | Runtime HMAC key derivation and caching |
 
-### Scheduled Scripts
+### Scheduled & Persistent Scripts
 
 | Script | Trigger | What it does |
 |--------|---------|-------------|
 | `wl_expiration_cleanup.py` | Hourly (inputs.conf) | Removes expired rows from CSVs, writes audit events |
 | `wl_expiring_soon.py` | Daily (inputs.conf) | Alerts on rows expiring within N days |
+| `wl_fim.py` | Every 15s (inputs.conf, `passAuth = splunk-system-user`) | File Integrity Monitor — cryptographic scan of critical source + sentinel files; dual-store baseline (filesystem + `wl_fim_baseline` KV) catches single-store tampering |
+| `wl_fim_watch.py` | Persistent (`interval = 0`) | ~2-second stat-based watcher; detects CSV mutations + lookups-directory mode changes in near real time. Pairs with `wl_fim.py` for full coverage |
 
 ### RBAC Tiers
 
-```
-Viewer          — Read CSVs and audit trail
-Editor          — Edit CSVs, submit approval requests
-Admin           — Approve/reject, configure limits, manage trash
-Superadmin      — Set admin limits, factory reset, assign roles
-```
+The 4-tier model lives in `default/authorize.conf`:
 
-Admins are exempt from approval gates (they ARE the approvers). Self-reset of daily usage is blocked (defense in depth).
+| Role (modern) | Tier | What it can do |
+|---|---|---|
+| `wl_superadmin` | System owner | Configure admin limits, trash retention, role assignment; deactivate Emergency Lockdown; out-of-band recovery actions |
+| `wl_admin` | Admin | Approve/reject requests, configure analyst limits, view usage, access Control Panel |
+| `wl_analyst_editor` | Editor | View + edit whitelists; submit changes for approval as configured |
+| `wl_analyst_viewer` | Viewer | Read-only access to whitelists and the `wl_audit` index |
+
+Backward-compat aliases `wl_editor` / `wl_viewer` import the new
+analyst-tier roles automatically — existing users continue to work
+across the renaming.
+
+Admins are exempt from the analyst approval gates that they configure (they ARE the approvers). Self-reset of daily usage is blocked (defense in depth — even a `wl_superadmin` cannot reset their own counter).
+
+### Emergency Lockdown
+
+A `wl_superadmin` can activate a system-wide write freeze via the
+Control Panel. While active, the dispatcher short-circuits all
+non-exempt POST actions with a lockdown error. Deactivation
+requires a DIFFERENT `wl_superadmin` (self-unlock blocked) — this
+is the highest-stakes two-superadmin enforcement in the app.
+
+The exempt-action set is narrow: lockdown deactivation,
+notifications, approval-gate probes, presence updates, column
+width persistence, FIM deploy-window open/close, and a small set
+of read-only diagnostics. Sentinel-file mutations always stay at
+HIGH severity even during deploy windows; legitimate deploys
+never touch them.
 
 ## Frontend (JavaScript)
 

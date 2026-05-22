@@ -1,133 +1,194 @@
 # Whitelist Manager — Splunk Admin Installation Guide
 
-This document covers everything the Splunk administrator needs to do **before**, **during**, and **after** installing the Whitelist Manager application.
+This is the **Day-1 operational playbook** for a Splunk administrator
+installing the Whitelist Manager app. It walks through the pre-flight
+checks, install, post-install verification, and uninstall procedures.
+
+It is intentionally complementary to (not a duplicate of) three
+authoritative companion docs:
+
+- **`INSTALLATION.md`** (repo root) — capability trade-off matrix:
+  which Splunk capabilities (`list_server`, `list_users`, `_audit`)
+  the app needs, probe endpoints to test them, and how to set up
+  fallbacks. Read this BEFORE Step 9 below.
+- **`docs/RUNBOOKS.md`** — recovery procedures: Emergency Lockdown
+  release, cooldown counter recovery, FIM deploy window, GUID
+  rotation / DR.
+- **`SECURITY.md`** (repo root) — disclosure policy + scope.
+
+When the same fact lives in code or one of those docs, this guide
+references the source rather than copying — copies drift.
 
 ---
 
 ## BEFORE Installation (Pre-flight Checklist)
 
-### 1. Verify Splunk Version Compatibility
+### 1. Verify Splunk version compatibility
 
-The app requires **Splunk Enterprise 8.x or 9.x** with Python 3 support.
+The app's minimum supported Splunk Enterprise version is declared in
+`app.manifest` under `platformRequirements.splunk.Enterprise`:
+
+```bash
+grep -A1 platformRequirements app.manifest
+```
+
+Confirm your Splunk instance meets or exceeds that version:
 
 ```bash
 $SPLUNK_HOME/bin/splunk version
 ```
 
-Confirm the output shows 8.0+ or 9.x. The app has been tested on **Splunk 9.3.1**.
+The CI matrix tests against the version pinned in `docker-compose.yml`
+(see `image:` line); earlier 9.x versions usually work but are not
+covered by the test matrix.
 
-### 2. Verify Python 3 Is Enabled
+### 2. Verify Python 3 is enabled
 
-The app uses `python.version = python3` in restmap.conf. Splunk must have Python 3 enabled (it is by default in 8.x+, but some environments force Python 2).
-
-Check the current setting:
+The app declares `python.version = python3` and `python.required = 3.13`
+in `default/restmap.conf` and `default/inputs.conf`. Splunk 9.3+ ships
+Python 3 by default, but verify the system-level setting:
 
 ```bash
 $SPLUNK_HOME/bin/splunk btool server list --debug | grep python.version
 ```
 
-If the output shows `python.version = python2` at the system level, the Splunk admin needs to ensure Python 3 is available, or update `server.conf` to allow Python 3:
+If the output shows `python.version = python2` at the system level,
+update `server.conf` to allow Python 3:
 
 ```ini
 [general]
 python.version = python3
 ```
 
-### 3. Check for Naming Conflicts
+### 3. Check for naming conflicts
 
-The app creates several objects. Verify none of these already exist on your Splunk instance:
+The app creates several Splunk objects. Confirm none collide with
+existing objects on your instance:
 
-| Object | Type | Check Command |
+| Object | Type | Check command |
 |---|---|---|
 | `wl_manager` | App | `$SPLUNK_HOME/bin/splunk display app` |
 | `wl_audit` | Index | `$SPLUNK_HOME/bin/splunk list index` |
-| `wl_editor` | Role | `$SPLUNK_HOME/bin/splunk list role` |
-| `wl_viewer` | Role | `$SPLUNK_HOME/bin/splunk list role` |
-| `/custom/wl_manager` | REST endpoint | Should not conflict unless another app uses this exact path |
+| `wl_superadmin`, `wl_admin`, `wl_analyst_editor`, `wl_analyst_viewer` (modern) plus `wl_editor`, `wl_viewer` (backward-compat aliases) | Roles | `$SPLUNK_HOME/bin/splunk list role` |
+| `wl_cooldowns`, `wl_fim_baseline`, `wl_presence_state`, `wl_ratelimit_state` | KV collections | `curl -sk -u <admin>:<pw> "https://localhost:8089/servicesNS/nobody/wl_manager/storage/collections/config"` |
+| `/services/custom/wl_manager` | REST endpoint | Should not conflict unless another app maps this exact path |
 
-If any of these already exist, coordinate with the Security Engineering team before proceeding.
+Modern role names come from `default/authorize.conf`; the legacy
+aliases `wl_editor` / `wl_viewer` exist for backward compatibility
+and import the new analyst-tier roles automatically.
 
-### 4. Review Disk Space for the wl_audit Index
+If any of these already exist, coordinate with your security
+engineering team before proceeding.
 
-The app creates a `wl_audit` index with these defaults (defined in `indexes.conf`):
+### 4. Review disk space for the wl_audit index
 
-| Setting | Value | Meaning |
-|---|---|---|
-| `maxTotalDataSizeMB` | 1024 | Maximum 1 GB of indexed data |
-| `frozenTimePeriodInSecs` | 94608000 | Data retained for 3 years |
+The app creates a dedicated `wl_audit` index. See `default/indexes.conf`
+for the live settings, including the long-term archival guidance for
+compliance regimes (PCI DSS, HIPAA, SOX, GDPR) at the bottom of that
+file.
 
-The index will be created at the default Splunk data path:
+The index is created at the default Splunk data path:
+
 - Hot/warm: `$SPLUNK_DB/wl_audit/db`
-- Cold: `$SPLUNK_DB/wl_audit/colddb`
-- Thawed: `$SPLUNK_DB/wl_audit/thaweddb`
+- Cold:     `$SPLUNK_DB/wl_audit/colddb`
+- Thawed:   `$SPLUNK_DB/wl_audit/thaweddb`
 
-**Action required**: Verify at least **2 GB** of free disk space at `$SPLUNK_DB` (1 GB for data + overhead).
+For the per-CSV / per-analyst event-volume forecast (sizing input),
+see `docs/AUDIT_VOLUME_FORECAST.md`.
 
-If your organization requires custom index paths or different retention, you have two options:
-- **Option A**: After installation, create a `local/indexes.conf` override in the app
-- **Option B**: Modify the `indexes.conf` in the .spl before installation (extract, edit, repackage)
+If your organization requires custom index paths or a longer
+retention policy, plan to ship a `local/indexes.conf` override after
+installation (preserves your customization across app upgrades).
 
-### 5. Review Network/Firewall Requirements
+### 5. Review network / firewall requirements
 
-The app makes an internal HTTPS call from the REST handler to Splunk's own management port:
+The REST handler makes localhost-only HTTPS calls to Splunk's own
+management port (`https://127.0.0.1:8089/services/...`) for audit
+indexing and KV-store access. No external network access is required.
 
-```
-https://127.0.0.1:8089/services/receivers/simple
-```
+If your Splunk deployment uses a non-default management port or
+custom SSL certificates, see the "Custom SSL / management port"
+section under "Special Considerations" below.
 
-This is a **localhost-only** call (Python handler → same Splunk instance) used to index audit events. It should work without any firewall changes. However, if your Splunk deployment has **custom SSL certificates** or **non-default management ports**, see the "Custom SSL/Port" section below.
+### 6. Review the 4-tier RBAC model
 
-### 6. Review the RBAC Roles
+The app ships with 4 modern roles plus 2 backward-compat aliases.
+See `default/authorize.conf` for the authoritative definitions:
 
-The app creates two new roles:
-
-| Role | Inherits From | Capabilities |
+| Role | Tier | Capabilities |
 |---|---|---|
-| `wl_editor` | `user` | Read + write whitelists, access `wl_audit` index |
-| `wl_viewer` | `user` | Read-only access to whitelists and `wl_audit` index |
+| `wl_superadmin` | System owner | Configure admin limits, trash retention, role assignment, emergency-lockdown deactivation, recovery actions |
+| `wl_admin` | Admin | Approve/reject requests, configure analyst limits, view usage, access Control Panel |
+| `wl_analyst_editor` | Editor | View and edit whitelists; submit changes for approval as configured |
+| `wl_analyst_viewer` | Viewer | Read-only access to whitelists and audit trail |
+| `wl_editor` | Alias | Imports `wl_analyst_editor` — kept for backward compatibility |
+| `wl_viewer` | Alias | Imports `wl_analyst_viewer` — kept for backward compatibility |
 
-Both roles inherit from the built-in `user` role. The REST handler also grants full access to the built-in `admin` and `sc_admin` roles.
+All roles allow searching `index=wl_audit`. The Control Panel
+exposes role-gated tabs (Approval Queue, Activity, Analyst Settings,
+Admin Settings, Trash) — see `docs/SECURITY_ARCHITECTURE.md` for the
+gating matrix.
 
-**Action required**: Prepare a list of users who need each role. You will assign these after installation.
+**Action**: Prepare the list of users who should receive each role;
+you will assign them in Step 14 below.
 
-### 7. Identify the Correct app_context Values
+### 7. Identify the correct app_context values
 
-The master mapping CSV (`lookups/rule_csv_map.csv`) references CSV files in **other Splunk apps** via the `app_context` column. The value must exactly match the app's **folder name** on disk.
+The master mapping CSV (`lookups/rule_csv_map.csv`) references CSV
+files in other Splunk apps via the `app_context` column. That value
+must exactly match the target app's folder name on disk.
 
 Common examples:
 
-| Splunk App | Typical Folder Name |
+| Splunk app | Typical folder name |
 |---|---|
 | Enterprise Security | `SplunkEnterpriseSecuritySuite` |
 | ES Content Update | `DA-ESS-ContentUpdate` |
 | SA-ThreatIntelligence | `SA-ThreatIntelligence` |
 
-**Action required**: Verify the exact folder names by listing:
+Verify by listing:
 
 ```bash
 ls $SPLUNK_HOME/etc/apps/ | grep -i -E "security|SA-|DA-"
 ```
 
-Share these folder names with the Security Engineering team so they can populate the mapping CSV correctly.
+Share the exact folder names with the security engineering team so
+they can populate the mapping CSV accurately. Strict-ASCII validation
+applies to detection rule names, CSV filenames, and approval reasons
+(see `docs/SECURITY_ARCHITECTURE.md`).
 
-### 8. Backup (Recommended)
+### 8. Backup
 
-Before any app installation:
+Before installing any new app:
 
 ```bash
-# Backup current app state
+# Snapshot the apps directory + roles + users
 tar -czf /tmp/splunk_apps_backup_$(date +%Y%m%d).tar.gz $SPLUNK_HOME/etc/apps/
-
-# Backup current roles and users
 $SPLUNK_HOME/bin/splunk list role > /tmp/splunk_roles_backup.txt
 $SPLUNK_HOME/bin/splunk list user > /tmp/splunk_users_backup.txt
 ```
 
+For ongoing backups after installation (KV state + CSV lookups +
+audit index), use `scripts/backup_data.sh` — see
+`docs/BACKUP_AND_RESTORE.md` for the runbook.
+
+### 9. Verify the .spl release signature (recommended)
+
+The `.spl` release artifact is Sigstore-signed by the GitHub Actions
+release workflow. Verifying the signature before install confirms
+the artifact came from this repository's release pipeline and was
+not swapped on the Releases page.
+
+The canonical `cosign verify-blob` command and identity-regex live
+in `docs/SBOM.md` under "Verifying a release with cosign". Skipping
+this check leaves you exposed to a release-channel takeover.
+
 ---
 
-## Try It First (Docker Demo)
+## Try it first (Docker demo)
 
-Before installing on production, you can evaluate the app in a containerized Splunk instance. This requires Docker Desktop and takes about 2-3 minutes.
+Before installing on production, evaluate the app in a containerized
+Splunk instance:
 
 ```bash
 # From the wl_manager repository root:
@@ -136,125 +197,166 @@ bash demo/demo.sh --stop   # tear down when done
 bash demo/demo.sh --clean  # tear down + remove data volume
 ```
 
-Login: `admin` / `Chang3d!` at http://localhost:9000
+Login: `admin` / `Chang3d!` at <http://localhost:9000>. The demo
+installs the app from the `.spl` package (same path as a real
+install) and seeds sample detection rules with whitelist data. See
+`demo/Demo_Guide.pdf` for a walkthrough.
 
-The demo installs the app from the `.spl` package (same as a real install) and seeds three sample detection rules with whitelist data. See `demo/Demo_Guide.pdf` for a detailed walkthrough.
-
-> **Note:** The demo uses ports 9000/9089 to avoid conflicts with any existing Splunk installation.
+The demo uses ports 9000 / 9089 to avoid colliding with any existing
+Splunk installation on the host.
 
 ---
 
 ## DURING Installation
 
-### Step 1: Install the .spl Package
+### Step 10. Install the .spl package
 
-**Option A — Splunk Web (recommended for single instance):**
+Pick the install method that matches your environment:
 
-1. Log in to Splunk Web as admin
-2. Navigate to **Apps > Manage Apps**
-3. Click **Install app from file**
-4. Browse to `wl_manager-1.0.0.spl` and click **Upload**
-5. Check "Restart Splunk" when prompted
+**Option A — Splunk Web (single instance):**
+
+1. Log in to Splunk Web as a Splunk admin
+2. Navigate to **Apps → Manage Apps → Install app from file**
+3. Browse to the released `.spl` and click **Upload**
+4. When prompted, allow Splunk to restart
 
 **Option B — Splunk CLI:**
 
 ```bash
-$SPLUNK_HOME/bin/splunk install app /path/to/wl_manager-1.0.0.spl -auth admin:password
+$SPLUNK_HOME/bin/splunk install app /path/to/wl_manager-<version>.spl -auth admin:<pw>
 $SPLUNK_HOME/bin/splunk restart
 ```
 
-**Option C — Manual (for clustered or restricted environments):**
+Use the released filename verbatim — version is encoded in the
+artifact name and matches `default/app.conf` / `app.manifest`.
+
+**Option C — Manual extract (clustered / restricted environments):**
 
 ```bash
 cd $SPLUNK_HOME/etc/apps/
-tar -xzf /path/to/wl_manager-1.0.0.spl
+tar -xzf /path/to/wl_manager-<version>.spl
 chown -R splunk:splunk wl_manager/
 $SPLUNK_HOME/bin/splunk restart
 ```
 
-### Step 2: Verify No Errors During Startup
+### Step 11. Verify no errors during startup
 
-After Splunk restarts, check the logs for any errors related to the app:
+After Splunk restarts, scan the logs for app-related errors:
 
 ```bash
-# Check for app loading errors
+# App loader / handler errors
 grep -i "wl_manager\|WhitelistHandler" $SPLUNK_HOME/var/log/splunk/splunkd.log | tail -20
 
-# Check for Python errors
-grep -i "wl_handler\|wl_manager" $SPLUNK_HOME/var/log/splunk/python_stderr.log | tail -20
+# Python errors (scripted inputs + REST handler)
+grep -i "wl_handler\|wl_fim\|wl_expiration" $SPLUNK_HOME/var/log/splunk/python_stderr.log | tail -20
 ```
 
-**Expected**: No errors. If you see `ImportError` or `ModuleNotFoundError`, the Python 3 environment may not be configured correctly (see Pre-flight step 2).
+Expected: no errors. `ImportError` / `ModuleNotFoundError` usually
+indicates Python 3 is not configured (see Step 2).
 
-### Step 3: Verify the REST Endpoint
+### Step 12. Verify the REST endpoint
 
-Test that the custom REST endpoint responds:
+Confirm the custom REST endpoint responds:
 
 ```bash
-curl -sk -u admin:password https://localhost:8089/services/custom/wl_manager?action=get_mapping
+curl -sk -u admin:<pw> "https://localhost:8089/services/custom/wl_manager?action=get_mapping&output_mode=json"
 ```
 
-**Expected response** (JSON with the sample mapping data):
+Expected: a JSON response containing a `mapping` array (initially
+populated with sample data; empty after Step 15 once you replace
+the seed). If you get HTTP 404, restart Splunk once more — handler
+registration sometimes needs a second restart on a fresh install.
+If 404 persists, return to Step 11 and inspect the logs.
 
-```json
-{"mapping": [{"rule_name": "My_Detection_Rule", "csv_file": "my_whitelist.csv", ...}]}
+### Step 13. Verify KV collections + scripted inputs
+
+The app creates four KV-store collections (see
+`default/collections.conf`):
+
+```bash
+curl -sk -u admin:<pw> \
+  "https://localhost:8089/servicesNS/nobody/wl_manager/storage/collections/config?output_mode=json" \
+  | grep -E '"name"\s*:\s*"wl_'
 ```
 
-If you get a **404**, restart Splunk one more time. If the 404 persists, check the logs above.
+Expected: `wl_cooldowns`, `wl_fim_baseline`, `wl_presence_state`,
+`wl_ratelimit_state`.
+
+The app also registers three scripted inputs (see
+`default/inputs.conf`): the hourly expiration cleanup, the 15-second
+File Integrity Monitor full-scan (`wl_fim.py`), and the persistent
+~2-second FIM stat watcher (`wl_fim_watch.py`). Confirm they are
+running:
+
+```bash
+$SPLUNK_HOME/bin/splunk list inputstatus | grep wl_
+```
+
+Then check that FIM has emitted its initial baseline event (allow
+~15 seconds after startup):
+
+```spl
+index=wl_audit sourcetype=wl_fim action=fim_baseline_initialized | head 1
+```
+
+A `fim_baseline_initialized` event confirms the dual-store baseline
+(filesystem + KV) is wired up.
 
 ---
 
-## AFTER Installation (Post-installation Setup)
+## AFTER Installation (Post-install Setup)
 
-### 1. Verify the wl_audit Index
+### Step 14. Verify the wl_audit index
 
 ```bash
 $SPLUNK_HOME/bin/splunk list index wl_audit
 ```
 
-Or in Splunk Web: **Settings > Indexes** — find `wl_audit`.
+Or via Splunk Web: **Settings → Indexes** — find `wl_audit`. If the
+index is missing, the app bundle did not load fully — return to
+Step 11.
 
-If the index does not appear, create it manually:
+### Step 15. Assign roles to users
 
-```bash
-$SPLUNK_HOME/bin/splunk add index wl_audit -maxTotalDataSizeMB 1024 -frozenTimePeriodInSecs 94608000
-```
-
-### 2. Verify the App Is Visible
-
-1. Open Splunk Web
-2. Click the **Apps** dropdown in the top navigation
-3. **Whitelist Manager** should appear in the list
-4. Click it — the main dashboard should load with two dropdowns
-
-### 3. Assign Roles to Users
-
-For each analyst who needs to **edit** whitelists:
+For each user, assign the role tier that matches their job (see
+Step 6 for the 4-tier matrix):
 
 ```bash
-$SPLUNK_HOME/bin/splunk edit user <username> -role wl_editor -auth admin:password
+# Editor (can edit whitelists, submit for approval)
+$SPLUNK_HOME/bin/splunk edit user <username> -role wl_analyst_editor -auth admin:<pw>
+
+# Read-only viewer
+$SPLUNK_HOME/bin/splunk edit user <username> -role wl_analyst_viewer -auth admin:<pw>
+
+# Approver
+$SPLUNK_HOME/bin/splunk edit user <username> -role wl_admin -auth admin:<pw>
+
+# System owner (system-level controls)
+$SPLUNK_HOME/bin/splunk edit user <username> -role wl_superadmin -auth admin:<pw>
 ```
 
-Or via Splunk Web: **Settings > Access Controls > Users > [username] > Edit > Roles > add wl_editor**
+Alternatively, via Splunk Web:
+**Settings → Access Controls → Users → [username] → Edit → Roles**.
 
-For read-only users:
+If you have legacy users on the backward-compat aliases
+(`wl_editor`, `wl_viewer`), they continue to work — the aliases
+import the new analyst-tier roles. Migrate them on the next role
+review for clarity.
 
-```bash
-$SPLUNK_HOME/bin/splunk edit user <username> -role wl_viewer -auth admin:password
-```
+### Step 16. Populate the master mapping CSV
 
-### 4. Populate the Master Mapping CSV
-
-This is the most critical post-installation step. The Security Engineering team will provide the mapping data, but the admin may need to assist with verifying `app_context` values.
+This is the most critical post-install step. The security engineering
+team will provide the mapping data; the Splunk admin may need to
+verify `app_context` values resolve to real folders on disk.
 
 **Option A — Splunk Web:**
 
-1. Go to **Settings > Lookups > Lookup table files**
-2. Find **rule_csv_map** (App: wl_manager)
+1. **Settings → Lookups → Lookup table files**
+2. Find `rule_csv_map` (App: wl_manager)
 3. Click the filename to edit
-4. Replace the sample data with real detection rule mappings
+4. Replace the sample data with your real detection-rule mappings
 
-**Option B — File system:**
+**Option B — file system:**
 
 ```bash
 vi $SPLUNK_HOME/etc/apps/wl_manager/lookups/rule_csv_map.csv
@@ -268,121 +370,204 @@ My_Detection_Rule,my_whitelist.csv,SplunkEnterpriseSecuritySuite
 Another_Rule,another_whitelist.csv,DA-ESS-ContentUpdate
 ```
 
-**Important**: The `app_context` must exactly match the app's folder name in `$SPLUNK_HOME/etc/apps/`.
+`app_context` must exactly match the target app's folder name in
+`$SPLUNK_HOME/etc/apps/`. Strict-ASCII validation rejects non-ASCII
+detection rule names and CSV filenames at the API boundary.
 
-### 5. Verify CSV File Permissions
+### Step 17. Verify CSV file permissions
 
-The Splunk process (running as the `splunk` user) needs **read and write** access to the CSV files referenced in the mapping. Check:
+The Splunk process (running as the `splunk` user) needs **read and
+write** access to every CSV referenced in the mapping. Check:
 
 ```bash
-# List the CSV files and their permissions
-for csv in $(awk -F',' 'NR>1 {print $3"/"$2}' $SPLUNK_HOME/etc/apps/wl_manager/lookups/rule_csv_map.csv); do
-    ls -la "$SPLUNK_HOME/etc/apps/$csv" 2>/dev/null || echo "NOT FOUND: $csv"
-done
+# List the referenced CSVs and their permissions
+awk -F',' 'NR>1 {print $3"/lookups/"$2}' \
+  $SPLUNK_HOME/etc/apps/wl_manager/lookups/rule_csv_map.csv \
+  | while read f; do
+      ls -la "$SPLUNK_HOME/etc/apps/$f" 2>/dev/null || echo "NOT FOUND: $f"
+    done
 ```
 
-If any CSV files show as NOT FOUND, the `app_context` or `csv_file` values in the mapping are incorrect.
+If any rows show `NOT FOUND`, the `app_context` or `csv_file`
+columns are wrong — fix the mapping and re-test.
 
-If permissions are wrong:
+Fix permissions if needed:
 
 ```bash
 chown splunk:splunk $SPLUNK_HOME/etc/apps/<app_context>/lookups/<csv_file>
 chmod 644 $SPLUNK_HOME/etc/apps/<app_context>/lookups/<csv_file>
 ```
 
-### 6. Test End-to-End
+### Step 18. Bootstrap the CSV expected-hash registry
 
-1. Log in as a user with the `wl_editor` role
-2. Open **Apps > Whitelist Manager**
-3. Select a detection rule from the first dropdown
-4. Select a CSV from the second dropdown
-5. The table should load with the CSV contents
-6. Modify a cell, type a comment, and click **Save**
-7. Go to the **Audit Trail** tab — the change should appear
-8. Verify in SPL:
+The CSV integrity monitor (`bin/wl_fim_watch.py`) auto-bootstraps a
+hash registry on first run for any CSV referenced in
+`rule_csv_map.csv`. Confirm it ran:
 
 ```spl
-index=wl_audit sourcetype=wl_audit | head 5 | spath | table timestamp analyst detection_rule csv_file comment rows_added rows_removed
+index=wl_audit sourcetype=wl_fim action=fim_csv_auto_bootstrap | head 5
 ```
 
-### 7. Test RBAC Enforcement
+If you populated the mapping after install and don't see the
+auto-bootstrap events, force a registry rebuild via the
+`bootstrap_csv_hashes` REST action (requires `wl_superadmin`,
+exempt from rate-limit and lockdown):
 
-1. Log in as a user **without** the `wl_editor` role
-2. Open the Whitelist Manager dashboard
-3. Try to save a change — it should display: *"Permission denied. Your account requires one of these roles: admin, sc_admin, wl_editor"*
+```bash
+curl -sk -u <wl_superadmin>:<pw> -X POST \
+  "https://localhost:8089/services/custom/wl_manager" \
+  -d '{"action":"bootstrap_csv_hashes"}'
+```
+
+See `docs/RUNBOOKS.md` → "Bootstrap CSV Hashes" for details.
+
+### Step 19. Run the capability probes
+
+Three optional Splunk capabilities (`list_server`, `list_users`,
+`_audit` index read) change which features run cleanly vs.
+degraded. Run the three probe endpoints documented in
+`INSTALLATION.md` Section 2 to see which deployment scenario your
+environment matches, and configure the documented fallbacks for
+any capability your site policy denies.
+
+Summary:
+
+```bash
+curl -sk -u <wl_superadmin>:<pw> ".../services/custom/wl_manager?action=probe_server_info_access&output_mode=json"
+curl -sk -u <wl_superadmin>:<pw> ".../services/custom/wl_manager?action=probe_list_users_access&output_mode=json"
+curl -sk -u <wl_superadmin>:<pw> ".../services/custom/wl_manager?action=probe_audit_access&output_mode=json"
+```
+
+The probe responses include human-readable `recommendation` text.
+
+### Step 20. End-to-end smoke test
+
+1. Log in as a user with the `wl_analyst_editor` role
+2. Open **Apps → Whitelist Manager**
+3. Select a detection rule, then a CSV file
+4. The table loads with the CSV contents
+5. Modify a cell, type a comment, click **Save**
+6. Open the **Audit** dashboard — the change appears
+7. Confirm in SPL:
+
+```spl
+index=wl_audit sourcetype=wl_audit
+| head 5 | reverse
+| table _time analyst detection_rule csv_file action comment
+```
+
+### Step 21. Test RBAC enforcement
+
+1. Log in as a user **without** any `wl_*` role
+2. Attempt to access the Whitelist Manager dashboard
+3. Expected: app is not visible, or save attempts return a
+   role-denied error
+
+If you see a permissions inconsistency (e.g., a `wl_analyst_viewer`
+can save), check that the user is not inheriting an elevated role
+from a built-in group, and re-read `default/authorize.conf` to
+confirm the live importRoles chain.
 
 ---
 
 ## Special Considerations
 
-### Custom Management Port or SSL
+### Custom SSL or management port
 
-If your Splunk management port is not 8089, or you use custom SSL certificates, the audit indexing URL in the REST handler needs adjustment.
+The handler's audit-event indexing path uses Splunk's loopback
+management URI (`https://127.0.0.1:<mgmtport>`). It picks up the
+running management port from Splunk's environment automatically;
+no app config change is needed for a non-default port.
 
-The handler currently uses:
+If your deployment uses custom SSL certificates, ensure the splunk
+process trusts its own certificate chain (standard Splunk
+configuration — `web.conf` `enableSplunkWebSSL`,
+`server.conf` `sslVerifyServerCert`).
 
-```
-https://127.0.0.1:8089/services/receivers/simple
-```
+### Search Head Cluster (SHC) deployment
 
-To change this, create a local override:
+1. Place the app in the SHC deployer at
+   `$SPLUNK_HOME/etc/shcluster/apps/wl_manager/`
+2. Push the bundle:
+   `$SPLUNK_HOME/bin/splunk apply shcluster-bundle -target <captain_uri>`
+3. The `wl_audit` index must also be configured on the **indexers**
+   (or forwarded to them) — search heads do not store the data.
 
-```bash
-mkdir -p $SPLUNK_HOME/etc/apps/wl_manager/local
-```
+### Indexer cluster deployment
 
-Then coordinate with the Security Engineering team to update the handler's `_index_audit()` method with the correct port/certificate settings.
-
-### Search Head Cluster (SHC) Deployment
-
-If deploying to a Search Head Cluster:
-
-1. Place the app in the SHC deployer: `$SPLUNK_HOME/etc/shcluster/apps/wl_manager/`
-2. Push the bundle: `$SPLUNK_HOME/bin/splunk apply shcluster-bundle -target <captain_uri>`
-3. The `wl_audit` index must also be configured on the **indexers** (or forwarded there)
-
-### Indexer Cluster Deployment
-
-If you run an indexer cluster, the `wl_audit` index must be created on the indexers via the cluster master:
+Create the `wl_audit` index on the indexers via the cluster master:
 
 ```bash
 # On the cluster master
-mkdir -p $SPLUNK_HOME/etc/master-apps/wl_manager/default/
-cp indexes.conf $SPLUNK_HOME/etc/master-apps/wl_manager/default/indexes.conf
+mkdir -p $SPLUNK_HOME/etc/master-apps/wl_manager_index/default/
+cp default/indexes.conf $SPLUNK_HOME/etc/master-apps/wl_manager_index/default/indexes.conf
 $SPLUNK_HOME/bin/splunk apply cluster-bundle
 ```
 
-### Monitoring and Alerting (Optional)
+The handler + scripted inputs live on the search head; only the
+index definition needs to ship to the indexers.
 
-Consider setting up a saved search to alert on whitelist changes:
+### Long-term audit retention (compliance regimes)
 
-```spl
-index=wl_audit sourcetype=wl_audit
-| spath
-| where rows_added > 10 OR rows_removed > 10
-| table timestamp analyst detection_rule csv_file rows_added rows_removed comment
-```
+`default/indexes.conf` contains commented guidance for extending
+retention beyond 3 years (PCI DSS, HIPAA, SOX, GDPR). Two options
+are documented inline:
 
-This alerts when someone adds or removes more than 10 rows in a single save — potentially catching accidental bulk deletions.
+- **Extend online retention** (simpler, more disk)
+- **Archive frozen buckets to cold storage** (recommended past 3 years)
+
+See the comment block at the bottom of `default/indexes.conf` for
+the exact `frozenTimePeriodInSecs` / `coldToFrozenScript` syntax.
+
+### Recovery scripts and runbooks
+
+Out-of-band recovery — emergency lockdown release, cooldown counter
+reset, FIM deploy windows, GUID rotation, disaster recovery — is
+documented in **`docs/RUNBOOKS.md`**. Bookmark that file and read
+it once before going live; the scripts under `scripts/` (e.g.
+`emergency_unlock.sh`, `reset_cooldowns.sh`,
+`fim_deploy_window.sh`) require physical access to the Splunk
+host's docker / shell.
 
 ---
 
 ## Uninstallation
 
-If the app needs to be removed:
+Remove the app:
 
 ```bash
-$SPLUNK_HOME/bin/splunk remove app wl_manager -auth admin:password
+$SPLUNK_HOME/bin/splunk remove app wl_manager -auth admin:<pw>
 $SPLUNK_HOME/bin/splunk restart
 ```
 
-This removes the app but **preserves** the `wl_audit` index data. To also remove the index:
+This preserves the `wl_audit` index data. To also remove the audit
+data:
 
 ```bash
 $SPLUNK_HOME/bin/splunk remove index wl_audit
 ```
 
-The custom roles (`wl_editor`, `wl_viewer`) are removed with the app. Users who had these roles assigned will lose them automatically.
+**KV collections** are removed with the app bundle. If you used
+`local/collections.conf` overrides or manually exported collection
+contents to preserve audit attribution after uninstall, retrieve
+that data first:
+
+```bash
+# Example: export wl_cooldowns to JSON before uninstall
+curl -sk -u admin:<pw> \
+  "https://localhost:8089/servicesNS/nobody/wl_manager/storage/collections/data/wl_cooldowns?output_mode=json" \
+  > wl_cooldowns_export.json
+```
+
+**Custom roles** (`wl_superadmin`, `wl_admin`, `wl_analyst_editor`,
+`wl_analyst_viewer`, plus the `wl_editor` / `wl_viewer` aliases)
+are removed with the app. Users who held these roles lose them
+automatically.
+
+**Recovery log** (`lookups/_versions/_recovery_log.jsonl`) is
+removed with the app's `lookups/` directory. If your retention
+policy requires preserving recovery actions after uninstall, copy
+that file out first.
 
 ---
 
@@ -393,10 +578,20 @@ The custom roles (`wl_editor`, `wl_viewer`) are removed with the app. Users who 
 | App folder | `$SPLUNK_HOME/etc/apps/wl_manager/` |
 | REST endpoint | `https://<splunk>:8089/services/custom/wl_manager` |
 | Web dashboard | `https://<splunk>:8000/app/wl_manager/whitelist_manager` |
-| Audit index | `wl_audit` |
-| Audit log file | `$SPLUNK_HOME/var/log/splunk/wl_manager_audit.log` |
+| Audit destination | `index=wl_audit` (all audit events go to this Splunk index — there is no separate log file) |
 | Mapping CSV | `$SPLUNK_HOME/etc/apps/wl_manager/lookups/rule_csv_map.csv` |
-| Edit role | `wl_editor` |
-| View role | `wl_viewer` |
-| Python version | Python 3 |
-| Splunk version | 8.x+ / 9.x (tested on 9.3.1) |
+| KV collections | `wl_cooldowns`, `wl_fim_baseline`, `wl_presence_state`, `wl_ratelimit_state` (see `default/collections.conf`) |
+| Roles | 4 modern (`wl_superadmin`, `wl_admin`, `wl_analyst_editor`, `wl_analyst_viewer`) + 2 backward-compat aliases (`wl_editor`, `wl_viewer`) — see `default/authorize.conf` |
+| Python version | `python3` + `python.required = 3.13` (see `default/restmap.conf`) |
+| Splunk version | See `app.manifest` `platformRequirements.splunk.Enterprise` for the minimum |
+| App version | See `default/app.conf` `[launcher].version` and `[install].build` for current values |
+| Recovery scripts | `scripts/emergency_unlock.sh`, `scripts/reset_cooldowns.sh`, `scripts/fim_deploy_window.sh` — see `docs/RUNBOOKS.md` |
+
+---
+
+## Trademark notice
+
+Splunk, Splunk Enterprise, and Splunk Enterprise Security are
+registered trademarks of Splunk LLC in the United States and other
+countries. This project is an independent community tool — it is
+not affiliated with, endorsed by, or sponsored by Splunk LLC.
