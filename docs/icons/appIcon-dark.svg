@@ -1,14 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Whitelist Manager — app icon (DARK THEME variant)
-  Renders best on Splunk's dark dashboard background (~#0a1f3d).
 
-  Same composition as appIcon-light.svg (concept-1 document-with-badge).
-  Palette is tuned for dark backgrounds — all colors lifted slightly
-  so the icon stays vivid against very dark navy without changing the
-  brand mark itself.
+  Same composition + slate-grey backdrop as appIcon-light.svg.
+  Palette inside the shield is shifted +12% lightness for visibility
+  against Splunk's dark dashboard chrome; the slate backdrop itself
+  is unchanged because it already works in both themes (theme-stable
+  premium tile).
 
   Light vs Dark palette shifts:
+    Backdrop:      #2E3A47   (unchanged — works on both themes)
     Shield:        #1FB8C9  →  #2DD0E2   (+12% lightness, more pop)
     Document body: #D6DCE0  →  #E2E7EC   (+3% lightness)
     Outline:       #1A1A1A  →  #2A2A2A   (softer black, less harsh edge)
@@ -16,18 +17,15 @@
     List rows:     #8A95A0  →  #9AA5B0   (lifted, still subordinate)
     Check badge:   #1A1A1A   (unchanged — max contrast against aqua check)
     Check stroke:  #1FB8C9  →  #2DD0E2   (matches lifted shield)
-
-  Why not identical to the light variant? Splunk's convention is
-  appIcon.png (light bg) + appIconAlt.png (dark bg) as separate files.
-  Even though our aqua works on both backgrounds, providing two
-  optimized files honors the convention and gives slightly better
-  rendering on dark Splunk dashboards.
 -->
 <svg xmlns="http://www.w3.org/2000/svg"
      viewBox="0 0 256 256"
      width="256" height="256"
      role="img"
-     aria-label="Whitelist Manager — dark theme variant, aqua shield with document and check badge">
+     aria-label="Whitelist Manager — dark theme variant, aqua shield with document and check badge, on slate grey tile">
+
+  <!-- Slate grey backdrop (same as light variant — see appIcon-light.svg) -->
+  <rect x="0" y="0" width="256" height="256" fill="#2E3A47"/>
 
   <!-- Shield silhouette (brighter aqua for dark backgrounds) -->
   <path d="M 40 40

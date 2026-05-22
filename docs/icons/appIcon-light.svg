@@ -1,19 +1,29 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Whitelist Manager — app icon (LIGHT THEME variant)
-  Renders best on white / light-gray Splunk launcher backgrounds.
 
   Promoted from docs/icons/concepts/concept-1-document-with-badge.svg
-  on 2026-05-22 after maintainer review of four candidate concepts.
+  on 2026-05-22. Backdrop iterated through three variants before
+  settling on the current one:
+    1. Transparent corners (original) — Splunk launcher's green
+       img-bg #65A637 leaked through, looked unintentional
+    2. White corners (commit a0b38f1) — visually clean but stood
+       out as the only white tile in the launcher row vs neighbors
+    3. Slate grey #2E3A47 (CURRENT) — strong aqua-on-dark contrast,
+       theme-stable, distinctive without competing with Splunk's
+       brand color neighbors
 
   Visual concept:
+    - Slate grey backdrop    = neutral premium tile, no img-bg leak
     - Aqua shield silhouette = security / protection container
     - Document inside        = the whitelist itself (paper + 3 list rows)
     - Black check badge      = the "approved / allowed" affordance
 
   Color rationale:
-    - #1FB8C9 aqua       : brand-primary, distinguishes from Splunk's
-                           own teal while staying technical/calm
+    - #2E3A47 slate grey : tile backdrop, theme-stable on both light
+                           and dark Splunk launchers; strong contrast
+                           with aqua shield without competing
+    - #1FB8C9 aqua       : brand-primary, the shield silhouette
     - #D6DCE0 light grey : paper body, high contrast against aqua
     - #1A1A1A near-black : document outline + check badge, anchors
                            the composition at small sizes
@@ -21,23 +31,35 @@
                            visual top without text
     - #8A95A0 mid grey   : list rows, subtle "this is a list" hint
 
-  Export targets (via Inkscape File → Export PNG):
-    appserver/static/appIcon.png     36×36   (Splunk launcher tile)
-    appserver/static/appIcon_2x.png  72×72   (retina / HiDPI)
-    (Optional) larger sizes for Splunkbase listing: 144×144, 512×512
+  Export targets (via scripts/svg2png.js):
+    static/appIcon.png             36×36   (Splunk launcher tile — bare path)
+    static/appIcon_2x.png          72×72
+    appserver/static/appIcon.png   36×36   (Splunkbase convention)
+    appserver/static/appIcon_2x.png  72×72
+    docs/icons/exports/wl_manager-icon-144.png  144×144  (Splunkbase listing)
+    docs/icons/exports/wl_manager-icon-512.png  512×512  (high-DPI fallback)
 
   ViewBox is 256×256 so all export sizes are clean integer divisions.
 
-  All inner geometry is verified to stay strictly within the shield
-  path's interior — see docs/icons/README.md for the safe-zone math.
+  See docs/icons/README.md "Splunk quirk: launcher icon path" and
+  CLAUDE.md "Splunk Quirks" for the dual-location + img-bg-leak history.
 -->
 <svg xmlns="http://www.w3.org/2000/svg"
      viewBox="0 0 256 256"
      width="256" height="256"
      role="img"
-     aria-label="Whitelist Manager — aqua shield containing document with check badge">
+     aria-label="Whitelist Manager — aqua shield containing document with check badge, on slate grey tile">
 
-  <!-- Shield silhouette (aqua, brand primary) -->
+  <!-- Slate grey backdrop. Splunk's launcher applies background-color
+       #65A637 to every app-icon <img>; the opaque slate fill prevents
+       that color from leaking through the curved-bottom shield's
+       transparent corners. See CLAUDE.md "Splunk Quirks". -->
+  <rect x="0" y="0" width="256" height="256" fill="#2E3A47"/>
+
+  <!-- Shield silhouette (aqua, brand primary). Inset within the
+       viewBox; the curved bottom tip is what gives this its classic
+       "shield" identity. The transparent areas outside this path
+       are filled by the slate backdrop above. -->
   <path d="M 40 40
            L 216 40
            L 216 144
