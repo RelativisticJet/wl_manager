@@ -1,13 +1,18 @@
 # Whitelist Manager for Splunk
 
 <!--
-  Version badge auto-updates from the latest GitHub Release once the repo is
-  public AND a release is tagged. Until then it shows "no release" — which is
-  the correct signal for an unreleased app. Do NOT hardcode the version here.
+  Version badge auto-updates from the latest GitHub Release (including
+  pre-releases like v1.0.0-rc1 during the public hold period). Once a
+  non-prerelease tag is cut (Phase 3.8 GA), the badge updates
+  automatically. Do NOT hardcode the version here.
+
+  Splunk badge auto-sources from app.manifest via shields.io's
+  dynamic/json endpoint — bumping platformRequirements.splunk.Enterprise
+  in app.manifest updates the badge with no README edit needed.
 -->
-[![Version](https://img.shields.io/github/v/release/RelativisticJet/wl_manager?label=version&color=blue)](https://github.com/RelativisticJet/wl_manager/releases)
+[![Version](https://img.shields.io/github/v/release/RelativisticJet/wl_manager?include_prereleases&label=version&color=blue)](https://github.com/RelativisticJet/wl_manager/releases)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-green.svg)](LICENSE)
-[![Splunk](https://img.shields.io/badge/Splunk-9.3-orange.svg)](https://www.splunk.com/)
+[![Splunk](https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/RelativisticJet/wl_manager/main/app.manifest&label=Splunk&query=%24.platformRequirements.splunk.Enterprise&color=orange)](https://www.splunk.com/)
 [![Python](https://img.shields.io/badge/Python-3.9+-yellow.svg)](https://www.python.org/)
 [![Docs](https://img.shields.io/badge/docs-relativisticjet.github.io%2Fwl__manager-blue?logo=readthedocs&logoColor=white)](https://relativisticjet.github.io/wl_manager/)
 
