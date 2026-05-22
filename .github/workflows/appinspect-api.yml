@@ -67,7 +67,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Build .spl
         run: bash scripts/package.sh
@@ -105,7 +105,7 @@ jobs:
           echo "Staged for AppInspect: $APPINSPECT_DIR/$(basename "$SPL_FILE")"
 
       - name: AppInspect API — Cloud Vetting profile (cloud tag)
-        uses: splunk/appinspect-api-action@v3.0.5
+        uses: splunk/appinspect-api-action@86013a62b0c773d1e9cd4623080b4495973936c3 # v3.0.5
         with:
           username: ${{ secrets.SPLUNK_DEV_USERNAME }}
           password: ${{ secrets.SPLUNK_DEV_PASSWORD }}
@@ -115,7 +115,7 @@ jobs:
 
       - name: AppInspect API — Self-Service Cloud profile (private_app tag)
         if: always()
-        uses: splunk/appinspect-api-action@v3.0.5
+        uses: splunk/appinspect-api-action@86013a62b0c773d1e9cd4623080b4495973936c3 # v3.0.5
         with:
           username: ${{ secrets.SPLUNK_DEV_USERNAME }}
           password: ${{ secrets.SPLUNK_DEV_PASSWORD }}

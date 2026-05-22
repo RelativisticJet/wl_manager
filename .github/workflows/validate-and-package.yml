@@ -21,7 +21,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
     # Bash is pre-installed on `ubuntu-latest` runners. The prior
     # "Set up Bash environment" step that ran `apt-get install bash`
@@ -47,7 +47,7 @@ jobs:
         fi
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       if: success()
       with:
         name: wl_manager-package

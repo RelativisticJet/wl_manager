@@ -32,10 +32,13 @@ on:
     # synchronized load with other GitHub-hosted workflows.
     - cron: '17 6 * * 1'
 
+# Workflow-scope = least privilege (read-only). The `analyze` job
+# below elevates to `security-events: write` for uploading CodeQL
+# results to the Code Scanning UI. This pattern silences Scorecard's
+# TokenPermissions warning by scoping the write to the specific job
+# that needs it.
 permissions:
-  actions: read
   contents: read
-  security-events: write
 
 # Cancel in-flight CodeQL runs on the same ref (PR pushes can stack).
 concurrency:
@@ -55,6 +58,10 @@ jobs:
     if: github.event.repository.private == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
 
     strategy:
       fail-fast: false
@@ -63,10 +70,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@03e4368ac7daa2bd82b3e85262f3bf87ee112f57 # v3
         with:
           languages: ${{ matrix.language }}
           # Default query pack: security-and-quality.
@@ -78,9 +85,9 @@ jobs:
       # autobuild is a no-op for both but harmless to leave in — it's
       # the documented step for compiled-language matrices.
       - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+        uses: github/codeql-action/autobuild@03e4368ac7daa2bd82b3e85262f3bf87ee112f57 # v3
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@03e4368ac7daa2bd82b3e85262f3bf87ee112f57 # v3
         with:
           category: "/language:${{ matrix.language }}"

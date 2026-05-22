@@ -4,8 +4,12 @@ on:
   release:
     types: [published]
 
+# Workflow-scope = least privilege (read-only). The `release` job below
+# elevates to `contents: write` + `id-token: write` for asset upload +
+# Sigstore OIDC. This pattern silences Scorecard's TokenPermissions
+# warning by scoping writes to the specific job that needs them.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
@@ -42,10 +46,10 @@ jobs:
       # format changed and the flag became required). Without it, the
       # workflow will fail or emit invalid signatures. See DECISION_LOG
       # 2026-05-20 row for the full bump-safety checklist.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.11"
 
@@ -76,7 +80,7 @@ jobs:
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
       #     wl_manager-<v>.spl
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
         with:
           cosign-release: 'v2.4.1'
 
