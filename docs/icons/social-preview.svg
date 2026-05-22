@@ -81,8 +81,11 @@
   </text>
 
   <!-- Aqua underline accent — picks up the shield color, anchors
-       the headline visually like a brand mark -->
-  <rect x="520" y="312" width="100" height="6" rx="3" fill="#1FB8C9"/>
+       the headline visually like a brand mark. Width measured via
+       headless Chromium getBBox() on the headline text (520→1157
+       at 76pt bold, letter-spacing -1.5) so the underline matches
+       the headline's exact rendered width. -->
+  <rect x="520" y="312" width="637" height="6" rx="3" fill="#1FB8C9"/>
 
   <!-- SUBTITLE line 1 — "for Splunk Enterprise Security" -->
   <text x="520" y="385"
@@ -102,8 +105,12 @@
     Audit-traced detection-rule whitelisting
   </text>
 
-  <!-- Bottom-right corner credit (small, subtle) -->
-  <text x="1210" y="610"
+  <!-- Bottom-right corner credit (small, subtle). Right-anchored at
+       x=1157 so its right edge aligns with the headline's right edge
+       (measured via getBBox — see the underline accent rationale
+       above). Same right-edge column gives the composition a clean
+       vertical alignment between the headline and the URL credit. -->
+  <text x="1157" y="610"
         font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
         font-size="20"
         font-weight="400"
