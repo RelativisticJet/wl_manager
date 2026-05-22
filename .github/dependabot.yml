@@ -5,10 +5,21 @@
 #
 # Ecosystems we declare:
 #   - pip (root)           → requirements-dev.txt at repo root
-#                            (only Python manifest in this repo today;
-#                            Splunk-bundled Python provides runtime
+#                            (Splunk-bundled Python provides runtime
 #                            stdlib, no runtime requirements.txt yet)
+#   - pip (/requirements)  → hashed lockfiles consumed by the CI
+#                            workflows (test.txt, docs.txt,
+#                            pip-audit.txt, appinspect.txt). See
+#                            requirements/README.md for the .in/.txt
+#                            regeneration workflow.
 #   - github-actions       → all .github/workflows/*.yml
+#
+# Dependabot will open PRs against the `.txt` lockfiles when a pinned
+# dep has a new version. The `.in` source files are NOT scanned (pip
+# ecosystem recognizes `.txt` only). After merging a Dependabot PR
+# that bumps a `.txt` file, run `scripts/regen_requirements.sh` to
+# re-pin the matching `.in` constraints (or the next manual regen
+# would undo the bump). This is documented in requirements/README.md.
 #
 # Not declaring a separate `/tests` pip block: there is no
 # tests/requirements*.txt — the test extras live in the same root
@@ -42,6 +53,29 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "deps(pip)"
+      include: scope
+
+  # Python — hashed CI lockfiles under requirements/.
+  # Dependabot will update the version + hash atomically in each
+  # `.txt` file when a pinned dep has a new release. The `.in`
+  # source files are not scanned (pip ecosystem reads `.txt` only);
+  # after merging a Dependabot PR, run `scripts/regen_requirements.sh`
+  # to re-pin the `.in` constraint so the next manual regen does
+  # not undo the bump. See requirements/README.md.
+  - package-ecosystem: pip
+    directory: "/requirements"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    labels:
+      - dependencies
+      - python
+      - ci
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(pip-ci)"
       include: scope
 
   # GitHub Actions — pinned action versions in workflows
