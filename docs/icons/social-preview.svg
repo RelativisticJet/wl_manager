@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Whitelist Manager — GitHub social preview banner
+
+  Dimensions: 1280×640 (GitHub's recommended OG image size; also fits
+  Twitter / Discord / Slack unfurls without cropping).
+
+  Composition mirrors the launcher icon's visual language:
+    - Slate-grey background (#2E3A47) — same as the launcher tile
+    - Aqua shield + document + check badge — same composition as
+      docs/icons/appIcon-light.svg, scaled up to ~512×512 on the left
+    - Headline + subtitle stacked on the right
+
+  Export target: docs/icons/exports/social-preview-1280x640.png
+  Upload via: GitHub repo Settings → "Social preview" → upload PNG
+
+  ViewBox is 1280×640 so all export sizes are clean integer divisions.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 1280 640"
+     width="1280" height="640"
+     role="img"
+     aria-label="Whitelist Manager for Splunk Enterprise Security — audit-traced detection-rule whitelisting">
+
+  <!-- Slate grey backdrop (same as icon tile, brand consistency) -->
+  <rect x="0" y="0" width="1280" height="640" fill="#2E3A47"/>
+
+  <!-- Subtle vertical accent band on the LEFT edge to anchor the icon -->
+  <rect x="0" y="0" width="6" height="640" fill="#1FB8C9"/>
+
+  <!-- ICON GROUP — shield + document + check badge, scaled
+       and positioned at the left of the banner. The 256×256 viewBox
+       content is transformed to occupy 400×400 pixels (vertically
+       centered at y=120-520). Tightened from 480×480 so the right
+       column has more room for the headline. -->
+  <g transform="translate(80 120) scale(1.5625)">
+    <!-- Shield silhouette (aqua) — same geometry as appIcon-light.svg -->
+    <path d="M 40 40 L 216 40 L 216 144 Q 216 200 128 232 Q 40 200 40 144 Z"
+          fill="#1FB8C9"/>
+
+    <!-- Document body (light grey paper with black outline) -->
+    <rect x="72" y="64" width="112" height="124"
+          rx="6" ry="6"
+          fill="#D6DCE0"
+          stroke="#1A1A1A"
+          stroke-width="4"/>
+
+    <!-- Document title bar -->
+    <rect x="80" y="76" width="60" height="8"
+          rx="4" ry="4"
+          fill="#4A5560"/>
+
+    <!-- Three list rows -->
+    <circle cx="86" cy="108" r="4" fill="#8A95A0"/>
+    <rect x="98" y="105" width="72" height="6" rx="3" fill="#8A95A0"/>
+    <circle cx="86" cy="130" r="4" fill="#8A95A0"/>
+    <rect x="98" y="127" width="64" height="6" rx="3" fill="#8A95A0"/>
+    <circle cx="86" cy="152" r="4" fill="#8A95A0"/>
+    <rect x="98" y="149" width="56" height="6" rx="3" fill="#8A95A0"/>
+
+    <!-- Check badge -->
+    <circle cx="170" cy="178" r="18" fill="#1A1A1A"/>
+    <path d="M 160 178 L 168 186 L 180 172"
+          fill="none"
+          stroke="#1FB8C9"
+          stroke-width="4"
+          stroke-linecap="round"
+          stroke-linejoin="round"/>
+  </g>
+
+  <!-- HEADLINE — large white sans-serif, anchored at left of right
+       column. Sized to fit within the 1280-x_start = 760px usable
+       width with margin. -->
+  <text x="520" y="290"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+        font-size="76"
+        font-weight="700"
+        fill="#FFFFFF"
+        letter-spacing="-1.5">
+    Whitelist Manager
+  </text>
+
+  <!-- Aqua underline accent — picks up the shield color, anchors
+       the headline visually like a brand mark -->
+  <rect x="520" y="312" width="100" height="6" rx="3" fill="#1FB8C9"/>
+
+  <!-- SUBTITLE line 1 — "for Splunk Enterprise Security" -->
+  <text x="520" y="385"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+        font-size="38"
+        font-weight="400"
+        fill="#E2E7EC">
+    for Splunk Enterprise Security
+  </text>
+
+  <!-- SUBTITLE line 2 — the value prop -->
+  <text x="520" y="435"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+        font-size="30"
+        font-weight="400"
+        fill="#9AA5B0">
+    Audit-traced detection-rule whitelisting
+  </text>
+
+  <!-- Bottom-right corner credit (small, subtle) -->
+  <text x="1210" y="610"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+        font-size="20"
+        font-weight="400"
+        fill="#5A6570"
+        text-anchor="end">
+    github.com/RelativisticJet/wl_manager
+  </text>
+</svg>
