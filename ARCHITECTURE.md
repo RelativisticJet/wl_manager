@@ -111,12 +111,15 @@ non-exempt POST actions with a lockdown error. Deactivation
 requires a DIFFERENT `wl_superadmin` (self-unlock blocked) — this
 is the highest-stakes two-superadmin enforcement in the app.
 
-The exempt-action set is narrow: lockdown deactivation,
-notifications, approval-gate probes, presence updates, column
-width persistence, FIM deploy-window open/close, and a small set
-of read-only diagnostics. Sentinel-file mutations always stay at
-HIGH severity even during deploy windows; legitimate deploys
-never touch them.
+The exempt-action set is narrow — see `LOCKDOWN_EXEMPT_ACTIONS`
+in `bin/wl_handler.py` for the authoritative list. It covers
+lockdown deactivation, notifications, approval-gate / daily-limit
+probes, presence updates, column-width persistence, FIM
+deploy-window open/close, and the `bootstrap_csv_hashes` recovery
+action needed after a disaster-recovery GUID rotation while
+lockdown is active. Sentinel-file mutations always stay at HIGH
+severity even during deploy windows; legitimate deploys never
+touch them.
 
 ## Frontend (JavaScript)
 
