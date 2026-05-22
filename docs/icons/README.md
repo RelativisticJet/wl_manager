@@ -29,10 +29,6 @@ Two reads at every size:
 2. **At 144×144+** — distinguishable "secure whitelist document
    with approval mark" composition
 
-Promoted from `concepts/concept-1-document-with-badge.svg` on
-2026-05-22 after side-by-side comparison of four candidate
-directions.
-
 ## Color palette
 
 | Token | Light SVG | Dark SVG | Role |

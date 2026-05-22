@@ -2,8 +2,7 @@
 <!--
   Whitelist Manager — app icon (LIGHT THEME variant)
 
-  Promoted from docs/icons/concepts/concept-1-document-with-badge.svg
-  on 2026-05-22. Backdrop iterated through three variants before
+  Backdrop iterated through three variants before
   settling on the current one:
     1. Transparent corners (original) — Splunk launcher's green
        img-bg #65A637 leaked through, looked unintentional
