@@ -55,9 +55,10 @@ jobs:
         # Pinned to the same versions as ci.yml's unit-tests job
         # (same requirements/test.txt lockfile — guarantees no
         # dep-drift between the unit-vs-integration runs).
-        run: |
-          python -m pip install --upgrade pip
-          pip install --require-hashes -r requirements/test.txt
+        # `pip install --upgrade pip` omitted intentionally — pip
+        # self-upgrade can't be hash-pinned. See ci.yml for the
+        # full rationale.
+        run: pip install --require-hashes -r requirements/test.txt
 
       - name: Start Splunk container
         # docker-compose.yml binds default/, bin/, lookups/, etc.

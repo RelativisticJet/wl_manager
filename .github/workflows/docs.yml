@@ -70,9 +70,9 @@ jobs:
         # wheel. We bump the .in file + regenerate the .txt as part
         # of the quarterly version-pinning audit
         # (PUBLIC_RELEASE_PLAN.md §8 5.5).
-        run: |
-          python -m pip install --upgrade pip
-          pip install --require-hashes -r requirements/docs.txt
+        # No `pip install --upgrade pip` — pip self-upgrade can't be
+        # hash-pinned; see ci.yml for the rationale.
+        run: pip install --require-hashes -r requirements/docs.txt
 
       - name: Build site
         # Initial deploy uses `--verbose` only so legacy relative links
@@ -133,9 +133,9 @@ jobs:
         # Same lockfile as the build job — see requirements/docs.txt.
         # Both jobs MUST stay synchronized; regenerating one updates
         # both via the shared requirements file.
-        run: |
-          python -m pip install --upgrade pip
-          pip install --require-hashes -r requirements/docs.txt
+        # No `pip install --upgrade pip` — pip self-upgrade can't be
+        # hash-pinned; see ci.yml for the rationale.
+        run: pip install --require-hashes -r requirements/docs.txt
 
       - name: Build site
         # Same posture as the build job — verbose without strict for v1

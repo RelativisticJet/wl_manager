@@ -84,9 +84,9 @@ jobs:
         # locally, and update `.planning/appinspect/appinspect-*-phase1.json`
         # + the APPINSPECT_FINDINGS.md headline-numbers table in the
         # same commit.
-        run: |
-          python -m pip install --upgrade pip
-          pip install --require-hashes -r requirements/appinspect.txt
+        # No `pip install --upgrade pip` — pip self-upgrade can't be
+        # hash-pinned; see ci.yml for the rationale.
+        run: pip install --require-hashes -r requirements/appinspect.txt
 
       - name: Build .spl
         run: bash scripts/package.sh
