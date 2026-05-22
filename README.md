@@ -29,6 +29,20 @@ without touching raw CSV files, Splunk configs, or the filesystem.
 > (deploys at Phase 3.4 public flip; until then, read directly from
 > [`docs/`](docs/) in this repo).
 
+## Table of Contents
+
+- [Screenshots](#screenshots)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Post-Installation Setup](#post-installation-setup)
+- [Architecture](#architecture)
+- [Development](#development)
+- [Requirements](#requirements)
+- [License](#license)
+- [Contributing](#contributing)
+- [Support This Project](#support-this-project)
+- [Trademark Notice](#trademark-notice)
+
 ## Screenshots
 
 **Main Dashboard** — Inline editing with change tracking, search, pagination, and bulk operations
@@ -270,6 +284,8 @@ Semgrep rules that gate against SSRF, command injection, and path traversal.
 If you add a new validation wrapper (e.g. a path or URL sanitizer), update the
 corresponding `tests/semgrep/*-splunk.yaml` `pattern-sanitizers` list in the
 same PR, or legitimate callers of your wrapper will trip the rule.
+
+<a id="support-this-project"></a>
 
 ## 💖 Support This Project
 
