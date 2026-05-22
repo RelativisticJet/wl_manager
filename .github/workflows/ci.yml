@@ -108,10 +108,14 @@ jobs:
         # Splunk container — see the gate notice at top of file).
         # pytest 9.0.3+ required to close GHSA-6w46-j5rx-g56g
         # (round 7 B4, 2026-04-29 pip-audit run).
+        #
+        # Versions + hashes locked in requirements/test.txt
+        # (regenerated via scripts/regen_requirements.sh — see
+        # requirements/README.md). --require-hashes closes the
+        # Scorecard PinnedDependencies/pipCommand finding.
         run: |
           python -m pip install --upgrade pip
-          pip install pytest==9.0.3 pytest-cov==5.0.0 freezegun==1.5.1 \
-                      hypothesis==6.90.0 pytest-timeout==2.1.0
+          pip install --require-hashes -r requirements/test.txt
 
       - name: Run unit tests
         # The unit suite mocks Splunk REST + filesystem layers; no

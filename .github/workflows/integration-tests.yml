@@ -52,14 +52,12 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python deps
-        # Pinned to the same versions as ci.yml's unit-tests job.
-        # Including pytest-cov even though the integration suite
-        # doesn't use --cov by default — keeps the env identical
-        # so a failure here vs there isn't dep-drift.
+        # Pinned to the same versions as ci.yml's unit-tests job
+        # (same requirements/test.txt lockfile — guarantees no
+        # dep-drift between the unit-vs-integration runs).
         run: |
           python -m pip install --upgrade pip
-          pip install pytest==9.0.3 pytest-cov==5.0.0 freezegun==1.5.1 \
-                      hypothesis==6.90.0 pytest-timeout==2.1.0
+          pip install --require-hashes -r requirements/test.txt
 
       - name: Start Splunk container
         # docker-compose.yml binds default/, bin/, lookups/, etc.
