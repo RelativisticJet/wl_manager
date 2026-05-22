@@ -116,6 +116,20 @@ cp "$PROD_MAP" "$APP_DIR/lookups/rule_csv_map.csv"
 #   3. Step 4b below adds a post-tar sanity check that fails the build
 #      if known-bad patterns appear in the tarball — backstop in case
 #      a new prohibited path bypasses both layers above.
+#
+# IMPORTANT: top-level debug PNGs are excluded with `--anchored
+# --no-wildcards-match-slash` toggles applied JUST BEFORE the `*.png`
+# pattern (after the rest of the excludes). GNU tar 1.35 defaults to
+# `--wildcards-match-slash`, which would make `$APP_NAME/*.png` strip
+# ALL .png files at any depth — including the launcher icons in
+# `static/` and `appserver/static/` that the Splunk launcher REST
+# endpoint needs (see CLAUDE.md "Launcher icon path quirk"). The two
+# `--no-...` flags constrain the wildcard to top-level only, so debug
+# screenshots at the repo root (a11y-*.png, demo-*.png, v-*.png, ...)
+# stay excluded while the icon PNGs pass through. Origin: QA review
+# after build d67b6e7 + 7b98203 caught the wildcard eating every
+# appIcon copy in the .spl, making the launcher tile fall back to
+# Splunk's system-default placeholder.
 tar -czf "$SPL_FILE" \
     -C "$(dirname "$APP_DIR")" \
     --exclude='*/.*' \
@@ -152,13 +166,14 @@ tar -czf "$SPL_FILE" \
     --exclude="$APP_NAME/local" \
     --exclude="$APP_NAME/*.spl" \
     --exclude="$APP_NAME/*.pdf" \
-    --exclude="$APP_NAME/*.png" \
     --exclude="$APP_NAME/test_*.py" \
     --exclude="$APP_NAME/*-after-*" \
     --exclude="$APP_NAME/login-check" \
     --exclude="$APP_NAME/default/data/ui/views/test_runner.xml" \
     --exclude="$APP_NAME/appserver/static/test_runner.xml" \
     --exclude="$APP_NAME/appserver/static/tests" \
+    --anchored --no-wildcards-match-slash \
+    --exclude="$APP_NAME/*.png" \
     "$APP_NAME/"
 
 # Restore the original mapping file
