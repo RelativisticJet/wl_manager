@@ -55,13 +55,20 @@ def browser():
     )
     page = context.new_page()
 
-    # Login to Splunk
+    # Login to Splunk.
+    # Selector note: Splunk's login form submits via <input type="submit">,
+    # NOT <button>. The prior 'button:has-text("Sign in")' selector never
+    # matched, so every test using this fixture silently fell through to a
+    # login-page DOM and timed out on app-level locators. Fixed 2026-05-24
+    # during the playwright 1.40 → 1.60 baseline (PR #13). The bug was
+    # invisible because Python E2E was never CI-gated; only test_wl_save.py
+    # passed (it defines its own inline login flow with the right selector).
     try:
         page.goto("http://localhost:8000/en-US/account/login", wait_until="networkidle")
         page.fill('input[name="username"]', "admin")
         page.fill('input[name="password"]', "Chang3d!")
-        page.click('button:has-text("Sign in")')
-        page.wait_for_load_state("networkidle", timeout=10000)
+        page.click('input[type="submit"]')
+        page.wait_for_url("**/en-US/**", timeout=15000)
     except Exception as e:
         print(f"Login failed: {e}")
 
@@ -90,13 +97,14 @@ def admin_browser():
     )
     page = context.new_page()
 
-    # Login as admin (same user, but separate browser session)
+    # Login as admin (same user, but separate browser session).
+    # See selector note on the `browser` fixture above — same fix.
     try:
         page.goto("http://localhost:8000/en-US/account/login", wait_until="networkidle")
         page.fill('input[name="username"]', "admin")
         page.fill('input[name="password"]', "Chang3d!")
-        page.click('button:has-text("Sign in")')
-        page.wait_for_load_state("networkidle", timeout=10000)
+        page.click('input[type="submit"]')
+        page.wait_for_url("**/en-US/**", timeout=15000)
     except Exception as e:
         print(f"Admin login failed: {e}")
 
