@@ -1,344 +1,469 @@
-"""Page object models for Whitelist Manager E2E tests."""
+"""Page object models for Whitelist Manager E2E tests.
+
+Selector reference: derived from `tests/test_e2e_realworld.py` and
+`tests/e2e/test_wl_save.py`, which are the two Python E2E files that
+have ever actually worked. The previous (pre-2026-05-24) version of
+this file used a guessed DOM model — `<select>` for the detection-rule
+picker, `<button>` for action buttons — and never matched the real app.
+
+The real app:
+  - Detection-rule picker = `#rule-search` input + `#rule-list .wl-dropdown-item[data-value=...]`
+  - CSV picker          = `#csv-display` trigger + `.wl-csv-item[data-csv=...]`
+  - Table              = `#csv-table-container table tbody tr`
+  - Cells              = `<textarea class="wl-input">` or `<input class="wl-input">` inside `<td>`
+  - Action buttons     = `#btn-save`, `#btn-add-row`, `.btn-rm[data-idx]`, `.btn-danger`, `.btn-primary`
+  - Modals             = `.wl-modal-overlay` (cover) with `.wl-modal` inside; `<textarea>` for reasons
+
+If any of those change, fix them HERE and the workflow tests inherit
+automatically. Do NOT bypass these helpers with bare `self.page.locator(...)`
+in workflow tests — that's how we ended up with 14 `.locators()` typos.
+"""
 import time
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from playwright.sync_api import Page
 
 
 class SplunkPage:
-    """Base page object handling Splunk-specific UI quirks."""
+    """Base page object: nav + ready-state helpers."""
 
     def __init__(self, page: Page, base_url: str = "http://localhost:8000"):
-        """Initialize page object with Playwright page instance."""
         self.page = page
         self.base_url = base_url
 
     def goto(self, path: str) -> None:
-        """Navigate to Splunk page and wait for content load."""
-        self.page.goto(f"{self.base_url}{path}", wait_until="networkidle")
-        self.wait_for_splunk_load()
+        """Navigate inside the Splunk app. Path must start with `/`.
 
-    def wait_for_splunk_load(self) -> None:
-        """Wait for Splunk panels to fully render and become interactive."""
+        Tolerates `net::ERR_ABORTED` raised by Splunk's redirect chain
+        (302 from /app/... to /en-US/app/...). The redirect itself
+        is fine; playwright surfaces it as ERR_ABORTED because the
+        original request was cancelled by the redirect. We catch and
+        let the wait_for_load_state below confirm the page actually
+        rendered.
+        """
+        full = f"{self.base_url}{path}"
         try:
-            # Wait for at least one panel to appear
-            self.page.wait_for_selector('div[class*="panel"]', timeout=5000)
-            time.sleep(0.5)  # Extra buffer for animations and dynamic content
+            self.page.goto(full, wait_until="domcontentloaded")
+        except Exception as e:
+            if "ERR_ABORTED" not in str(e):
+                raise
+            # Splunk redirect — page likely loaded under a different URL.
+            # Continue to wait_for_load_state to confirm.
+        try:
+            self.page.wait_for_load_state("networkidle", timeout=15000)
         except Exception:
-            # Panels may load via iframes or delayed rendering
+            # Splunk holds long-poll connections open; networkidle may
+            # never fire on busy dashboards. Continue regardless.
             pass
-
-    def get_iframe_page(self, panel_name: str):
-        """Get page context within an iframe (for HTML panels)."""
-        iframe_locator = f'iframe[name*="{panel_name}"]'
-        frame = self.page.frame_locator(iframe_locator).first
-        return frame
+        time.sleep(0.5)
 
 
 class WhitelistManagerPage(SplunkPage):
     """Main whitelist manager dashboard page object."""
 
-    def load_csv(self, csv_name: str) -> None:
-        """Load a CSV file from detection rule dropdown."""
-        # Wait for dropdown to be interactive
-        self.page.wait_for_selector('select, div[class*="dropdown"]', timeout=5000)
+    DASHBOARD_PATH = "/en-US/app/wl_manager/whitelist_manager"
+
+    def goto_app(self) -> None:
+        self.goto(self.DASHBOARD_PATH)
+        time.sleep(2)  # SPA hydration
+
+    def select_rule(self, rule_name: str) -> bool:
+        """Pick a detection rule from the dropdown. Returns True on success."""
+        self.page.locator("#rule-search").click()
         time.sleep(0.3)
+        self.page.locator("#rule-search").fill("")
+        time.sleep(0.2)
+        self.page.locator("#rule-search").fill(rule_name)
+        time.sleep(0.5)
+        item = self.page.locator(
+            f'#rule-list .wl-dropdown-item[data-value="{rule_name}"]'
+        )
+        if item.count() > 0:
+            item.first.click()
+            time.sleep(2)
+            return True
+        return False
 
-        # Try to find and click detection rule select
-        dropdowns = self.page.locators('select').all()
-        if dropdowns:
-            # If there's a select element, use it
-            dropdowns[0].select_option(csv_name)
-        else:
-            # Otherwise try custom Splunk dropdown
-            dropdown = self.page.locator('div[class*="dropdown"]').first
-            if dropdown.is_visible():
-                dropdown.click()
-                self.page.wait_for_selector(f'text="{csv_name}"', timeout=5000)
-                self.page.click(f'text="{csv_name}"')
+    def select_csv(self, csv_name: str) -> bool:
+        """Pick a CSV from the dropdown (requires a rule to be selected first)."""
+        self.page.locator("#csv-display").click()
+        time.sleep(0.5)
+        item = self.page.locator(f'.wl-csv-item[data-csv="{csv_name}"]')
+        if item.count() > 0:
+            item.first.click()
+            time.sleep(2)
+            return True
+        return False
 
-        self.page.wait_for_load_state("networkidle", timeout=10000)
+    def load_csv(self, csv_name: str, rule_name: Optional[str] = None) -> None:
+        """Load a CSV. If rule_name is omitted, derive from the standard map.
+
+        The app's UI requires a rule to be selected before the CSV dropdown
+        becomes meaningful. Tests that pass csv_name only must provide a
+        rule via `rule_name`; the helper falls back to the canonical DR55
+        rule used elsewhere in the suite so legacy single-argument calls
+        don't silently break.
+        """
+        if rule_name is None:
+            # Heuristic: most legacy tests use DR55_*; pick that as the
+            # fallback. Callers that need a specific rule must pass it.
+            rule_name = "DR55_brute_force_login"
+        if not self.select_rule(rule_name):
+            raise RuntimeError(f"select_rule({rule_name!r}) failed — rule not in dropdown")
+        if not self.select_csv(csv_name):
+            raise RuntimeError(f"select_csv({csv_name!r}) failed — CSV not in dropdown for {rule_name!r}")
+        self.page.wait_for_selector("#csv-table-container table", timeout=15000)
+        time.sleep(1)
+
+    # -- Row + cell helpers --
+
+    def get_row_count(self) -> int:
+        return self.page.locator("#csv-table-container table tbody tr").count()
 
     def get_table_rows(self) -> List[Dict[str, List[str]]]:
-        """Retrieve current table rows with cell data."""
-        try:
-            rows = self.page.locators('table tbody tr').all()
-            result = []
-            for row in rows:
-                cells = row.locators('td').all()
-                cell_texts = [cell.text_content() or "" for cell in cells]
-                result.append({"cells": cell_texts})
-            return result
-        except Exception:
-            return []
+        """Return one dict per row with `cells` = list of textarea/input values."""
+        out: List[Dict[str, List[str]]] = []
+        rows = self.page.locator("#csv-table-container table tbody tr")
+        for i in range(rows.count()):
+            cells = rows.nth(i).locator("td textarea.wl-input, td input.wl-input")
+            values = [cells.nth(j).input_value() for j in range(cells.count())]
+            out.append({"cells": values})
+        return out
 
-    def edit_cell(self, row_idx: int, col_idx: int, new_value: str) -> None:
-        """Edit a cell value in the table."""
-        try:
-            # Select the cell (row_idx and col_idx are 1-based per Playwright convention)
-            cell = self.page.locator(
-                f'table tbody tr:nth-child({row_idx}) td:nth-child({col_idx})'
-            ).first
+    def get_cell_value(self, row_idx: int, col_idx: int) -> Optional[str]:
+        """0-based row+col; col 0 is the first DATA column (checkbox + rownum excluded)."""
+        row = self.page.locator("#csv-table-container table tbody tr").nth(row_idx)
+        cells = row.locator("td textarea.wl-input, td input.wl-input")
+        if cells.count() > col_idx:
+            return cells.nth(col_idx).input_value()
+        return None
+
+    def set_cell_value(self, row_idx: int, col_idx: int, value: str) -> bool:
+        row = self.page.locator("#csv-table-container table tbody tr").nth(row_idx)
+        cells = row.locator("td textarea.wl-input, td input.wl-input")
+        if cells.count() > col_idx:
+            cell = cells.nth(col_idx)
             cell.click()
+            cell.fill(value)
+            try:
+                cell.blur()
+            except Exception:
+                pass
             time.sleep(0.2)
+            return True
+        return False
 
-            # Try to fill input if it appears
-            inputs = self.page.locators('input[type="text"]').all()
-            if inputs:
-                inputs[-1].fill(new_value)  # Fill the last input (likely the active cell)
-                inputs[-1].blur()  # Trigger change detection
-                time.sleep(0.3)
-        except Exception as e:
-            print(f"Failed to edit cell: {e}")
+    def edit_cell(self, row_idx_1based: int, col_idx_1based: int, value: str) -> bool:
+        """Backwards-compat shim: legacy tests pass 1-based indices."""
+        return self.set_cell_value(row_idx_1based - 1, col_idx_1based - 1, value)
+
+    # -- Action buttons --
 
     def add_row(self) -> None:
-        """Click 'Add Row' button to add a new row."""
+        btn = self.page.locator("#btn-add-row")
+        if btn.count() == 0:
+            raise RuntimeError("#btn-add-row not present (no rule/CSV loaded?)")
+        btn.click()
+        time.sleep(0.5)
+
+    def remove_row(self, row_idx: int, reason: str = "E2E removal") -> None:
+        """Remove row by per-row btn-rm. row_idx may be 0-based OR 1-based;
+        we accept both — tests historically used 1-based, the helper uses
+        0-based throughout this file. Callers passing 0 or 1 will get the
+        SAME behavior (the first row).
+        """
+        idx_0based = row_idx - 1 if row_idx >= 1 else 0
+        row = self.page.locator("#csv-table-container table tbody tr").nth(idx_0based)
+        rm_btn = row.locator(".btn-rm")
+        if rm_btn.count() == 0:
+            raise RuntimeError(f"No .btn-rm in row index {idx_0based}")
+        rm_btn.first.click()
+        time.sleep(0.5)
+        # Modal may appear for reason
+        modal = self.page.locator(".wl-modal-overlay")
+        if modal.count() > 0 and modal.first.is_visible():
+            ta = modal.locator("textarea").first
+            if ta.count() > 0 and ta.is_visible():
+                ta.fill(reason)
+            confirm = modal.locator(".btn-danger").first
+            if confirm.count() > 0:
+                confirm.click()
+                time.sleep(1)
+
+    def save_changes(self, comment: str = "E2E save") -> Optional[str]:
+        """Click Save Changes; handle the audit-comment modal; return the
+        post-save message-container text (None if save was skipped)."""
+        self.dismiss_modals()
+        save_btn = self.page.locator("#btn-save")
+        if save_btn.count() == 0:
+            return None
         try:
-            # Splunk uses span buttons, not <button> elements
-            add_button = self.page.locator('span:has-text("Add Row")').first
-            if add_button.is_visible():
-                add_button.click()
-                self.page.wait_for_selector('input', timeout=5000)
-                time.sleep(0.3)
-        except Exception as e:
-            print(f"Failed to add row: {e}")
-
-    def remove_row(self, row_idx: int, reason: str = "Test removal") -> None:
-        """Remove a row by checking its checkbox and confirming removal."""
-        try:
-            # Select the row checkbox
-            row = self.page.locator(f'table tbody tr:nth-child({row_idx})').first
-            checkbox = row.locator('input[type="checkbox"]').first
-            if checkbox.is_visible():
-                checkbox.check()
-                time.sleep(0.2)
-
-            # Click Remove button
-            remove_button = self.page.locator('span:has-text("Remove")').first
-            if remove_button.is_visible():
-                remove_button.click()
-                time.sleep(0.3)
-
-                # Fill reason if modal appears
-                try:
-                    textarea = self.page.locator('textarea[name="removal_reason"], textarea').first
-                    if textarea.is_visible():
-                        textarea.fill(reason)
-                        time.sleep(0.2)
-                except Exception:
-                    pass
-
-                # Click Confirm button
-                confirm = self.page.locator('span:has-text("Confirm"), button:has-text("Confirm")').first
-                if confirm.is_visible():
-                    confirm.click()
-                    time.sleep(0.5)
-        except Exception as e:
-            print(f"Failed to remove row: {e}")
-
-    def save_changes(self, comment: str = "E2E test save") -> None:
-        """Fill comment and save changes."""
-        try:
-            # Fill comment
-            comment_fields = self.page.locators('textarea[name="comment"], textarea').all()
-            if comment_fields:
-                comment_fields[0].fill(comment)
-                time.sleep(0.2)
-
-            # Click Save button
-            save_button = self.page.locator('span:has-text("Save")').first
-            if save_button.is_visible():
-                save_button.click()
-                # Wait for success message
-                try:
-                    self.page.wait_for_selector(
-                        'text="Saved successfully", text="Success", text="saved"',
-                        timeout=10000
-                    )
-                except Exception:
-                    time.sleep(1)  # Fallback wait
-        except Exception as e:
-            print(f"Failed to save changes: {e}")
-
-    def get_audit_events(self) -> int:
-        """Navigate to audit tab and get event count."""
-        try:
-            audit_link = self.page.locator('a:has-text("Audit"), span:has-text("Audit")').first
-            if audit_link.is_visible():
-                audit_link.click()
-                self.page.wait_for_selector('table', timeout=5000)
-                rows = self.page.locators('table tbody tr').all()
-                return len(rows)
+            if not save_btn.is_enabled():
+                return None
         except Exception:
             pass
-        return 0
+        save_btn.click()
+        time.sleep(1)
+        # Audit-comment modal
+        modal = self.page.locator(".wl-modal-overlay")
+        if modal.count() > 0 and modal.first.is_visible():
+            ta = modal.locator("textarea").first
+            if ta.count() > 0 and ta.is_visible():
+                ta.fill(comment)
+            confirm = modal.locator(".btn-primary").first
+            if confirm.count() > 0:
+                confirm.click()
+                time.sleep(3)
+        time.sleep(1)
+        msg = self.page.locator("#message-container")
+        return msg.text_content().strip() if msg.count() > 0 else None
 
-    def toggle_theme(self) -> None:
-        """Toggle dark/light theme."""
-        try:
-            theme_button = self.page.locator('button[id="theme-toggle"], span:has-text("Theme")').first
-            if theme_button.is_visible():
-                theme_button.click()
+    # -- Search --
+
+    def search(self, query: str) -> bool:
+        candidates = self.page.locator(
+            "input[placeholder*='Filter'], #wl-search, input.wl-search-input"
+        )
+        if candidates.count() == 0:
+            return False
+        si = candidates.first
+        if not si.is_visible():
+            return False
+        si.fill(query)
+        time.sleep(1)
+        return True
+
+    def clear_search(self) -> bool:
+        clear = self.page.locator(".wl-search-clear-btn, .wl-search-clear")
+        if clear.count() > 0 and clear.first.is_visible():
+            clear.first.click()
+            time.sleep(0.5)
+            return True
+        return False
+
+    # -- Modal cleanup --
+
+    def dismiss_modals(self) -> None:
+        for _ in range(3):
+            modal = self.page.locator(".wl-modal-overlay")
+            if modal.count() == 0:
+                return
+            if not modal.first.is_visible():
+                return
+            btns = modal.locator(".btn")
+            if btns.count() > 0:
+                try:
+                    btns.first.click()
+                except Exception:
+                    pass
                 time.sleep(0.5)
-        except Exception as e:
-            print(f"Failed to toggle theme: {e}")
+            else:
+                try:
+                    modal.first.click(position={"x": 5, "y": 5})
+                except Exception:
+                    pass
+                time.sleep(0.5)
 
 
 class ControlPanelPage(SplunkPage):
-    """Admin control panel page object."""
+    """Admin / superadmin control panel page object.
+
+    Tabs in the CP, in the order they actually exist:
+      Approval Queue | Activity | Analyst Settings | Admin Settings | Trash
+    """
+
+    DASHBOARD_PATH = "/en-US/app/wl_manager/control_panel"
+
+    def goto_app(self) -> None:
+        self.goto(self.DASHBOARD_PATH)
+        # Wait for the dynamic tab bar to render (it's built by JS, not
+        # in the static dashboard XML). control_panel.js builds
+        # `<button class="wl-cp-tab" data-tab="queue">Approval Queue</button>`
+        # etc. into `#wl-cp-tabs` after init.
+        try:
+            self.page.wait_for_selector(".wl-cp-tab", timeout=10000)
+        except Exception:
+            pass
+        time.sleep(1)
+
+    # Map visible labels to control_panel.js data-tab keys. Used by
+    # click_tab to do an exact-attribute lookup (more reliable than
+    # text matching when the active tab gets a btn-primary class
+    # that visually changes the rendered glyph).
+    _TAB_KEYS = {
+        "Approval Queue": "queue",
+        "Approval": "queue",
+        "Queue": "queue",
+        "Activity": "usage",
+        "Usage": "usage",
+        "Analyst Settings": "limits",
+        "Daily Limits": "limits",
+        "Admin Settings": "admin-limits",
+        "Trash": "trash",
+    }
+
+    def click_tab(self, tab_text: str) -> bool:
+        """Click a Control Panel tab. The real CP uses
+        `<button class="wl-cp-tab" data-tab="<key>">Label</button>`.
+        We try data-tab lookup first (with a short wait for dynamic
+        render — the tab bar is JS-rendered after the initial dashboard
+        loads), fall back to text match."""
+        # Try data-tab exact attribute lookup with a short wait — the
+        # tab bar is dynamically rendered by control_panel.js after
+        # page init, so the selector may not be present at the instant
+        # we call this on a freshly-loaded page.
+        key = self._TAB_KEYS.get(tab_text)
+        if key is not None:
+            sel = f'.wl-cp-tab[data-tab="{key}"]'
+            try:
+                self.page.wait_for_selector(sel, timeout=5000, state="visible")
+            except Exception:
+                pass
+            tab = self.page.locator(sel).first
+            if tab.count() > 0 and tab.is_visible():
+                tab.click()
+                time.sleep(1)
+                return True
+        # Fallback: text match
+        tab = self.page.locator(f'.wl-cp-tab:has-text("{tab_text}")').first
+        if tab.count() == 0 or not tab.is_visible():
+            tab = self.page.locator(
+                f'button:has-text("{tab_text}"), .nav-tab:has-text("{tab_text}"), '
+                f'a:has-text("{tab_text}")'
+            ).first
+        if tab.count() > 0 and tab.is_visible():
+            tab.click()
+            time.sleep(1)
+            return True
+        return False
 
     def get_approval_queue(self) -> int:
-        """Retrieve approval queue item count."""
-        try:
-            queue_tab = self.page.locator('span:has-text("Approval"), span:has-text("Queue")').first
-            if queue_tab.is_visible():
-                queue_tab.click()
-                self.page.wait_for_selector('table', timeout=5000)
-                rows = self.page.locators('table tbody tr').all()
-                return len(rows)
-        except Exception:
-            pass
-        return 0
+        """Return the approval queue row count from the UI table. Approval
+        Queue is the default tab when opening Control Panel."""
+        # Ensure on approval tab (idempotent — clicking when already active is harmless)
+        self.click_tab("Approval Queue") or self.click_tab("Approval") or self.click_tab("Queue")
+        time.sleep(0.5)
+        # Table id varies; fall back to any visible table
+        tables = self.page.locator("#approval-queue-table tbody tr, .wl-cp-table tbody tr, table tbody tr")
+        return tables.count() if tables.count() > 0 else 0
 
-    def approve_request(self, request_idx: int, comment: str = "Approved by E2E test") -> None:
-        """Approve a pending approval request."""
-        try:
-            row = self.page.locator(f'table tbody tr:nth-child({request_idx})').first
-            approve_button = row.locator('span:has-text("Approve")').first
-            if approve_button.is_visible():
-                approve_button.click()
-                time.sleep(0.3)
+    def approve_request(self, idx_1based: int, comment: str = "E2E approve") -> bool:
+        idx_0based = max(0, idx_1based - 1)
+        row = self.page.locator("table tbody tr").nth(idx_0based)
+        approve = row.locator(
+            'button:has-text("Approve"), .btn-approve, [data-action="approve"]'
+        ).first
+        if approve.count() == 0:
+            return False
+        approve.click()
+        time.sleep(0.5)
+        # Comment modal
+        modal = self.page.locator(".wl-modal-overlay")
+        if modal.count() > 0 and modal.first.is_visible():
+            ta = modal.locator("textarea").first
+            if ta.count() > 0 and ta.is_visible():
+                ta.fill(comment)
+            confirm = modal.locator(".btn-primary, .btn-success").first
+            if confirm.count() > 0:
+                confirm.click()
+                time.sleep(2)
+        return True
 
-                # Fill approval comment if modal appears
-                try:
-                    textarea = self.page.locator('textarea[name="approval_comment"], textarea').first
-                    if textarea.is_visible():
-                        textarea.fill(comment)
-                        time.sleep(0.2)
-                except Exception:
-                    pass
-
-                # Submit
-                submit = self.page.locator('span:has-text("Submit"), button:has-text("Submit")').first
-                if submit.is_visible():
-                    submit.click()
-                    time.sleep(0.5)
-        except Exception as e:
-            print(f"Failed to approve request: {e}")
-
-    def reject_request(self, request_idx: int, reason: str = "Rejected by E2E test") -> None:
-        """Reject a pending approval request."""
-        try:
-            row = self.page.locator(f'table tbody tr:nth-child({request_idx})').first
-            reject_button = row.locator('span:has-text("Reject")').first
-            if reject_button.is_visible():
-                reject_button.click()
-                time.sleep(0.3)
-
-                # Fill rejection reason if modal appears
-                try:
-                    textarea = self.page.locator('textarea[name="rejection_reason"], textarea').first
-                    if textarea.is_visible():
-                        textarea.fill(reason)
-                        time.sleep(0.2)
-                except Exception:
-                    pass
-
-                # Submit
-                submit = self.page.locator('span:has-text("Submit"), button:has-text("Submit")').first
-                if submit.is_visible():
-                    submit.click()
-                    time.sleep(0.5)
-        except Exception as e:
-            print(f"Failed to reject request: {e}")
+    def reject_request(self, idx_1based: int, reason: str = "E2E reject") -> bool:
+        idx_0based = max(0, idx_1based - 1)
+        row = self.page.locator("table tbody tr").nth(idx_0based)
+        reject = row.locator(
+            'button:has-text("Reject"), .btn-reject, [data-action="reject"]'
+        ).first
+        if reject.count() == 0:
+            return False
+        reject.click()
+        time.sleep(0.5)
+        modal = self.page.locator(".wl-modal-overlay")
+        if modal.count() > 0 and modal.first.is_visible():
+            ta = modal.locator("textarea").first
+            if ta.count() > 0 and ta.is_visible():
+                ta.fill(reason)
+            confirm = modal.locator(".btn-danger, .btn-primary").first
+            if confirm.count() > 0:
+                confirm.click()
+                time.sleep(2)
+        return True
 
     def get_daily_limits(self) -> Dict[str, Any]:
-        """Navigate to daily limits section and return current limits."""
-        try:
-            limits_tab = self.page.locator('span:has-text("Daily Limits")').first
-            if limits_tab.is_visible():
-                limits_tab.click()
-                self.page.wait_for_selector('input', timeout=5000)
-                time.sleep(0.3)
-                return {"visible": True}
-        except Exception:
-            pass
-        return {"visible": False}
+        """Open Analyst Settings tab and report visibility. (Read-only smoke.)"""
+        clicked = self.click_tab("Analyst Settings") or self.click_tab("Daily Limits")
+        time.sleep(0.5)
+        return {"visible": bool(clicked)}
 
-    def set_daily_limit(self, role: str, limit: int) -> None:
-        """Set daily limit for a role."""
-        try:
-            input_field = self.page.locator(f'input[name="{role}_limit"]').first
-            if input_field.is_visible():
-                input_field.fill(str(limit))
-                time.sleep(0.2)
-
-                save_button = self.page.locator('span:has-text("Save"), button:has-text("Save")').first
-                if save_button.is_visible():
-                    save_button.click()
-                    time.sleep(0.5)
-        except Exception as e:
-            print(f"Failed to set daily limit: {e}")
+    def set_daily_limit(self, role: str, limit: int) -> bool:
+        """Try to set a limit by role-named input. The real Control Panel
+        uses a single `wl_analyst_editor` row + per-action inputs; this is
+        a best-effort smoke. Returns True if input was found+filled.
+        """
+        self.click_tab("Analyst Settings")
+        time.sleep(0.5)
+        candidates = self.page.locator(
+            f'input[name="{role}_limit"], input[data-role="{role}"], input[id*="{role}"]'
+        )
+        if candidates.count() == 0:
+            return False
+        inp = candidates.first
+        if not inp.is_visible():
+            return False
+        inp.fill(str(limit))
+        time.sleep(0.2)
+        save_btn = self.page.locator(
+            'button:has-text("Save"), #btn-cp-save, .btn-primary:has-text("Save")'
+        ).first
+        if save_btn.count() > 0 and save_btn.is_visible():
+            save_btn.click()
+            time.sleep(1)
+        return True
 
     def get_trash_items(self) -> int:
-        """Navigate to trash and get item count."""
-        try:
-            trash_tab = self.page.locator('span:has-text("Trash")').first
-            if trash_tab.is_visible():
-                trash_tab.click()
-                self.page.wait_for_selector('table', timeout=5000)
-                rows = self.page.locators('table tbody tr').all()
-                return len(rows)
-        except Exception:
-            pass
-        return 0
+        self.click_tab("Trash")
+        time.sleep(0.5)
+        rows = self.page.locator("#trash-table tbody tr, .wl-trash-table tbody tr, table tbody tr")
+        return rows.count() if rows.count() > 0 else 0
 
-    def restore_trash_item(self, item_idx: int) -> None:
-        """Restore an item from trash."""
-        try:
-            row = self.page.locator(f'table tbody tr:nth-child({item_idx})').first
-            restore_button = row.locator('span:has-text("Restore")').first
-            if restore_button.is_visible():
-                restore_button.click()
-                time.sleep(0.5)
-        except Exception as e:
-            print(f"Failed to restore item: {e}")
+    def restore_trash_item(self, idx_1based: int) -> bool:
+        idx_0based = max(0, idx_1based - 1)
+        row = self.page.locator("table tbody tr").nth(idx_0based)
+        btn = row.locator(
+            'button:has-text("Restore"), .btn-restore, [data-action="restore"]'
+        ).first
+        if btn.count() == 0:
+            return False
+        btn.click()
+        time.sleep(1)
+        return True
 
 
 class AuditPage(SplunkPage):
     """Audit dashboard page object."""
 
-    def filter_by_action(self, action: str) -> None:
-        """Filter audit events by action type."""
-        try:
-            filter_dropdown = self.page.locator('div[class*="action-filter"], select').first
-            if filter_dropdown.is_visible():
-                filter_dropdown.click()
-                self.page.click(f'text="{action}"')
-                self.page.wait_for_load_state("networkidle", timeout=5000)
-        except Exception as e:
-            print(f"Failed to filter audit by action: {e}")
+    DASHBOARD_PATH = "/en-US/app/wl_manager/audit"
+
+    def goto_app(self) -> None:
+        self.goto(self.DASHBOARD_PATH)
+        time.sleep(3)
+
+    def filter_by_action(self, action: str) -> bool:
+        # Splunk's input dropdown on the dashboard
+        dd = self.page.locator(
+            'div[data-test="select"], div[class*="dropdown"], select'
+        ).first
+        if dd.count() == 0 or not dd.is_visible():
+            return False
+        dd.click()
+        time.sleep(0.3)
+        option = self.page.locator(f'text="{action}"').first
+        if option.count() > 0 and option.is_visible():
+            option.click()
+            time.sleep(1)
+            return True
+        return False
 
     def get_event_count(self) -> int:
-        """Get count of audit events displayed."""
-        try:
-            rows = self.page.locators('table tbody tr').all()
-            return len(rows)
-        except Exception:
-            return 0
-
-    def get_events_by_csv(self, csv_file: str) -> List[Dict[str, Any]]:
-        """Get audit events for a specific CSV."""
-        try:
-            events = []
-            rows = self.page.locators('table tbody tr').all()
-            for row in rows:
-                cells = row.locators('td').all()
-                if cells and csv_file in cells[-1].text_content():
-                    event_data = {
-                        "csv": cells[-1].text_content() if cells else "",
-                        "action": cells[0].text_content() if cells else "",
-                    }
-                    events.append(event_data)
-            return events
-        except Exception:
-            return []
+        rows = self.page.locator("table tbody tr")
+        return rows.count()
