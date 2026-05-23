@@ -456,7 +456,22 @@ class TestSaveCsvSmallEditHappyPath:
 
 def _submit_column_removal(container_curl, csv_file, rule_name):
     """Helper — submit a column_removal approval request and
-    return the parsed body."""
+    return the parsed body.
+
+    NOTE on the hardcoded "dest_host" column: callers in this suite
+    pass mapping[0] from get_mapping, which (per the current file
+    order in lookups/rule_csv_map.csv) is DR55_brute_force_users.csv.
+    Its data columns are: user, src_ip, dest_host, threshold,
+    auth_method. We pick "dest_host" so the approval can succeed at
+    replay time. If you reorder rule_csv_map.csv or change mapping[0]
+    to a CSV with a different schema, this helper (and the inline
+    test_approve_response_shape_for_column_removal below) must be
+    re-checked. Two other mappings in the current demo state —
+    DR55_brute_force_src.csv (cols: src_ip, src_host, Comment) and
+    DR130_priv_escalation.csv (cols: user, target_group, host, ...) —
+    have DIFFERENT schemas, so this helper would error if mapping[0]
+    became either of those.
+    """
     payload = {
         "approval_action_type": "column_removal",
         "csv_file": csv_file,
