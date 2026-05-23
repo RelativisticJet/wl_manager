@@ -98,14 +98,19 @@ jobs:
     name: Deploy to GitHub Pages
     needs: build
     runs-on: ubuntu-latest
-    # Gate 1: only on push-to-main (not PRs).
+    # Gate 1: only on push-to-main OR manual workflow_dispatch (not PRs).
+    # Adding workflow_dispatch as of 2026-05-23: until then, manually
+    # re-triggering this workflow (e.g. after enabling Pages or fixing
+    # a settings issue) silently skipped the deploy job because the
+    # gate was push-only, leaving the maintainer wondering why the
+    # site stayed 404 even though the run was "successful".
     # Gate 2: only when the repo is public. GitHub Pages on a private
     # repo requires Pro/Team/Enterprise; on free, the deploy API
     # returns 404 and the job would fail. Phase 3.4 (PUBLIC_RELEASE_PLAN.md)
     # flips the repo public — until then, this job is skipped and the
     # `build` job above is what gates docs work.
     if: >-
-      github.event_name == 'push' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       github.ref == 'refs/heads/main' &&
       github.event.repository.private == false
 
