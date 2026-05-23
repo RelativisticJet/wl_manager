@@ -129,15 +129,24 @@ jobs:
 
       - name: Run module-level tests
         # Top-level tests/test_*.py files cover lower-layer modules
-        # (wl_limits, wl_hmac_key, wl_fim_common, wl_expiration_cleanup)
-        # with HMAC and period-boundary coverage that tests/unit/ does
-        # not duplicate. Note: a former tests/test_wl_filelock.py
-        # reference was removed during round 7 B4 — no such file
-        # exists; the filelock paths are exercised inside
-        # tests/unit/test_filelock.py.
+        # (wl_limits, wl_fim_common, wl_expiration_cleanup) with
+        # period-boundary + scheduled-input coverage that tests/unit/
+        # does not duplicate.
+        #
+        # Notes on tests that LOOK like they should be in this list
+        # but aren't:
+        #   - tests/test_wl_filelock.py: no such file ever existed
+        #     (filelock paths are exercised inside
+        #     tests/unit/test_filelock.py which runs in the prior step).
+        #   - tests/test_wl_hmac_key.py: same — no such file. HMAC
+        #     coverage lives at tests/unit/test_hmac_key.py +
+        #     tests/unit/test_hmac_sig_fuzz.py, both of which run in
+        #     the prior `pytest tests/unit/` step. A stale reference
+        #     to the non-existent top-level path was removed
+        #     2026-05-22 — it was the cause of every red Unit Tests
+        #     run on main since the workflow landed.
         run: |
           python -m pytest tests/test_wl_limits.py \
-                          tests/test_wl_hmac_key.py \
                           tests/test_wl_fim_common.py \
                           tests/test_wl_expiration_cleanup.py \
                           -q --tb=short
