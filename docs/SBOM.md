@@ -65,8 +65,13 @@ version-pinning audit (`CLAUDE.md` "Splunk Version Pinning Audit").
 Audited separately in `docs/PIP_AUDIT_LOG.md` (B4):
 
 - `pytest`, `pytest-cov`, `freezegun`, `hypothesis`,
-  `pytest-timeout`, `playwright`, `pytest-playwright`, `radon`
+  `pytest-timeout`, `playwright`, `radon`
 - `playwright-core` (Node) for the E2E test runner
+
+> `pytest-playwright` was removed from `requirements-dev.txt` on
+> 2026-05-23 — it was declared but never imported (E2E Python tests
+> use `playwright.sync_api` directly). See the commit referenced
+> from Dependabot PR #12 for rationale.
 
 None of these are present in the .spl. They run only on developer
 machines and CI runners.

@@ -10,7 +10,13 @@ freezegun==1.5.1
 hypothesis==6.90.0
 pytest-timeout==2.1.0
 playwright==1.40.0
-pytest-playwright>=0.4.0
+# pytest-playwright removed 2026-05-23 — was declared but never imported.
+# Our E2E Python tests use `playwright.sync_api` directly (see
+# tests/e2e/conftest.py + page_objects.py); the pytest-fixture wrapper
+# was never wired in. Removal unblocks Dependabot PR #12 cleanly:
+# bumping an unused dep just adds churn. If we add fixture-style E2E
+# later, re-add pytest-playwright at the version we actually integrate
+# against.
 # radon 6.1.1 was a typo / aspirational pin — never published to PyPI,
 # so `pip install -r requirements-dev.txt` failed for any new contributor.
 # 6.0.1 is the actual latest and is what `metrics_collector.py` was
