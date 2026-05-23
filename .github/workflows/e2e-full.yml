@@ -132,12 +132,6 @@ jobs:
       - name: State machine
         run: node tests/e2e/test_state_machine.cjs
 
-      - name: Dual superadmin
-        run: node tests/e2e/test_dual_superadmin.cjs
-
-      - name: Audit stress
-        run: node tests/e2e/test_audit_stress.cjs
-
       - name: Visual regression
         run: node tests/e2e/test_visual_regression.cjs
 
@@ -145,6 +139,18 @@ jobs:
       # Per tests/e2e/README.md run-order guidance: cooldown tamper
       # first (resets KV state cleanly), then adversarial (heavy),
       # then admin_limits last (resets counter at start, safe).
+      #
+      # Dual superadmin + Audit stress moved here 2026-05-22 — both
+      # invoke H.assertTestHarness() so they REQUIRE WL_TEST_HARNESS=1
+      # inline; they were previously mis-classified in the non-
+      # destructive block above and ran red on every nightly since
+      # 2026-05-21 with "REFUSING to run destructive test helper".
+
+      - name: Dual superadmin (destructive)
+        run: WL_TEST_HARNESS=1 node tests/e2e/test_dual_superadmin.cjs
+
+      - name: Audit stress (destructive)
+        run: WL_TEST_HARNESS=1 node tests/e2e/test_audit_stress.cjs
 
       - name: Cooldown tamper (destructive)
         run: WL_TEST_HARNESS=1 node tests/e2e/test_cooldown_tamper.cjs
