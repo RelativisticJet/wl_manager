@@ -194,8 +194,8 @@ class TestRequestSubmittedAuditSchema:
                 "description": description,
                 "comment": f"Audit schema test {marker}",
                 "pending_highlight": {"type": "column",
-                                      "column_name": "host"},
-                "payload": {"column_name": "host"},
+                                      "column_name": "dest_host"},
+                "payload": {"column_name": "dest_host"},
             }, user="analyst1")
 
         if "error" in body:
@@ -264,8 +264,8 @@ class TestRequestRejectedAuditSchema:
                 "description": f"Ring1reject_{marker}",
                 "comment": "test",
                 "pending_highlight": {"type": "column",
-                                      "column_name": "host"},
-                "payload": {"column_name": "host"},
+                                      "column_name": "dest_host"},
+                "payload": {"column_name": "dest_host"},
             }, user="analyst1")
         if "error" in submit_body:
             pytest.skip(f"submit failed: {submit_body}")

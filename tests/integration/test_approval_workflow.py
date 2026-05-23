@@ -94,7 +94,7 @@ def _read_queue_via_get(container_curl) -> list:
 
 def _submit_column_removal_request(
         container_curl, csv_file: str, rule_name: str,
-        column_name: str = "host",
+        column_name: str = "dest_host",
         description: str = "Ring 1 test - test column removal request",
         comment: str = "Ring 1 test - column deprecated") -> dict:
     """Submit a column_removal approval request and return the
@@ -460,8 +460,8 @@ class TestSubmitApprovalErrorPaths:
             "app_context": "wl_manager",
             "description": "Reason with unicode: 中文",
             "pending_highlight": {"type": "column",
-                                  "column_name": "host"},
-            "payload": {"column_name": "host"},
+                                  "column_name": "dest_host"},
+            "payload": {"column_name": "dest_host"},
         })
         assert "error" in body, \
             f"non-ASCII description should be rejected: {body}"

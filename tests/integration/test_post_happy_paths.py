@@ -465,11 +465,11 @@ def _submit_column_removal(container_curl, csv_file, rule_name):
         "description": "Ring 1 day 3 test",
         "comment": "Ring 1 day 3 test reason",
         "pending_highlight": {"type": "column",
-                              "column_name": "host"},
+                              "column_name": "dest_host"},
         "payload": {
-            "column_name": "host",
+            "column_name": "dest_host",
             "column_removal_reasons": [
-                {"column": "host", "reason": "Ring 1 test"},
+                {"column": "dest_host", "reason": "Ring 1 test"},
             ],
         },
     }
@@ -515,11 +515,11 @@ class TestProcessApprovalApprove:
             "description": "Ring 1 day 3 approve-flow test",
             "comment": "Ring 1 day 3 approve-flow reason",
             "pending_highlight": {"type": "column",
-                                  "column_name": "host"},
+                                  "column_name": "dest_host"},
             "payload": {
-                "column_name": "host",
+                "column_name": "dest_host",
                 "column_removal_reasons": [
-                    {"column": "host", "reason": "Ring 1 test"}
+                    {"column": "dest_host", "reason": "Ring 1 test"}
                 ],
             },
         })

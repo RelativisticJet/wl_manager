@@ -112,8 +112,8 @@ def _submit_column_removal(container_curl, csv_file, rule_name,
         "app_context": "wl_manager",
         "description": "Ring 2 Day 2 notification payload test",
         "comment": comment,
-        "pending_highlight": {"type": "column", "column_name": "host"},
-        "payload": {"column_name": "host"},
+        "pending_highlight": {"type": "column", "column_name": "dest_host"},
+        "payload": {"column_name": "dest_host"},
     }, user=user)
 
 
