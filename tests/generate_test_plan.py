@@ -1085,22 +1085,17 @@ def build_pdf():
              priority="High")
 
     # ══════════════════════════════════════════════════════════════
-    # SECTION 19: Dark Theme
+    # SECTION 19: Theme
     # ══════════════════════════════════════════════════════════════
-    pdf.section("Dark Theme")
+    pdf.section("Theme")
 
-    pdf.test("Dark theme auto-detection",
-             ["Open Splunk with dark theme enabled"],
-             ["wl-dark class added to body",
-              "All components use dark color scheme",
+    # Build 669 (2026-05-24): dropped light-theme + the `.wl-dark`
+    # detection machinery entirely. Single hard-coded dark theme now.
+    pdf.test("Dark theme rendering",
+             ["Open any dashboard"],
+             ["All components render with the dark color scheme",
               "Approval bar, modals, buttons all properly themed"],
              priority="Medium")
-
-    pdf.test("Light theme rendering",
-             ["Open Splunk with light/default theme"],
-             ["No wl-dark class on body",
-              "Standard light color scheme applied"],
-             priority="Low")
 
     # ══════════════════════════════════════════════════════════════
     # SECTION 20: NON-STANDARD / COMBINED ACTIONS (Edge Cases)

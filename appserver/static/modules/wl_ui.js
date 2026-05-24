@@ -11,20 +11,6 @@ define(["jquery", "underscore"], function ($, _) {
     var $msgContainer = null;
     var msgTimer      = null;
 
-    // ── Dark theme detection ────────────────────────────────────────
-    // Build 637: dark-only theme. The previous brightness-based detection
-    // was load-bearing for a half-implemented light mode that produced
-    // visual mismatches. Light theme support was ripped out (CSS :root +
-    // body.wl-dark blocks collapsed to single :root). This function now
-    // unconditionally tags <body> with .wl-dark so the existing 19
-    // .wl-dark X selectors in whitelist_manager.css continue to match.
-    // Returns true so callers that gate panel-class application
-    // (whitelist_manager.js:69-71) keep working unchanged.
-    function detectDarkTheme() {
-        $("body").addClass("wl-dark");
-        return true;
-    }
-
     // ── Message banner ──────────────────────────────────────────────
     //
     // CONTRACT (round 7 C3, 2026-04-29):
@@ -168,7 +154,6 @@ define(["jquery", "underscore"], function ($, _) {
 
     return {
         init:                init,
-        detectDarkTheme:     detectDarkTheme,
         showMsg:             showMsg,
         showTextMsg:         showTextMsg,
         clearMsg:            clearMsg,

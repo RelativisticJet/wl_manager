@@ -25,9 +25,6 @@ require([
     var restGet  = REST.restGet;
     var restPost = REST.restPost;
 
-    // ── Dark theme detection (via wl_ui module) ──
-    UI.detectDarkTheme();
-
     // ══════════════════════════════════════════════════════════════════
     // Current user detection
     // ══════════════════════════════════════════════════════════════════
@@ -1781,11 +1778,11 @@ require([
             }
             var showAbove = (rect.bottom + 80 > window.innerHeight);
 
-            var isDark = $("body").hasClass("wl-dark");
-            var bg    = isDark ? "#1a1c20" : "#fafafa";
-            var bdr   = isDark ? "#444"    : "#ccc";
-            var clr   = isDark ? "#e0e0e0" : "#333";
-            var shd   = isDark ? "rgba(0,0,0,.5)" : "rgba(0,0,0,.15)";
+            // Build 669: light-theme dead code removed. Dark-only theme.
+            var bg  = "#1a1c20";
+            var bdr = "#444";
+            var clr = "#e0e0e0";
+            var shd = "rgba(0,0,0,.5)";
 
             var $bubble = $(
                 '<div class="wl-cp-info-bubble" style="' +

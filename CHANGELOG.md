@@ -24,7 +24,7 @@ list here is the user-facing rollup.
     (closes the last uncapped audit-emitting endpoint).
   - Both keys are runtime-tunable from Control Panel → Admin Settings;
     `LIMIT_KEYS` allow-list in `_action_set_admin_limits` includes them.
-- **UI polish (build 668 cycle).** CSV-File dropdown height aligned to
+- **UI polish (shipped in build 668 cycle, 2026-05-21).** CSV-File dropdown height aligned to
   match sibling dropdowns (32 px, not 36 px); all dropdown groups
   clamped to uniform 300 px width.
 - **Accessibility — Phase 2.15 closure.** axe-core / Playwright a11y
@@ -52,7 +52,7 @@ list here is the user-facing rollup.
 
 ### Verification at rc1 cut
 
-- AppInspect 4.2.0 local CLI against build 668: standalone
+- AppInspect 4.2.0 local CLI against build 668 (shipped 2026-05-21): standalone
   160/0/0/6 (success/error/failure/manual_check), cloud 157/0/0/5
   — zero drift vs `docs/APPINSPECT_FINDINGS.md` §3 baseline.
 - §3.5 version-tag consistency pre-flight: passes (`app.conf

@@ -2,20 +2,12 @@
  * Whitelist Manager — Styles
  * Scoped with the .wl- prefix to avoid collisions with Splunk's own CSS.
  *
- * Theme: dark only. Build 637 (2026-05-01) removed light-theme support
- * because the half-implemented light path produced visual mismatches
- * (modals would render light on dark page chrome) and we have no
- * intent to support light mode in production. Reversal cost: medium —
- * re-introduce a `:root` light block and a `body.wl-dark` override
- * block, then re-enable brightness-based detection in `wl_ui.js`.
- *
- * Build 637 follow-up: flattened the 13 `.wl-dark X` selectors to
- * plain `X` selectors. The dark values were merged into the base
- * rules; the redundant `.wl-dark`-prefixed override blocks were
- * deleted. `wl_ui.js :: detectDarkTheme()` still applies `wl-dark`
- * to <body> for any external code that might key off the class
- * (Splunk plugins, future debugging hooks), but no in-app CSS rule
- * depends on the class anymore.
+ * Theme: dark only. Build 637 (2026-05-01) removed light-theme support;
+ * build 669 (2026-05-24) removed the residual `.wl-dark` class hook and
+ * the associated JS detection machinery. Reversal cost: medium — re-
+ * introduce a `:root` light block, a `body.wl-dark` override block,
+ * brightness-based detection in `wl_ui.js`, and the `isDark` ternaries
+ * in `control_panel.js` info-bubble rendering.
  */
 
 

@@ -4,9 +4,7 @@
     "w": 375,
     "h": 812
   },
-  "body_classes": [
-    "wl-dark"
-  ],
+  "body_classes": [],
   "scroll_height_bucket": 800,
   "counts": {
     "buttons": 3,

@@ -284,24 +284,10 @@ require([
         });
     }
 
-    // ── Dark theme detection (runs on every page that loads notifications) ──
-    function ensureDarkTheme() {
-        if ($("body").hasClass("wl-dark")) return;
-        var bg = window.getComputedStyle(document.body).backgroundColor;
-        var m = bg.match(/(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
-        if (m) {
-            var brightness = (parseInt(m[1]) + parseInt(m[2]) + parseInt(m[3])) / 3;
-            if (brightness < 128) {
-                $("body").addClass("wl-dark");
-            }
-        }
-    }
-
     // ── Init ─────────────────────────────────────────────────────
     $(function () {
         // Wait a moment for Splunk dashboard to fully render
         setTimeout(function () {
-            ensureDarkTheme();
             injectBell();
             pollCount();
             setInterval(pollCount, POLL_INTERVAL);
