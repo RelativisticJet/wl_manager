@@ -11,12 +11,11 @@ name: E2E Python (nightly + manual)
 # real app. See commits 25ff280..6fa38c3 for the rewrite. With this
 # workflow in place, regressions surface within 24h of merge.
 #
-# Scope (intentional exclusion):
-# - tests/e2e/test_wl_save.py is NOT run here. It has 2 known pre-existing
-#   state-leak flakes (test_bulk_remove 10→10, test_add_row_and_save 10→7)
-#   that block CI green. These are tracked in qa-findings.jsonl and will
-#   be re-included in a follow-up commit once the underlying save-persistence
-#   anomaly is investigated.
+# Scope (full Python E2E suite, including test_wl_save.py):
+# Previously test_wl_save.py was excluded due to 2 known flakes
+# (test_bulk_remove + test_add_row_and_save). Those turned out to be
+# test bugs (pagination trap + paginated-DOM-count assertions),
+# resolved in commit 2864701. The suite is now fully runnable.
 #
 # Triggers:
 #   - schedule: nightly at 04:00 UTC (1h after e2e-full so a container
@@ -91,13 +90,12 @@ jobs:
         run: bash tests/e2e/setup_test_env.sh wl_manager_test
 
       # ── Python E2E suite ─────────────────────────────────────────
-      # Excludes test_wl_save.py — see header comment for the
-      # save-persistence anomaly that blocks CI green there.
+      # Full suite including test_wl_save.py. Baseline:
+      # 30 passed, 9 skipped (all documented), 0 errors.
       - name: Run Python E2E suite
         run: |
           python -m pytest tests/e2e/ \
-            --ignore=tests/e2e/test_wl_save.py \
-            --timeout=90 \
+            --timeout=120 \
             --tb=short \
             -v
 
