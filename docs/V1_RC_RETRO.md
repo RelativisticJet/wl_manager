@@ -3,7 +3,7 @@
 **Date written**: 2026-05-24
 **RC tag**: `v1.0.0-rc1` (cut 2026-05-21, sigstore-verified)
 **Maintainer**: Oleh Bezsonov (@RelativisticJet)
-**HEAD at retro**: `9ea7617` (build 669)
+**HEAD at retro write**: `9ea7617` (historical build 669, 2026-05-24)
 
 ---
 
@@ -87,7 +87,7 @@ No community feedback was received because no announcement was published. The ho
 
 ### 2.4 Diagnosis of the visual-regression failure
 
-The deltas are **environmental test-state drift**, not regressions from the build 669 theme cleanup. Evidence:
+The deltas are **environmental test-state drift**, not regressions from the previously shipped build 669 theme cleanup (commit `cdac344`, 2026-05-24). Evidence:
 
 1. **Build 669 only removed a DOM CLASS hook** (`body.wl-dark`) and ~50 lines of dead JS detection. The `body_classes` baseline was updated to `[]` in the same commit. **No CSS rules, no JS render paths, no DOM-structural code was touched.** Removing CSS cannot add 3 buttons or 2 section headings to a dashboard.
 2. **The new H2 strings** (`Pending Requests (0/20)`, `Recent History (11/100)`) are conditionally-rendered section headings in `control_panel.js`'s Approval Queue tab. They appear when the queue has entries. The `(11/100)` counter is a running tally of accumulated test-run history — clearly data-coupled, not code-output.
