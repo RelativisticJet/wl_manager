@@ -33,18 +33,30 @@ class SplunkPage:
     def goto(self, path: str) -> None:
         """Navigate inside the Splunk app. Path must start with `/`.
 
-        Tolerates `net::ERR_ABORTED` raised by Splunk's redirect chain
-        (302 from /app/... to /en-US/app/...). The redirect itself
-        is fine; playwright surfaces it as ERR_ABORTED because the
-        original request was cancelled by the redirect. We catch and
-        let the wait_for_load_state below confirm the page actually
-        rendered.
+        Tolerates two redirect-chain failure modes that Splunk produces
+        on first-load of a session:
+
+        1. `net::ERR_ABORTED` — surfaced when a redirect cancels the
+           original navigation request.
+        2. "Navigation to X is interrupted by another navigation to Y"
+           — surfaced in CI when Splunk re-routes via /en-US/app/launcher/home
+           before landing on the requested app. Cosmetically identical
+           to (1) but Playwright raises a different error class on it.
+
+        Both indicate the redirect FIRED, not that anything broke. We
+        catch and rely on `wait_for_load_state` to confirm the final
+        page rendered.
         """
         full = f"{self.base_url}{path}"
         try:
             self.page.goto(full, wait_until="domcontentloaded")
         except Exception as e:
-            if "ERR_ABORTED" not in str(e):
+            msg = str(e)
+            tolerable = (
+                "ERR_ABORTED" in msg
+                or "interrupted by another navigation" in msg
+            )
+            if not tolerable:
                 raise
             # Splunk redirect — page likely loaded under a different URL.
             # Continue to wait_for_load_state to confirm.
@@ -217,6 +229,58 @@ class WhitelistManagerPage(SplunkPage):
         msg = self.page.locator("#message-container")
         return msg.text_content().strip() if msg.count() > 0 else None
 
+    # -- Versions / revert --
+
+    def get_revert_options(self) -> List[Dict[str, str]]:
+        """Return [{value, label}] for each <option> in #wl-revert-select.
+
+        Option 0 has empty value (the 'current' header, non-selectable per
+        wl_versions.js:117). Real previous-version options have a non-empty
+        `value` (the snapshot filename).
+        """
+        select = self.page.locator("#wl-revert-select")
+        if select.count() == 0:
+            return []
+        opts = select.locator("option")
+        out: List[Dict[str, str]] = []
+        for i in range(opts.count()):
+            o = opts.nth(i)
+            out.append({
+                "value": o.get_attribute("value") or "",
+                "label": (o.text_content() or "").strip(),
+            })
+        return out
+
+    def revert_to_previous(self, reason: str = "E2E revert test") -> bool:
+        """Pick the first previous version (option index 1) from the revert
+        dropdown, fill the reason modal, click OK. Returns True if a previous
+        version was available and revert was triggered, False if there were
+        no previous versions to revert to.
+
+        The dropdown structure (wl_versions.js): option 0 is the 'current'
+        header (value=""), options 1+ are previous versions newest-first
+        with value=<snapshot filename>.
+        """
+        opts = self.get_revert_options()
+        previous = [o for o in opts if o["value"]]
+        if not previous:
+            return False
+        target_value = previous[0]["value"]
+        select = self.page.locator("#wl-revert-select")
+        select.select_option(value=target_value)
+        time.sleep(1)
+        # Reason modal
+        modal = self.page.locator(".wl-modal-overlay")
+        if modal.count() > 0 and modal.first.is_visible():
+            ta = modal.locator("#wl-revert-reason")
+            if ta.count() > 0 and ta.is_visible():
+                ta.fill(reason)
+            ok = modal.locator("#wl-revert-ok")
+            if ok.count() > 0:
+                ok.click()
+                time.sleep(3)
+        return True
+
     # -- Search --
 
     def search(self, query: str) -> bool:
@@ -280,10 +344,21 @@ class ControlPanelPage(SplunkPage):
         # `<button class="wl-cp-tab" data-tab="queue">Approval Queue</button>`
         # etc. into `#wl-cp-tabs` after init.
         try:
-            self.page.wait_for_selector(".wl-cp-tab", timeout=10000)
+            self.page.wait_for_selector(".wl-cp-tab", timeout=15000)
         except Exception:
             pass
-        time.sleep(1)
+        # Wait for the tab bar to settle — control_panel.js builds tabs
+        # one at a time and re-renders on role detection. In CI, this
+        # can race with a click, producing a 30s click-auto-wait timeout.
+        # Wait for the Activity tab specifically (the one used by smoke
+        # tests) so we know the full tab list has populated.
+        try:
+            self.page.wait_for_selector(
+                '.wl-cp-tab[data-tab="usage"]', timeout=10000, state="visible"
+            )
+        except Exception:
+            pass
+        time.sleep(2)
 
     # Map visible labels to control_panel.js data-tab keys. Used by
     # click_tab to do an exact-attribute lookup (more reliable than
@@ -320,7 +395,14 @@ class ControlPanelPage(SplunkPage):
                 pass
             tab = self.page.locator(sel).first
             if tab.count() > 0 and tab.is_visible():
-                tab.click()
+                # Use force=True to bypass Playwright's actionability
+                # auto-wait. In CI, the tab can be flagged as "unstable"
+                # because control_panel.js re-renders the bar to update
+                # the btn-primary active state on neighbour tabs, racing
+                # with our click. Force=True skips that wait — the click
+                # itself still produces a real event because Splunk's
+                # listener is jQuery-bound, not Splunk-drilldown wired.
+                tab.click(force=True, timeout=10000)
                 time.sleep(1)
                 return True
         # Fallback: text match
