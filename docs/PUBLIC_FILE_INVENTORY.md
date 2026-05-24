@@ -289,12 +289,28 @@ Everything here is built into the MkDocs site at `https://relativisticjet.github
 
 ### Screenshots
 
+**Active set (build 669, captured 2026-05-24)** — referenced by
+`README.md`, `docs/SPLUNKBASE_LISTING_DRAFT.md`, and
+`docs/SPLUNKBASE_LAUNCH_KIT.md`:
+
 | File | Purpose | Public? | Up-to-date? |
 |---|---|---|---|
-| `docs/screenshots/01-main-dashboard.png` | Splash on the docs site + repo README. | Repo-only | Yes |
-| `docs/screenshots/02-inline-editing.png` | DR130 editing view. | Repo-only | Yes (per F-L11 re-evaluation) |
-| `docs/screenshots/03-audit-trail.png` | Audit Trail dashboard. | Repo-only | Yes (per F-L11 re-evaluation) |
-| `docs/screenshots/04-control-panel.png` | Control Panel Approval Queue. | Repo-only | Yes |
+| `docs/screenshots/01-whitelist-manager-dashboard.png` | Splash on docs site + repo README. | Repo-only | Yes (build 669, 2026-05-24) |
+| `docs/screenshots/02-control-panel-approval-queue.png` | Admin Approval Queue tab. | Repo-only | Yes (build 669, 2026-05-24) |
+| `docs/screenshots/03-audit-trail-dashboard.png` | Audit Trail dashboard. | Repo-only | Yes (build 669, 2026-05-24) |
+| `docs/screenshots/04-inline-csv-editing.png` | DR130 inline CSV editing view. | Repo-only | Yes (build 669, 2026-05-24) |
+| `docs/screenshots/05-control-panel-activity.png` | Per-analyst usage counters + tier-aware caps. | Repo-only | Yes (build 669, 2026-05-24) |
+
+**Historical set (build ~640, captured 2026-05-06)** — retained as
+audit evidence for `docs/PRE_PUBLIC_AUDIT.md` §Phase F (F-L11
+visual-review log). No longer referenced by user-facing docs:
+
+| File | Original purpose | Status |
+|---|---|---|
+| `docs/screenshots/01-main-dashboard.png` | README splash (build ~640). | Superseded by `01-whitelist-manager-dashboard.png`; retained for PRE_PUBLIC_AUDIT F-L11 grounding. |
+| `docs/screenshots/02-inline-editing.png` | DR130 editing view (build ~640). | Superseded by `04-inline-csv-editing.png`; retained for PRE_PUBLIC_AUDIT F-L11 grounding. |
+| `docs/screenshots/03-audit-trail.png` | Audit Trail (build ~640). | Superseded by `03-audit-trail-dashboard.png`; retained for PRE_PUBLIC_AUDIT F-L11 grounding. |
+| `docs/screenshots/04-control-panel.png` | Control Panel Approval Queue (build ~640). | Superseded by `02-control-panel-approval-queue.png`; retained for PRE_PUBLIC_AUDIT F-L11 grounding. |
 
 ---
 

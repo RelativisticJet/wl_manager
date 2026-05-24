@@ -45,21 +45,25 @@ without touching raw CSV files, Splunk configs, or the filesystem.
 
 ## Screenshots
 
-**Main Dashboard** — Inline editing with change tracking, search, pagination, and bulk operations
+**Whitelist Manager Dashboard** — Inline editing with change tracking, search, pagination, and bulk operations
 
-![Main Dashboard](docs/screenshots/01-main-dashboard.png)
+![Whitelist Manager Dashboard](docs/screenshots/01-whitelist-manager-dashboard.png)
 
-**Inline Editing** — Click any cell to edit. Modified cells are highlighted for review before saving.
+**Control Panel — Approval Queue** — Admin queue showing pending dual-approval and analyst-approval requests, with approve/reject actions
 
-![Inline Editing](docs/screenshots/02-inline-editing.png)
+![Control Panel Approval Queue](docs/screenshots/02-control-panel-approval-queue.png)
 
-**Audit Trail** — Complete audit dashboard with summary stats, filters, and approval tracking
+**Audit Trail Dashboard** — Summary stats, action filters, approval tracking, and out-of-band recovery panel
 
-![Audit Trail](docs/screenshots/03-audit-trail.png)
+![Audit Trail Dashboard](docs/screenshots/03-audit-trail-dashboard.png)
 
-**Control Panel** — Admin-only dashboard for approval queue, analyst usage, and limit configuration
+**Inline CSV Editing** — Click any cell to edit. Modified cells highlight for review before saving; per-row Comment column captures the analyst's rationale.
 
-![Control Panel](docs/screenshots/04-control-panel.png)
+![Inline CSV Editing](docs/screenshots/04-inline-csv-editing.png)
+
+**Control Panel — Activity** — Per-analyst usage counters with tier-aware caps, reset schedules, and lockdown-state visibility
+
+![Control Panel Activity](docs/screenshots/05-control-panel-activity.png)
 
 ## Features
 

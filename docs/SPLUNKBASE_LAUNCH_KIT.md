@@ -237,11 +237,14 @@ NOT INCLUDED
 
 - **App archive**: `dist/wl_manager-1.0.0.spl` (built via
   `scripts/package.sh` at GA tag time)
-- **Screenshots**: already in repo at `docs/screenshots/`:
-  - `01-main-dashboard.png`
-  - `02-inline-editing.png`
-  - `03-audit-trail.png`
-  - `04-control-panel.png`
+- **Screenshots**: already in repo at `docs/screenshots/` (fresh
+  build-669 captures from 2026-05-24; matches the 5 referenced in
+  `docs/SPLUNKBASE_LISTING_DRAFT.md` §8):
+  - `01-whitelist-manager-dashboard.png`
+  - `02-control-panel-approval-queue.png`
+  - `03-audit-trail-dashboard.png`
+  - `04-inline-csv-editing.png`
+  - `05-control-panel-activity.png`
 - **Icon**: already in repo at `static/appIcon.png` and
   `appserver/static/appIcon.png` (per the launcher-icon-path quirk
   documented in SPLUNK_QUIRKS.md)

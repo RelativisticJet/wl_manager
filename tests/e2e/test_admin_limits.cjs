@@ -556,12 +556,40 @@ async function setAdminLimits(page, limits, retries) {
             if (await tab.count() === 0) throw new Error("Admin Limits tab not found for superadmin");
         });
 
-        await H.test("AL29 Admin Limits tab shows all 11 limit inputs", async () => {
+        await H.test("AL29 Admin Limits tab renders all configured limit inputs", async () => {
+            // The UI renders one `<input class="wl-admin-limit-input">` per
+            // key in the `fields` array (appserver/static/control_panel.js).
+            // The original 11 keys (csv_save..usage_reset) are guaranteed;
+            // build 666 (2026-05-20) added row_reorder + column_reorder admin
+            // caps per the DECISION_LOG.md 2026-05-20 row. Assert (a) every
+            // known key has an input AND (b) the count is at least 11 — this
+            // tolerates future additions of new admin caps without churning
+            // a hardcoded integer, but still fails if a key disappears.
             await superPage.click('[data-tab="admin-limits"]');
             await superPage.waitForTimeout(2000);
-            const inputs = await superPage.locator(".wl-admin-limit-input").count();
-            if (inputs !== 11) {
-                throw new Error("Expected 11 limit inputs, found " + inputs);
+            const requiredKeys = [
+                "csv_save", "csv_revert", "rule_creation", "csv_creation",
+                "rule_deletion", "csv_deletion", "approval_count",
+                "limit_changes", "trash_restore", "trash_purge", "usage_reset",
+                // Build-666 reorder caps (DECISION_LOG.md 2026-05-20)
+                "row_reorder", "column_reorder",
+            ];
+            for (const key of requiredKeys) {
+                const found = await superPage.locator(
+                    `.wl-admin-limit-input[data-key="${key}"]`
+                ).count();
+                if (found !== 1) {
+                    throw new Error(
+                        "Missing admin limit input for key: " + key +
+                        " (found " + found + ")"
+                    );
+                }
+            }
+            const totalInputs = await superPage.locator(".wl-admin-limit-input").count();
+            if (totalInputs < 11) {
+                throw new Error(
+                    "Expected >= 11 limit inputs, found " + totalInputs
+                );
             }
         });
 
