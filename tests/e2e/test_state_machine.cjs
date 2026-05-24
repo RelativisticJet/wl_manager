@@ -227,6 +227,17 @@ async function cleanupStaleRequests(page) {
 
     // ── Self-approval blocked ──
 
+    // Rate-limit budget refresh: SM01-SM12 plus the prior test_security_bypass
+    // suite consume wladmin1's RATE_MAX_WRITES=30/60s budget. Without a
+    // window-slide pause here, SM13's `process_approval` call returns
+    // 429 "Rate limit exceeded" instead of the expected 403 self-approval
+    // block, and SM14/SM15 inherit the leftover lock from SM13's
+    // unprocessed request. Pause 65s (one full rate-limit window + 5s
+    // buffer) so wladmin1 has a fresh budget for the final 3 sub-tests.
+    // See docs/V1_RC_RETRO.md (run 26351850079 evidence).
+    H.log("\u23f1\ufe0f", `  Waiting 65s for rate-limit window slide before SM13-SM15...`);
+    await new Promise(r => setTimeout(r, 65000));
+
     await cleanupStaleRequests(admin.page);
 
     await H.test("SM13 submitter cannot approve their own request \u2192 403", async () => {
