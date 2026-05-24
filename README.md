@@ -130,7 +130,7 @@ Navigate to **Apps > Whitelist Manager** to start using the app.
 
 ### Install on Existing Splunk
 
-Download the latest `.spl` from the [Releases](https://github.com/RelativisticJet/wl_manager/releases) page. Replace `<VERSION>` in the commands below with the release tag you downloaded (e.g., `1.0.0-rc1`).
+Download the latest `.spl` from the [Releases](https://github.com/RelativisticJet/wl_manager/releases) page. Replace `<VERSION>` in the commands below with the release tag you downloaded (e.g., `1.0.0`).
 
 **Option A — Splunk Web UI:**
 
@@ -299,12 +299,12 @@ SOC effort — or you'd like to see it keep evolving — you can support the wor
 - **[Sponsor on GitHub](https://github.com/sponsors/RelativisticJet)** — one-time
   or monthly contributions, any tier
 - **Star the repo** — helps other SOC teams discover the project
-- **Report issues** — bugs found during the v1.0.0-rc1 public hold period are
-  high-leverage; see [CONTRIBUTING.md](CONTRIBUTING.md) for the response-SLA
-  policy
+- **Report issues** — early adopter bug reports against v1.0.0 are high-leverage
+  while the install-bug surface is still being characterized; see
+  [CONTRIBUTING.md](CONTRIBUTING.md) for the response-SLA policy
 
-Sponsorships fund focused time on Whitelist Manager (post-rc1 priorities:
-dark-theme polish, multi-org adaptability, richer approval workflows) and on
+Sponsorships fund focused time on Whitelist Manager (post-1.0.0 priorities:
+multi-org adaptability, richer approval workflows, Splunk Cloud certification) and on
 new open-source SOC tooling in the same audit-first, solo-maintainer-friendly
 style.
 
