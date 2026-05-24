@@ -318,12 +318,20 @@ class TestRowRemovalUndo:
 class TestBulkRemoval:
 
     def test_bulk_remove(self, page: Page):
+        """Bulk-remove 2 rows, save, verify via REST.
+
+        NOTE: the old assertion `final < initial` used DOM tbody tr
+        count, which is paginated and unreliable. After bulk remove +
+        save + reloadCsvQuiet, if total rows > ROWS_PER_PAGE, page 0
+        still shows ROWS_PER_PAGE rows (so DOM count stays at 10 even
+        though we removed 2). Verify via REST instead.
+        """
         bak = _backup()
+        initial_total = len(bak.get("rows", []))
+        if initial_total < 2:
+            pytest.skip("Need >= 2 rows in CSV")
         try:
             nav_to_csv(page)
-            initial = page.locator("#csv-table-container tbody tr").count()
-            if initial < 2:
-                pytest.skip("Need >= 2 rows")
 
             cbs = page.locator("#csv-table-container tbody input.wl-row-check")
             cbs.nth(0).check()
@@ -343,8 +351,9 @@ class TestBulkRemoval:
                     modal.locator(".btn-danger, .btn-primary").first.click()
                     page.wait_for_timeout(3000)
 
-                    final = page.locator("#csv-table-container tbody tr").count()
-                    assert final < initial, f"Bulk remove failed: {initial} -> {final}"
+                    after = _rest_get("get_csv_content", {"csv_file": TEST_CSV, "app": TEST_APP})
+                    assert len(after.get("rows", [])) < initial_total, \
+                        f"REST row count: {initial_total} -> {len(after.get('rows', []))}, expected decrease"
         finally:
             _restore(bak)
 
@@ -484,24 +493,34 @@ class TestAuditCommentModal:
 class TestAddRowSave:
 
     def test_add_row_and_save(self, page: Page):
+        """Add a row, fill all visible cols, save. Verify via REST.
+
+        NOTE: the old assertion `new_count == initial + 1` was wrong on
+        a paginated table. `add_row` jumps currentPage to the new last
+        page (wl_table.js:776), where the visible row count is just the
+        last-page slice — not initial+1. Verify via REST instead, where
+        we see the true total row count.
+        """
         bak = _backup()
+        initial_total = len(bak.get("rows", []))
         try:
             nav_to_csv(page)
-            initial = page.locator("#csv-table-container tbody tr").count()
 
             page.locator("#btn-add-row").click()
             page.wait_for_timeout(500)
 
-            new_count = page.locator("#csv-table-container tbody tr").count()
-            assert new_count == initial + 1, f"Add row: {initial} -> {new_count}"
-
-            # Fill the new row (last row)
+            # The new row is the LAST visible row on the new last page.
             last_row = page.locator("#csv-table-container tbody tr").last
             textareas = last_row.locator("textarea.wl-input")
             for i in range(textareas.count()):
                 ta = textareas.nth(i)
                 hdr = ta.get_attribute("data-header") or ""
                 if hdr.startswith("_"):
+                    continue
+                # Expires uses a date-picker overlay and the underlying
+                # input is read-only — skip it. Comment must be non-empty
+                # (wl_save.js:410 getAuditComment will abort otherwise).
+                if hdr == "Expires":
                     continue
                 if hdr == "Comment":
                     ta.fill("E2E new row")
@@ -516,12 +535,11 @@ class TestAddRowSave:
             page.locator("#btn-save").click()
             page.wait_for_timeout(4000)
 
-            msg = page.locator("#message-container")
-            msg_text = msg.inner_text()
-            msg_class = msg.get_attribute("class") or ""
-            assert "success" in msg_class or "Saved" in msg_text or "Added" in msg_text, \
-                f"Expected save success, got: {msg_text}"
-
+            # Verify via REST: total row count grew by 1 (DOM is paginated
+            # and unreliable for total-row assertions).
+            after = _rest_get("get_csv_content", {"csv_file": TEST_CSV, "app": TEST_APP})
+            assert len(after.get("rows", [])) == initial_total + 1, \
+                f"REST row count: {initial_total} -> {len(after.get('rows', []))}, expected +1"
         finally:
             _restore(bak)
 

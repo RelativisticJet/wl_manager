@@ -81,24 +81,30 @@ def test_edit_cell_and_save(browser, rest_client):
 
 @pytest.mark.crud
 @pytest.mark.e2e
-@pytest.mark.skip(reason=(
-    "Known pre-existing state-machine issue: after add_row + set_cell_value(new_value) "
-    "+ save_changes, REST shows row count unchanged. Same failure mode exists in "
-    "test_wl_save.py::test_add_row_and_save (10 -> 2 / 10 -> 1 outcomes). Suspected "
-    "interaction with content_hash optimistic locking when the only change is a new "
-    "row with mostly-empty fields; needs dedicated investigation against the save "
-    "pipeline. Not a playwright 1.60 regression (also fails on 1.40 per the same "
-    "smoke). See qa-findings.jsonl 2026-05-24 entry."
-))
 def test_add_row(browser, rest_client):
-    """Add a row, fill the first column, save. Verify row added via REST.
+    """Add a row, fill the first column + the Comment column, save.
 
-    NOTE on pagination: `add_row` jumps the table to the LAST page (where
-    the new empty row lives — see wl_table.js:776
-    `currentPage = ceil(currentRows.length / ROWS_PER_PAGE) - 1`).
-    With ROWS_PER_PAGE=10, a CSV with 10 rows ends up on a new page 2
-    showing only the new row, so `tbody tr` count drops from 10 → 1.
-    Verifying via REST after save sidesteps the pagination DOM trap.
+    Two non-obvious traps documented here because both blocked this test
+    on every playwright version until 2026-05-24:
+
+    1) PAGINATION TRAP: after `add_row`, wl_table.js:776 jumps to the
+       new last page. The new row is the LAST visible row on that page
+       (not the first). Calling `set_cell_value(0, ...)` would fill an
+       existing row instead, and the empty new row gets filtered out by
+       wl_save.js:505 (`filter` keeps rows where SOME visible col is
+       non-empty). Net effect on the bad path: 1 silent edit + 1 dropped
+       row = no row growth.
+
+    2) COMMENT-COLUMN GATE: `getAuditComment` (wl_save.js:410) does
+       NOT show an audit-comment modal when the CSV has a `Comment`
+       column. Instead it scans EVERY row's Comment cell; if ANY cell
+       is empty (including the new row we just added), the entire save
+       aborts client-side with "Comment field cannot be empty." — NO
+       save_csv POST is sent.
+
+    Fix: fill the LAST visible row's col 0 AND its Comment cell. The
+    Comment column index varies per CSV; we find it dynamically by
+    looking at the `data-header` attribute of each cell in the new row.
     """
     bak = setup_clean(rest_client)
     initial_total = len(bak.get("rows", []))
@@ -111,9 +117,25 @@ def test_add_row(browser, rest_client):
         page.add_row()
         time.sleep(0.5)
 
-        # The new row is the only one visible on the current (last)
-        # page; index 0 IS the new row.
-        page.set_cell_value(0, 0, new_value)
+        # The new row is the LAST visible row on the current (last) page.
+        visible_after = page.get_row_count()
+        assert visible_after > 0, "Expected at least one visible row after add_row"
+        new_row_idx = visible_after - 1
+
+        # Fill col 0
+        page.set_cell_value(new_row_idx, 0, new_value)
+
+        # Find the Comment col index in the new row by data-header attr
+        new_row = page.page.locator("#csv-table-container table tbody tr").nth(new_row_idx)
+        cells = new_row.locator("td textarea.wl-input, td input.wl-input")
+        comment_idx = None
+        for j in range(cells.count()):
+            if cells.nth(j).get_attribute("data-header") == "Comment":
+                comment_idx = j
+                break
+        if comment_idx is not None:
+            page.set_cell_value(new_row_idx, comment_idx, f"E2E add row test row note")
+
         page.save_changes(comment="E2E add row test")
 
         # REST verification: total row count grew by 1, new value present
@@ -227,17 +249,13 @@ def test_horizontal_scroll_wide_csv(browser, rest_client):
 
 @pytest.mark.crud
 @pytest.mark.e2e
-@pytest.mark.skip(reason=(
-    "Depends on add_row+save persisting a new row, which is the same path that "
-    "test_add_row hits and fails on. Skip linked to test_add_row's skip reason — "
-    "fix both together in the dedicated investigation session."
-))
 def test_crud_workflow_end_to_end(browser, rest_client):
     """End-to-end: load, edit, add, save, verify all via REST.
 
     Edit happens on visible page 1; add_row jumps to last page (per
-    wl_table.js pagination semantics). After add, the new row is at
-    visible index 0 (the only row on the new page).
+    wl_table.js pagination semantics). The new row is the LAST visible
+    row on the new last page (see test_add_row docstring for the
+    pagination-trap explanation).
     """
     bak = setup_clean(rest_client)
     initial_total = len(bak.get("rows", []))
@@ -252,10 +270,21 @@ def test_crud_workflow_end_to_end(browser, rest_client):
         assert page.set_cell_value(0, 0, edit_value)
 
         # Add a row; this jumps to last page where the new row is the
-        # only visible one (visible index 0).
+        # LAST visible one. Fill col 0 AND Comment (see test_add_row
+        # docstring for why Comment is required).
         page.add_row()
         time.sleep(0.5)
-        page.set_cell_value(0, 0, add_value)
+        visible_after_add = page.get_row_count()
+        assert visible_after_add > 0, "Expected at least one visible row after add_row"
+        new_row_idx = visible_after_add - 1
+        page.set_cell_value(new_row_idx, 0, add_value)
+        # Fill Comment col by data-header lookup
+        new_row = page.page.locator("#csv-table-container table tbody tr").nth(new_row_idx)
+        cells = new_row.locator("td textarea.wl-input, td input.wl-input")
+        for j in range(cells.count()):
+            if cells.nth(j).get_attribute("data-header") == "Comment":
+                page.set_cell_value(new_row_idx, j, "E2E e2e row note")
+                break
 
         # Single save commits both changes
         page.save_changes(comment="E2E e2e: edit + add + save")
