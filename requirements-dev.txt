@@ -7,7 +7,7 @@
 pytest==9.0.3
 pytest-cov==5.0.0
 freezegun==1.5.1
-hypothesis==6.90.0
+hypothesis==6.152.9
 pytest-timeout==2.1.0
 # playwright bumped 1.40.0 → 1.60.0 on 2026-05-24 (PR #13). This re-aligns
 # the Python pin with Node `playwright-core@^1.59.1` in package.json,
