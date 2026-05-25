@@ -6,7 +6,7 @@
 # to fix.
 pytest==9.0.3
 pytest-cov==5.0.0
-freezegun==1.5.1
+freezegun==1.5.5
 hypothesis==6.90.0
 pytest-timeout==2.1.0
 # playwright bumped 1.40.0 → 1.60.0 on 2026-05-24 (PR #13). This re-aligns
