@@ -193,3 +193,4 @@ entities.json
 # removed 3 unrelated career-page scrapes that had been accidentally
 # tracked (2026-05-18).
 .firecrawl/
+scripts/screenshot_prep.py
