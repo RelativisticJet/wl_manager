@@ -4,6 +4,72 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [1.0.1] - 2026-06-01
+
+**Splunkbase upload patch.** Bumps `default/app.conf [launcher].version`
+and `app.manifest:info.id.version` to `1.0.1`, build `671`. No app-code
+or feature changes — a single packaging fix so v1.0.0's content can
+clear the Splunkbase upload gate.
+
+### Why this exists
+
+Uploading `wl_manager-1.0.0.spl` to Splunkbase was rejected at the
+package-validation step with:
+
+> The `check_for_updates` field found in `app.conf` must not be disabled.
+
+The setting `[package].check_for_updates = false` in
+`default/app.conf` (present since long before public release, value
+inherited from boilerplate, not from a recorded product decision) is
+treated by AppInspect 4.2.0's `check_for_updates_disabled` rule as a
+**warning** — which we triaged as acceptable during Phase 1.6 (see
+`docs/APPINSPECT_FINDINGS.md` F12). But Splunkbase's package-validation
+step (a different gate, run at upload time, not equivalent to the
+AppInspect API workflow we shipped in CI) enforces "must not be
+disabled" as a **hard rejection**. The two pipelines disagreed; the
+Phase 1.6 triage assumed they were equivalent; they aren't.
+
+### What changed
+
+- **`default/app.conf` `[package]`.** Removed the
+  `check_for_updates = false` line. Splunk's default is `true`, which
+  is what Splunkbase requires. The setting is not load-bearing for any
+  feature of the app — checking for updates is an end-user-facing
+  capability that customers should be allowed to use.
+- **Build/version bumps.** `[install].build` 670 → 671;
+  `[launcher].version` + `[id].version` 1.0.0 → 1.0.1; `app.manifest`
+  `info.id.version` matched. `appserver/static/whitelist_manager.js`
+  `urlArgs: "_b=671"` keeps the AMD cache-bust in sync with the build
+  number (Splunk's 1-year static-asset cache otherwise serves stale
+  JS — see `docs/SPLUNK_QUIRKS.md`).
+- **`docs/DECISION_LOG.md`.** Added a new row recording the
+  AppInspect-vs-Splunkbase gate divergence so future contributors
+  don't re-introduce `check_for_updates = false`.
+- **`docs/APPINSPECT_FINDINGS.md`.** F12 post-mortem note: the
+  Phase 1.6 triage of "false value is acceptable, only the placement
+  matters" was wrong. Splunkbase blocks at upload regardless of
+  AppInspect's verdict.
+
+### What did not change
+
+No code paths in `bin/`, no behavior visible to analysts/admins, no
+audit-trail schema, no REST API contract. The shipped `.spl` differs
+from `wl_manager-1.0.0.spl` only in `default/app.conf` (one line
+removed, build/version bumped) and the version-pinned files listed
+above.
+
+### Migration notes for existing v1.0.0 installs
+
+None. v1.0.0 installs that were deployed manually (outside Splunkbase)
+continue to work — `[package].check_for_updates` did not affect any
+runtime behavior of this app. The only effect of removing it is that
+Splunk's built-in "check for app updates" UI will now query Splunkbase
+for newer versions (which is the standard Splunk behavior all
+production apps allow). To upgrade in place, install
+`wl_manager-1.0.1.spl` over the existing app.
+
+---
+
 ## [1.0.0] - 2026-05-24
 
 **General Availability release.** Bumps `default/app.conf [launcher].version`
@@ -55,7 +121,7 @@ changes affecting customer behavior.
 - §3.5 version-tag consistency pre-flight: passes (`app.conf
   [launcher].version` = `app.conf [id].version` = `app.manifest
   info.id.version` = `1.0.0`; `[package].id` = `[id].name` = `wl_manager`).
-- Doc-drift hook: PASS (37 docs / build 670).
+- Doc-drift hook: PASS (37 docs / build 670 (historical, v1.0.0 GA cut)).
 - QA Second-pass review: PASS, zero gaps.
 - `.github/workflows/release.yml` Sigstore keyless signing dry-run
   verified 2026-05-13 — the v1.0.0 tag push will trigger production

@@ -389,6 +389,7 @@ run `26002056326` passing both profiles green. Outcome per F-finding:
 | F1 | manifest `Enterprise` version requirement | partial — manifest now `"9.3"` (operationally honest; only Splunk-supported version as of 2026-05-17), but SLIM still rejects it. Suppressed via expect.yaml. | `5757ade` + `628a2b3` |
 | F2–F11 | SLIM spec drift on `python.version` / `python.required` | unchanged in source (still required by static AppInspect); suppressed at the dynamic-API layer via expect.yaml. | `628a2b3` |
 | F12 | redundant `[id].check_for_updates` | **fixed in source** by removing the redundant line; `[package]` is now the sole home. | `d40e1b9` |
+| F12 post-mortem (2026-06-01) | `[package].check_for_updates = false` itself | **value also removed in v1.0.1** — Splunkbase upload-time package validation rejected `wl_manager-1.0.0.spl` with "The check_for_updates field found in app.conf must not be disabled." AppInspect's `check_for_updates_disabled` only warns; Splunkbase enforces it as a hard gate. The Phase 1.6 triage (which kept the value at `false`) was wrong: it focused only on the F12 stanza-placement question, not the value choice. v1.0.1 removes the `check_for_updates` line entirely so Splunk's default (`true`) applies. See `docs/DECISION_LOG.md` 2026-06-01 row for the full divergence record + the maintenance rule that prevents re-introduction. | `<v1.0.1 release commit>` |
 
 Three CI iterations confirmed SLIM rejects every Enterprise version
 format we can produce without Splunk-private documentation:
