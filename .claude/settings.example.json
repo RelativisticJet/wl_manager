@@ -1,0 +1,102 @@
+{
+  "_comment_": [
+    "Tracked TEMPLATE for the project's Claude Code hook configuration.",
+    "",
+    ".claude/settings.json is gitignored (per-developer config), so this",
+    "tracked example lets new collaborators bootstrap a working hook setup",
+    "in one copy step:",
+    "",
+    "    cp .claude/settings.example.json .claude/settings.json",
+    "",
+    "All paths use forward slashes + Windows-style C:/... drive prefix",
+    "because Claude Code on Git Bash / MSYS interprets either form. On",
+    "non-Windows hosts, rewrite the paths to match your checkout (e.g.",
+    "/home/you/wl_manager/scripts/hooks/...).",
+    "",
+    "Each hook is documented in scripts/hooks/README.md. The .claude/hooks/",
+    "wrappers (post-edit-check.js, stop-check.js, session-context-loader.sh,",
+    "prompt-status-anchor.sh) are also per-developer — adapt or remove them",
+    "to taste."
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash c:/Users/PC/wl_manager/.claude/hooks/session-context-loader.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash c:/Users/PC/wl_manager/.claude/hooks/prompt-status-anchor.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "tool == 'Write' || tool == 'Edit' || tool == 'Bash'",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node c:/Users/PC/wl_manager/scripts/hooks/block-synthetic-fixtures.js"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node c:/Users/PC/wl_manager/scripts/hooks/preflight-tag-guard.js"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "tool == 'Edit' || tool == 'Write'",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node c:/Users/PC/wl_manager/.claude/hooks/post-edit-check.js"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == 'Edit' || tool == 'Write'",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node c:/Users/PC/wl_manager/scripts/hooks/validate-runner.js"
+          }
+        ]
+      },
+      {
+        "matcher": "tool == 'Edit' || tool == 'Write'",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node c:/Users/PC/wl_manager/scripts/hooks/urlargs-sync.js"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node c:/Users/PC/wl_manager/.claude/hooks/stop-check.js"
+          }
+        ]
+      }
+    ]
+  }
+}

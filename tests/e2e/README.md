@@ -13,7 +13,8 @@ clicking the real UI, or an authenticated REST call to
 storage to "set up" queue entries, counter values, or baseline state.
 Synthetic fixtures populate both sides of the handler/frontend
 contract and hide schema drift — the exact failure mode that let the
-build 614 dual-admin "Invalid Date" bug reach production. If the
+build 614 (2026-04-23 incident) dual-admin "Invalid Date" bug reach
+production. If the
 state you need did not get there by a real user doing a real thing,
 your test is not an E2E test.
 
@@ -164,7 +165,7 @@ If `assertTestHarness()` throws during a test run:
 
 ## Test-Run Cadence (Ring 6.1 Day 6.1.10)
 
-Since the Day 6.1.9b fix landed (build 657), rate limiting is enforced
+Since the Day 6.1.9b fix shipped (build 657), rate limiting is enforced
 strictly cross-worker: each `(user, action_type)` bucket allows
 **30 writes / 60 seconds** across the entire Splunk persistconn pool.
 This is the correct production behavior, but it changes how the
@@ -187,7 +188,7 @@ the same user (e.g. `test_concurrent_save_csv.cjs`,
 **Why this is correct behavior**: pre-fix the per-worker
 `_rate_limits` dict bypassed this — each worker had its own
 30/60s budget, so two workers gave you 60/60s, four workers
-120/60s, etc. The R6-F8 fix at build 657 closed this and
+120/60s, etc. The R6-F8 fix shipped at build 657 closed this and
 restored the documented cap. Tests must now respect the cap
 just like production callers do.
 

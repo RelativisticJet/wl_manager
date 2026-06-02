@@ -10,7 +10,7 @@ VERSION     := $(shell grep '^version' default/app.conf | head -1 | cut -d= -f2 
 SPL_FILE    := dist/$(APP_NAME)-$(VERSION).spl
 SPLUNK_PASS ?= Chang3d!
 
-.PHONY: help validate appinspect test package clean docker-up docker-down docker-logs docker-restart metrics metrics-report
+.PHONY: help validate appinspect test package clean docker-up docker-down docker-logs docker-restart metrics metrics-report hook-tests
 
 help: ## Show this help message
 	@echo ""
@@ -33,6 +33,9 @@ validate: ## Run all validation checks (syntax, security, structure)
 
 doc-check: ## Check docs for drift against app.conf + missing file refs
 	@bash scripts/pre-commit-doc-drift.sh
+
+hook-tests: ## Run unit tests for the project + global Claude Code hooks
+	@bash tests/hooks/run.sh
 
 appinspect: validate ## Run Splunk AppInspect validation (standard + cloud tag sets)
 	@bash scripts/verify_appinspect.sh --both

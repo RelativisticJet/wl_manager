@@ -10,6 +10,18 @@ project. The per-developer wiring lives in `.claude/settings.json`
 (git-ignored), which is why each contributor must follow the one-time
 setup below.
 
+## Quick start for new collaborators
+
+```bash
+cp .claude/settings.example.json .claude/settings.json
+make hook-tests   # confirm everything wired up
+```
+
+`.claude/settings.example.json` is the tracked template; copying it
+gives you all six hooks below at once. Edit the paths if your checkout
+is not at `c:/Users/PC/wl_manager` (rewrite them to your own
+absolute path).
+
 ## Available hooks
 
 ### `block-synthetic-fixtures.js`
@@ -52,6 +64,68 @@ masked schema drift between `timestamp` and `submitted_at`.
 - `GET` calls against KV collections (read-only; no mutation).
 - Appends to `_recovery_log.jsonl` (it is designed as an append-only
   fallback from `wl_expiration_cleanup.py` and the recovery scripts).
+
+### `preflight-tag-guard.js`
+
+**Type**: `PreToolUse`
+**Matcher**: `Bash`
+
+Catches `git tag vX.Y.Z`, `gh release create vX.Y.Z`, and
+`gh api ... tag_name=vX.Y.Z` commands and runs the §3.5
+Version-Tag Consistency pre-flight from
+`docs/RELEASE_CHECKLIST.md`. Blocks (exit 2) if any of the four
+sources of truth disagree with the intended tag:
+
+- `default/app.conf [launcher].version`
+- `default/app.conf [id].version`
+- `app.manifest info.id.version`
+- `default/app.conf [package].id == [id].name`
+
+Non-semver tag names (`my-feature-branch`, `pre-release-test`) are
+ignored. `Edit` / `Write` / non-Bash tool calls are ignored.
+
+The underlying check is `scripts/preflight-tag.sh` — it can also
+be run manually before any tag-cut.
+
+### `validate-runner.js`
+
+**Type**: `PostToolUse`
+**Matcher**: `Edit | Write`
+
+After edits to `default/*.conf`, `app.manifest`, or
+`default/data/ui/{views,nav}/*.xml`, runs `scripts/validate.sh`
+(the same checks Splunk AppInspect runs locally) and surfaces the
+FAIL count + first 10 failing lines to Claude via stderr.
+Non-blocking. Latency ~7.7s on Windows + Git Bash + Python; only
+triggered by the narrow set of config edits.
+
+### `urlargs-sync.js`
+
+**Type**: `PostToolUse`
+**Matcher**: `Edit | Write`
+
+After any edit to `default/app.conf`, syncs
+`appserver/static/whitelist_manager.js`'s
+`require.config({ urlArgs: "_b=N" })` to match
+`[install].build`. Mechanizes the rule in CLAUDE.md "Splunk
+Quirks": *bumping `build` in `app.conf` REQUIRES also bumping
+`_b=` in `whitelist_manager.js`*. Without this, the year-long
+browser cache leaves users running stale JS until they hard-refresh.
+
+### `lib/code-quality-checks.js`
+
+**Type**: shared library (not a hook itself)
+
+Detection patterns used by both `.claude/hooks/post-edit-check.js`
+(PostToolUse) and `.claude/hooks/stop-check.js` (Stop). Catches
+Python `print()` / `pdb` / bare `except:` and JS `console.log` /
+`debugger` / `innerHTML` XSS patterns. Consolidated 2026-06-01 so
+the two consumers stay in sync (previously the regex set drifted
+between them).
+
+The two consumer hooks live under `.claude/hooks/` (per-developer)
+because their threshold logic is personal preference — but the
+patterns themselves live here, tracked.
 
 ## Setup (per developer, one-time)
 
@@ -109,7 +183,7 @@ echo "exit=$?"
 
 ## Adding a new hook
 
-1. Drop the script in `scripts/hooks/your-hook-name.js` (or `.py` / `.sh`).
+1. Drop the script in `scripts/hooks/<your-hook-name>.js` (or `.py` / `.sh`).
 2. Document it in this README under "Available hooks".
 3. Provide a `Setup` snippet showing the exact `.claude/settings.json`
    entry to add.

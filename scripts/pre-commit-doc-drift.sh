@@ -75,6 +75,35 @@ if [ -d "docs" ]; then
     done < <(find docs -name '*.md' -type f -print0 2>/dev/null)
 fi
 
+# .github/ — PR template + issue templates. These reference repo files
+# (CONTRIBUTING.md, CHANGELOG sections, test paths) and drift the same
+# way root docs do. config.yml is not markdown so it stays out.
+GITHUB_DOCS=(
+    ".github/PULL_REQUEST_TEMPLATE.md"
+    ".github/ISSUE_TEMPLATE/bug_report.md"
+    ".github/ISSUE_TEMPLATE/feature_request.md"
+    ".github/ISSUE_TEMPLATE/question.md"
+)
+for f in "${GITHUB_DOCS[@]}"; do
+    if [ -f "$f" ]; then
+        DOCS+=("$f")
+    fi
+done
+
+# Nested READMEs in source-of-truth subdirectories. docs/*/README.md is
+# already picked up by the docs/ scan above. Excludes virtualenvs,
+# pytest caches, node_modules, and __pycache__.
+for d in scripts tests requirements; do
+    if [ -d "$d" ]; then
+        while IFS= read -r -d '' f; do
+            case "$f" in
+                */node_modules/*|*/.venv*/*|*/venv/*|*/.pytest_cache/*|*/__pycache__/*) continue ;;
+            esac
+            DOCS+=("$f")
+        done < <(find "$d" -name 'README.md' -type f -print0 2>/dev/null)
+    fi
+done
+
 if [ "${#DOCS[@]}" -eq 0 ]; then
     echo -e "${YELLOW}doc-drift: no tracked docs found — nothing to check.${NC}"
     exit 0

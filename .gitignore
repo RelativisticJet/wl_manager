@@ -1,8 +1,11 @@
-# Claude temporary files (per-developer; exception below for shared QA library)
+# Claude temporary files (per-developer; exceptions below for shared assets)
 .claude/*
 # Exception: project-local QA failure-mode library is shared with collaborators
 # (see CLAUDE.md "Synthetic Fixtures" and ~/.claude/docs/SECOND_PASS_REVIEW.md)
 !.claude/qa-failure-modes.md
+# Exception: tracked TEMPLATE for the project's hook configuration. Copy to
+# .claude/settings.json (gitignored) to opt in to the project's hook set.
+!.claude/settings.example.json
 .mcp.json
 .superpowers/
 
