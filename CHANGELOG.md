@@ -4,6 +4,100 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [1.0.2] - 2026-06-02
+
+**Splunkbase Cloud-vetting compatibility patch.** Bumps the manifest
+to declare support for currently-supported Splunk Enterprise versions
+(9.4 and 10.0) so the Splunkbase upload of v1.0.1 (rejected at the
+SLIM validation step on 2026-06-01) can proceed. No app-code or
+feature changes — manifest + version-bump + supporting documentation
+only.
+
+### Why this exists
+
+The hosted AppInspect run for Splunkbase upload `8800-43285` rejected
+v1.0.1 at SLIM validation with:
+
+> `manifest.platformRequirements.splunk: Version requirement includes
+> no supported version of Splunk Enterprise: 9.3`
+
+Splunk 9.3 was retired from Splunk's supported-version list between
+the v1.0.0 / v1.0.1 release window and the 2026-06-01 Splunkbase
+upload. SLIM's supported-version table is the source of truth for
+Cloud Vetting; once a version falls off, the manifest must declare
+at least one currently-supported value.
+
+### What changed
+
+- `app.manifest`: `platformRequirements.splunk.Enterprise` changed
+  from `"9.3"` to the list form `["9.4", "10.0"]`. List-form is
+  Splunk's documented multi-version syntax in SLIM 2.0 manifests.
+- `app.manifest`: `info.id.version` -> `1.0.2`,
+  `releaseDate` -> `2026-06-02`.
+- `default/app.conf`: `[install].build = 672`, `[launcher].version =
+  1.0.2`, `[id].version = 1.0.2`.
+- `appserver/static/whitelist_manager.js:14`: `urlArgs: "_b=672"`
+  (auto-synced by `scripts/hooks/urlargs-sync.js`).
+- New file `docs/SPLUNK_10_COMPATIBILITY.md` captures the 7-risk-area
+  code audit from `CLAUDE.md` "Splunk Version Pinning Audit" against
+  Splunk 10.x: 4 risk areas N/A; 3 risk areas present and handled
+  correctly today (`mvc.Components` uses explicit dual-instance reads,
+  `INDEXED_EXTRACTIONS=json + KV_MODE=none` matches documented Splunk
+  pairing, `simpleRequest` 404 wrapped in `try/except`).
+- `docs/APPINSPECT_FINDINGS.md` §7.5 added with the 2026-06-01 hosted-API
+  numbers (162 success / 1 failure / 0 future / 0 errors / 5 warnings /
+  79 N/A) and the F13 resolution. The 5 warnings are byte-identical to
+  §3 — no new warning class.
+- `docs/DECISION_LOG.md` 2026-06-02 row records the choice of
+  `["9.4", "10.0"]` over (a) single-version with retest, (b) single-
+  version without retest, (d) drop Cloud Vetting entirely.
+- `CLAUDE.md` "Splunk Version Pinning Audit" log: new row for the
+  2026-06-02 unscheduled audit (the quarterly was due 2026-07-18; the
+  Splunkbase rejection forced an early audit).
+
+### Known residual gap
+
+The declaration is **code-audit-only**, not runtime-verified. The dev
+container at `splunk/splunk:9.3.1` could not run the full E2E suite
+against 9.4 or 10.0 in this cycle (Docker was not available on the
+dev machine at fix time, and even with Docker, standing up parallel
+9.4 / 10.0 containers + running 274 E2E tests is several hours of
+work that doesn't fit a packaging-only patch release).
+
+The v1.1 backlog item records the runtime verification commitment:
+stand up `splunk/splunk:9.4.x` and `splunk/splunk:10.0.x` parallel
+containers, run integration + E2E suites against both, capture any
+failures in a new "Runtime verification" section of
+`docs/SPLUNK_10_COMPATIBILITY.md`. The 2026-07-18 quarterly audit per
+CLAUDE.md is the deadline for this work; if either container surfaces
+a regression, the recovery is to revert the manifest to the working
+version only (`["9.4"]` if 10.0 is the problem) and ship v1.0.3.
+
+### What did not change
+
+- All app code (`bin/*.py`, `appserver/static/*.js`,
+  `appserver/static/**/*.css`, all dashboard XML, all conf files
+  except `default/app.conf` build/version fields, all lookups,
+  scripted inputs, REST handlers, RBAC). The Splunkbase package's
+  behavior on Splunk 9.3.1 (the current dev container) is unchanged.
+- Sigstore signing chain. The release workflow signs v1.0.2 with the
+  same `sigstore/cosign-installer@v3` + `cosign-release v2.4.1`
+  pairing that signed v1.0.0 and v1.0.1.
+
+### Migration notes
+
+- Existing 9.3.x installs continue to work. We are NOT dropping
+  9.3 support at the code level; we are dropping the 9.3 *declaration*
+  because Splunkbase Cloud Vetting requires only supported versions.
+  9.3 customers can install v1.0.2 manually from GitHub releases
+  (which is the same install path v1.0.1 supports).
+- Splunk Cloud customers can now install v1.0.2 via Splunkbase
+  (assuming SLIM accepts the list-form declaration; the next hosted
+  AppInspect run on the v1.0.2 .spl is the runtime confirmation).
+- No customer-facing breaking changes; this is a label-only release.
+
+---
+
 ## [1.0.1] - 2026-06-01
 
 **Splunkbase upload patch.** Bumps `default/app.conf [launcher].version`

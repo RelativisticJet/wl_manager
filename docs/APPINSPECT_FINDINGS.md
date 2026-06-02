@@ -548,6 +548,63 @@ checkpoint at week 4) is **not applicable**. Next milestone per
 
 ---
 
+## 7.5 v1.0.1 Splunkbase upload — Cloud-vetting SLIM failure (2026-06-01 → resolved in v1.0.2 on 2026-06-02)
+
+**Background**: After v1.0.1 was cut and uploaded to Splunkbase
+(submission 8800-43285), the hosted AppInspect run rejected the
+package against Splunk Cloud Vetting with one new HARD failure.
+This is a different failure class than F1 in §5.2: that prior
+F1 was about an open-ended `>=9.0.0` constraint; this new failure
+is about declaring a version (`"9.3"`) that Splunk has since
+retired from its supported list.
+
+| # | Class | File | Stanza | Setting / message |
+|---|-------|------|--------|------------------|
+| **F13** | **HARD ERROR** | `app.manifest` | `platformRequirements.splunk` | "Version requirement includes no supported version of Splunk Enterprise: 9.3" |
+
+**Headline numbers (2026-06-01 hosted API run)**:
+162 success / **1 failure** / 0 future_failures / 0 errors / 5 warnings
+/ 79 N/A / 0 skipped.
+
+The 5 warnings are identical to §3.2 + §3.3 + §3.4 + §3.5 + §3.6
+already triaged (no change). Cron warnings (§3.5) remain accepted
+as security-critical detection latency. SplunkJS warnings (§3.2)
+have explicit Splunk-side guidance to "ignore". No new warnings.
+
+**F13 — root cause analysis**: Splunk's supported-version list moves
+forward as minor versions reach end-of-life. As of 2026-06,
+Enterprise 9.3 is no longer on the SLIM-accepted list. The manifest
+must declare at least one currently-supported version. See
+`docs/SPLUNK_10_COMPATIBILITY.md` for the 7-risk-area code audit
+that backs the multi-version declaration choice; see
+`docs/DECISION_LOG.md` 2026-06-02 row for why we chose `["9.4", "10.0"]`
+over the single-version + retest alternatives.
+
+**Resolution (v1.0.2, commit pending)**:
+
+- `app.manifest`: `platformRequirements.splunk.Enterprise` changed from
+  `"9.3"` to `["9.4", "10.0"]`. List form is the documented SLIM
+  multi-version syntax (the prior F1 fix for `>=9.0.0` shipped as
+  single-version `"9.3"`; this fix replaces it with list form).
+- `app.manifest`: `info.id.version` bumped to `1.0.2`,
+  `releaseDate` to `2026-06-02`.
+- `default/app.conf`: `build = 672`, `[launcher].version = 1.0.2`,
+  `[id].version = 1.0.2`.
+- `appserver/static/whitelist_manager.js:14`: `urlArgs: "_b=672"`
+  (auto-applied by `scripts/hooks/urlargs-sync.js`).
+- New file `docs/SPLUNK_10_COMPATIBILITY.md` captures the audit.
+
+**Disposition**: **F13 FIXED in v1.0.2**.
+
+**Local runtime verification gap**: Docker not running on this dev
+machine at fix time; could not re-run `scripts/verify_appinspect.sh`
+locally. The next Splunkbase upload of `wl_manager-1.0.2.spl` will
+be the runtime confirmation. If SLIM rejects the list form
+(`["9.4", "10.0"]`), the fallback is `"9.4"` single-version + a new
+DECISION_LOG row reversing the multi-version choice.
+
+---
+
 ## 8. Revision log
 
 - 2026-05-17 — initial Phase 1.3 baseline. App.manifest version drift
@@ -608,3 +665,18 @@ checkpoint at week 4) is **not applicable**. Next milestone per
   workflow's actual run status; the QA process must include a `gh
   run list` cross-check on every claimed-green workflow at
   phase-closure boundaries.
+- 2026-06-02 — **v1.0.1 Splunkbase upload (8800-43285) → F13 SLIM
+  HARD ERROR**. The `"9.3"` value that Phase 1.7 accepted as
+  "operationally honest" was retired from Splunk's supported list
+  between 2026-05-17 and 2026-06-01, re-opening the Cloud-vetting
+  block. §7.5 added with the 2026-06-01 hosted-API run results
+  (162 / 1 / 0 / 0 / 5 / 79 / 0) and the v1.0.2 resolution path.
+  New file `docs/SPLUNK_10_COMPATIBILITY.md` captures the 7-risk-area
+  audit that backs the `["9.4", "10.0"]` list-form declaration; new
+  `docs/DECISION_LOG.md` 2026-06-02 row records the multi-version
+  choice over single-version-with-retest and Drop-Cloud alternatives.
+  All 5 warnings re-triaged identical to §3 (no change). Phase 1.7's
+  triple-format retry (`>=9.0,<10.0` / `"9.3"`) is now triple +1: the
+  list-form `["9.4", "10.0"]` is a NEW format SLIM did not previously
+  consume. If SLIM rejects the list form on the next hosted-API run,
+  fallback is single-version `"9.4"` with a DECISION_LOG reversal row.

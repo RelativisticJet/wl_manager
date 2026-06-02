@@ -5,7 +5,7 @@
     "id": {
       "group": null,
       "name": "wl_manager",
-      "version": "1.0.1"
+      "version": "1.0.2"
     },
     "author": [
       {
@@ -14,7 +14,7 @@
         "company": null
       }
     ],
-    "releaseDate": "2026-06-01",
+    "releaseDate": "2026-06-02",
     "description": "Manage detection-rule CSV whitelists with diff-based audit trail. Provides a web-based interface for viewing, editing, adding, and removing whitelist entries with full change tracking, expiration management, and role-based access control.",
     "classification": {
       "intendedAudience": "Security Operations",
@@ -36,7 +36,7 @@
   "incompatibleApps": null,
   "platformRequirements": {
     "splunk": {
-      "Enterprise": "9.3"
+      "Enterprise": ["9.4", "10.0"]
     }
   },
   "supportedDeployments": [
