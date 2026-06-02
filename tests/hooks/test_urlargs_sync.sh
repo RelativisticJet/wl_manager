@@ -63,4 +63,33 @@ expect_eq "case 4: silent on README edit" "" "$out"
 FINAL_URLARGS=$(grep -oE '_b=[0-9]+' "$JS_FILE" | head -1 | grep -oE '[0-9]+')
 expect_eq "case 4: JS unchanged after non-app.conf edit" "$START_URLARGS" "$FINAL_URLARGS"
 
+# Case 5: multi-match defensive path — synthesize a 2nd urlArgs line
+# in the JS (e.g. simulating a future refactor that ships a second
+# require.config block) and confirm the hook warns AND syncs both.
+restore
+# Inject a duplicate urlArgs line with a stale value below the real one
+awk -v stale="$((START_URLARGS - 99))" '
+    /urlArgs:.*_b=/ && !done {
+        print
+        # Append a 2nd urlArgs line right after the existing one
+        printf "require.config({ urlArgs: \"_b=%s\" });\n", stale
+        done = 1
+        next
+    }
+    { print }
+' "$JS_FILE" > "$SCRATCH/wm.dual.js"
+cp "$SCRATCH/wm.dual.js" "$JS_FILE"
+DUAL_COUNT=$(grep -cE '_b=[0-9]+' "$JS_FILE")
+expect_eq "case 5: fixture has 2 _b= occurrences" "2" "$DUAL_COUNT"
+
+out=$(printf '%s' "{\"tool_input\":{\"file_path\":\"$APP_CONF\"}}" | node "$HOOK" 2>&1 || true)
+expect_contains "case 5: warns about multiple occurrences" "WARNING" "$out"
+expect_contains "case 5: reports occurrence count" "2 occurrence" "$out"
+
+# Both occurrences should now equal the build number
+DISTINCT_AFTER=$(grep -oE '_b=[0-9]+' "$JS_FILE" | sort -u | wc -l | tr -d '[:space:]')
+expect_eq "case 5: all urlArgs values converged" "1" "$DISTINCT_AFTER"
+FINAL_VAL=$(grep -oE '_b=[0-9]+' "$JS_FILE" | head -1 | grep -oE '[0-9]+')
+expect_eq "case 5: converged value equals build" "$START_BUILD" "$FINAL_VAL"
+
 finish_suite

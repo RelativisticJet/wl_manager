@@ -160,6 +160,26 @@ app.conf-version-drift portion of this section — the
 stay regardless, since both are AppInspect rules independent of how
 the tag is derived.
 
+**Three copies, kept in sync (2026-06-02):** the same four-source check
+exists in three forms. Updating one without the other two re-opens the
+gap the §3.5 preflight closes.
+
+- `scripts/preflight-tag.sh` — canonical bash implementation, runnable
+  manually before any tag-cut (`bash scripts/preflight-tag.sh v1.2.3`).
+- `scripts/hooks/preflight-tag-guard.js` — PreToolUse Bash hook that
+  invokes `preflight-tag.sh` when it sees `git tag vX.Y.Z` or
+  `gh release create vX.Y.Z` commands. Blocks if the script exits
+  non-zero. See `scripts/hooks/README.md` for setup.
+- This `§3.5` section — human-readable spec + inline bash sample.
+  Keep the field names + error messages here matching what
+  `preflight-tag.sh` emits, so an incident-response reader can grep
+  the docs for the on-disk error message and find the failure mode.
+
+If you change the field set (e.g. AppInspect adds a 5th source of
+truth in a future major version), update all three, plus
+`tests/hooks/test_preflight_tag_guard.sh` which encodes the contract
+in test form.
+
 ---
 
 ## 4. E2E Suite Green

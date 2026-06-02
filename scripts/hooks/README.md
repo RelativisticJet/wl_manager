@@ -13,14 +13,48 @@ setup below.
 ## Quick start for new collaborators
 
 ```bash
-cp .claude/settings.example.json .claude/settings.json
-make hook-tests   # confirm everything wired up
+bash scripts/install-hooks.sh   # writes .claude/settings.json from template
+make hook-tests                  # confirm everything wired up (105 assertions)
 ```
 
-`.claude/settings.example.json` is the tracked template; copying it
-gives you all six hooks below at once. Edit the paths if your checkout
-is not at `c:/Users/PC/wl_manager` (rewrite them to your own
-absolute path).
+`scripts/install-hooks.sh` reads the tracked TEMPLATE at
+`.claude/settings.example.json`, substitutes the hardcoded
+`c:/Users/PC/wl_manager` prefix with your actual checkout path, and
+writes the result to `.claude/settings.json` (the actual per-developer
+config, gitignored). Re-running on the same checkout is a silent no-op;
+re-running against a different checkout refuses unless you pass
+`--force`.
+
+If you prefer to edit settings.json by hand:
+
+```bash
+cp .claude/settings.example.json .claude/settings.json
+# Then s/c:\/Users\/PC\/wl_manager/<your checkout>/ throughout.
+```
+
+### Global hooks (separate from this directory)
+
+Three additional hooks live under `~/.claude/hooks/` (NOT in this repo)
+and are registered in `~/.claude/settings.json`. They are not part of
+`install-hooks.sh` because they apply to ALL projects on your machine,
+not just `wl_manager`:
+
+- `force-push-guard.js` — PreToolUse Bash; blocks `git push --force`
+  to shared branches; allows `--force-with-lease`.
+- `banned-phrase-trigger.js` + companion prompt hook — Stop +
+  UserPromptSubmit pair; scans last assistant message for the 5
+  CLAUDE.md banned phrases ("Should be fine", "Probably passes",
+  "Theoretically correct", "I think it's fixed", "I fixed it, you
+  try"), injects a system-reminder next turn requiring
+  evidence-backed retraction.
+- `additional-thoughts-trigger.sh` + companion prompt hook — Stop +
+  UserPromptSubmit pair; mechanizes the user preference to always
+  surface gap-analysis after substantive work.
+
+The global hooks are covered by `tests/hooks/test_global_*.sh` which
+skip gracefully if the hook isn't installed. Source for the global
+hooks isn't in this repo; ask the maintainer for the install bundle
+if you want them.
 
 ## Available hooks
 

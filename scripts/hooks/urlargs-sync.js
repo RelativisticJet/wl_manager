@@ -104,24 +104,42 @@ function main() {
     }
 
     const js = fs.readFileSync(JS_FILE, 'utf8');
-    const urlArgsRe = /(urlArgs\s*:\s*")_b=(\d+)(")/;
-    const m = js.match(urlArgsRe);
-    if (!m) {
+    // Use the global flag so we can detect AND replace every
+    // occurrence. Multiple matches are rare (the file ships with
+    // exactly one), but if a refactor ever introduces a second
+    // require.config block we want to sync them together — otherwise
+    // half the AMD modules would load with one cache-bust value and
+    // half with another, which is worse than no cache-bust at all.
+    const urlArgsReG = /(urlArgs\s*:\s*")_b=(\d+)(")/g;
+    const matches = [...js.matchAll(urlArgsReG)];
+    if (matches.length === 0) {
         process.stderr.write('[urlargs-sync] urlArgs pattern not found in whitelist_manager.js — manual review needed\n');
         process.exit(0);
     }
 
-    const current = m[2];
-    if (current === build) {
-        // Already in sync — silent
+    const current = matches[0][2];
+    const allInSync = matches.every((m) => m[2] === build);
+    if (allInSync) {
+        // All occurrences already in sync — silent
         process.exit(0);
     }
 
-    const next = js.replace(urlArgsRe, `$1_b=${build}$3`);
+    const distinctCurrent = [...new Set(matches.map((m) => m[2]))];
+    if (matches.length > 1) {
+        process.stderr.write(
+            `[urlargs-sync] WARNING: found ${matches.length} urlArgs entries ` +
+            `in whitelist_manager.js (values: ${distinctCurrent.join(', ')}). ` +
+            `Syncing all to _b=${build}. If this is unexpected, the file may ` +
+            `have been refactored — review the diff manually.\n`
+        );
+    }
+
+    const next = js.replace(urlArgsReG, `$1_b=${build}$3`);
     fs.writeFileSync(JS_FILE, next);
+    const fromLabel = distinctCurrent.length === 1 ? `_b=${current}` : `[${distinctCurrent.map((v) => `_b=${v}`).join(', ')}]`;
     process.stderr.write(
-        `[urlargs-sync] bumped _b=${current} -> _b=${build} in appserver/static/whitelist_manager.js ` +
-        `(matched default/app.conf [install].build=${build}). ` +
+        `[urlargs-sync] bumped ${fromLabel} -> _b=${build} in appserver/static/whitelist_manager.js ` +
+        `(matched default/app.conf [install].build=${build}; ${matches.length} occurrence(s) updated). ` +
         `Re-read the JS before further edits.\n`
     );
     process.exit(0);
