@@ -4,6 +4,99 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [1.0.4] - 2026-06-04
+
+**Second SLIM reversal — `"10.0"` was rejected; falling back to `"9.4"`.**
+No app-code or behavior changes — manifest + version-bump only.
+
+### Why this exists
+
+v1.0.3 declared `platformRequirements.splunk.Enterprise = "10.0"` per
+the 2026-06-03 DECISION_LOG row (forward-leaning choice over `"9.4"`).
+Splunkbase upload 8800-43335 was rejected by SLIM with:
+
+> `manifest.platformRequirements.splunk: Version requirement includes
+> no supported version of Splunk Enterprise: 10.0`
+
+This is the same error class as v1.0.1's `"9.3"` rejection — Splunk
+Cloud Classic's underlying Enterprise version list does NOT currently
+include 10.0. The on-prem world has 10.0 GA, but Splunk Cloud Classic
+(managed service) is still on 9.x.
+
+v1.0.4 executes the prior documented fallback in `docs/DECISION_LOG.md`
+2026-06-02 row: single-string `"9.4"`. The 2026-06-04 reversal-of-
+reversal row captures the SLIM-supported-list lesson so future
+maintainers don't re-attempt 10.0 without first checking Splunk Cloud
+Classic's actual Enterprise version.
+
+### Why the AI-suggested fix wasn't followed verbatim
+
+Splunkbase's AI-assisted error explainer recommended `">=9.0.0,<10.0.0"`
+(semver range). Phase 1.7 already empirically rejected:
+
+- `">=9.0.0"` — open-ended floor → REJECTED
+- `">=9.0,<10.0"` — semver range → REJECTED
+
+The "semver range" recommendation cannot work — SLIM 2.0's
+`platformRequirements.splunk.Enterprise` field accepts ONLY a single
+concrete-version string `"X.Y"`. The AI also flattened the field to
+`platformRequirements.splunk = "<value>"`, but our schemaVersion 2.0.0
+requires the nested `platformRequirements.splunk.Enterprise` structure
+(SLIM's error message reads "Splunk Enterprise: 10.0" directly from
+the `Enterprise` key). The AI was directionally right that 9.x is what
+Cloud Classic accepts, but its specific format suggestion was the
+already-rejected one.
+
+### What changed since v1.0.3
+
+| File | Change |
+|---|---|
+| `app.manifest` | `platformRequirements.splunk.Enterprise` from `"10.0"` to `"9.4"`; `info.id.version` 1.0.3 → 1.0.4; `releaseDate` 2026-06-04 |
+| `default/app.conf` | `[install].build` 673 → 674; `[launcher].version` + `[id].version` 1.0.3 → 1.0.4 |
+| `appserver/static/whitelist_manager.js` | `urlArgs: "_b=674"` (auto-synced) |
+| `docs/SPLUNK_10_COMPATIBILITY.md` | Runtime Verification section updated with the v1.0.3 finding (10.0 is also OFF Splunk Cloud Classic's supported list) + the SLIM-supported-list-is-Cloud-Classic-specific lesson |
+| `docs/APPINSPECT_FINDINGS.md` §7.7 | 2026-06-04 hosted-API run F15 + resolution path |
+| `docs/DECISION_LOG.md` 2026-06-04 row | Reversal-of-reversal: chose `"9.4"` (the original documented fallback in 2026-06-02 row) over `"10.0"` (the 2026-06-03 row's forward-leaning choice) after 10.0 was empirically confirmed off Cloud Classic's supported list. Includes the SLIM-supported-list-is-Cloud-Classic-specific lesson + the AI-recommendation gotcha |
+| `CLAUDE.md` | New row in "Splunk Version Pinning Audit" log with the cumulative-supported-list lesson |
+| `CHANGELOG.md` | This entry |
+
+### Known residual gap
+
+Same as v1.0.2 and v1.0.3: the 9.4 declaration is **code-audit-only**,
+not runtime-verified against a `splunk/splunk:9.4.x` container. The
+2026-07-18 quarterly Splunk Version Pinning Audit per CLAUDE.md is
+the deadline for runtime verification.
+
+**Cloud Classic version-list freshness gap** (added in this release):
+SLIM's supported-version list is internal to Splunk's Cloud Classic
+infrastructure and we have no upstream notification when a version
+falls off. Both 9.3 (v1.0.1) and 10.0 (v1.0.3) became invalid AFTER
+the corresponding release was cut. The only signal is the hosted-
+AppInspect rejection at upload time, which is itself a customer-
+visible failure. **v1.1 backlog item**: investigate Splunkbase
+publisher RSS/API for supported-version-list change notifications;
+add a quarterly check to CLAUDE.md "Splunk Version Pinning Audit" if
+such a feed exists.
+
+### What did not change
+
+- All app code, all dashboards, all RBAC, all conf files except
+  `default/app.conf` build/version fields. The app's behavior on
+  Splunk 9.3.1 (current dev container) and 9.4.x is byte-identical.
+- Sigstore signing chain (cosign-installer@v3 + cosign-release v2.4.1).
+
+### Migration notes
+
+- 10.0 customers (on-prem) can install v1.0.4 with Splunkbase's
+  standard "I understand this app declares 9.4" compatibility-override
+  prompt. The 7-risk-area audit in `docs/SPLUNK_10_COMPATIBILITY.md`
+  still applies to 10.0 — the underlying code is the same; only the
+  declared compatibility surface changed.
+- 9.3.x customers continue to install via manual GitHub download.
+- No customer-facing breaking changes.
+
+---
+
 ## [1.0.3] - 2026-06-03
 
 **SLIM list-form rejection fallback.** v1.0.2's `["9.4", "10.0"]`

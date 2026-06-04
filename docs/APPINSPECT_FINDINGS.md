@@ -684,6 +684,77 @@ DECISION_LOG reversal row pointing back at the 2026-06-03 row.
 
 ---
 
+## 7.7 v1.0.3 Splunkbase upload — `"10.0"` not on Cloud Classic supported list (2026-06-04 → resolved in v1.0.4 on 2026-06-04)
+
+**Background**: v1.0.3 declared `platformRequirements.splunk.Enterprise =
+"10.0"` per the 2026-06-03 DECISION_LOG row (forward-leaning over
+`"9.4"`). Splunkbase re-upload (request
+`c7a3ee83-5b37-43f9-9375-4f59cfaacdde`, hosted-API run `8800-43335`)
+was rejected by SLIM with:
+
+> manifest.platformRequirements.splunk: Version requirement includes
+> no supported version of Splunk Enterprise: 10.0
+
+| # | Class | File | Stanza | Setting / message |
+|---|-------|------|--------|------------------|
+| **F15** | **HARD ERROR** | `app.manifest` | `platformRequirements.splunk.Enterprise` | "Version requirement includes no supported version of Splunk Enterprise: 10.0" |
+
+**Headline numbers (2026-06-04 hosted-API run)**: 162 success / **1
+failure** / 0 future / 0 errors / 5 warnings / 79 N/A / 0 skipped.
+Byte-identical totals to v1.0.1, v1.0.2, v1.0.3 runs — only the
+failure CLASS shifted.
+
+**F15 — root cause analysis**: same error mechanism as v1.0.1's F13
+(`"9.3"` not supported). Splunk Cloud Classic's underlying Enterprise
+version list does NOT currently include 10.0. The on-prem world has
+10.0 GA; Splunk Cloud Classic (managed service) is still on 9.x. The
+2026-06-03 row's "forward-leaning" choice assumed "10.0 GA on-prem"
+implied "10.0 supported in Cloud Vetting" — that assumption is
+empirically wrong.
+
+**Splunkbase AI-explainer note**: the AI explainer that shipped with
+this failure recommended `">=9.0.0,<10.0.0"` (semver range). That
+format is empirically rejected per Phase 1.7 (see §5.7). The AI's
+`<10.0.0` upper bound IS directionally useful — it corroborates that
+Cloud Classic's current range is 9.x — but the specific format
+suggestion ignored SLIM's documented `String value` constraint. See
+`docs/DECISION_LOG.md` 2026-06-04 row for the full lesson.
+
+**Resolution (v1.0.4, commit pending)**:
+
+- `app.manifest`: `Enterprise` changed from `"10.0"` to `"9.4"` (the
+  literal documented fallback in `docs/DECISION_LOG.md` 2026-06-02
+  row).
+- `app.manifest`: `info.id.version` 1.0.3 → 1.0.4; `releaseDate`
+  2026-06-04.
+- `default/app.conf`: `build = 674`; `[launcher].version =
+  [id].version = 1.0.4`.
+- `appserver/static/whitelist_manager.js:14`: `urlArgs: "_b=674"`
+  (auto-applied).
+- `docs/SPLUNK_10_COMPATIBILITY.md` Runtime Verification: 2026-06-04
+  section added with the Cloud-Classic-version-list-is-internal
+  lesson + AI-recommendation gotcha.
+
+**Disposition**: **F15 FIXED in v1.0.4**.
+
+**Updated cumulative SLIM format history** (from `docs/SPLUNK_10_COMPATIBILITY.md`):
+
+| Format | Result | Release |
+|--------|--------|--------|
+| `">=9.0.0"` | REJECTED | v1.0.0 pre-release |
+| `">=9.0,<10.0"` | REJECTED | v1.0.0-rc (Phase 1.7) |
+| `"9.3"` | ACCEPTED-then-RETIRED | v1.0.0, v1.0.1 |
+| `["9.4", "10.0"]` | REJECTED | v1.0.2 (F14) |
+| `"10.0"` | REJECTED | v1.0.3 (F15) |
+| `"9.4"` | expected to pass | v1.0.4 |
+
+**Local runtime verification gap (same as v1.0.2 + v1.0.3)**: Docker
+not running on this dev machine at fix time; could not re-run
+`scripts/verify_appinspect.sh` locally. Next Splunkbase upload of
+`wl_manager-1.0.4.spl` is the runtime confirmation.
+
+---
+
 ## 8. Revision log
 
 - 2026-05-17 — initial Phase 1.3 baseline. App.manifest version drift
@@ -780,3 +851,26 @@ DECISION_LOG reversal row pointing back at the 2026-06-03 row.
   conclusion: list form, semver ranges, and open-ended floors are
   all rejected; multi-version support requires a Splunk-side SLIM
   schema change.
+- 2026-06-04 — **v1.0.3 Splunkbase upload (8800-43335) → F15 SLIM
+  unsupported-version rejection**. `"10.0"` was rejected with the
+  SAME error class as v1.0.1's `"9.3"`: "Version requirement includes
+  no supported version of Splunk Enterprise: 10.0". The 2026-06-03
+  forward-leaning choice was wrong: Splunk Cloud Classic's underlying
+  Enterprise version list does NOT currently include 10.0 (on-prem
+  has 10.0 GA; Cloud Classic is still on 9.x). §7.7 added with the
+  2026-06-04 hosted-API run results (162 / 1 / 0 / 0 / 5 / 79 / 0;
+  same totals, F15 replaces F14 as the failure class). Resolution
+  shipped in v1.0.4 — `app.manifest` reverts to `"9.4"` per the
+  literal documented fallback in `docs/DECISION_LOG.md` 2026-06-02
+  row. The 2026-06-04 DECISION_LOG row is a REVERSAL-OF-REVERSAL
+  (overturns 2026-06-03 which overturned 2026-06-02). Three new
+  maintenance lessons captured: (1) Cloud Classic's supported-version
+  list is INTERNAL to Splunk's managed infrastructure, not visible
+  from the AppInspect API spec or app.manifest schema; only signal is
+  hosted-AppInspect rejection at upload time. (2) Splunkbase
+  AI-explainer recommendations are directionally useful but NOT
+  format-precise; today it recommended `">=9.0.0,<10.0.0"` semver
+  range which is empirically rejected per Phase 1.7. (3) Both 9.3
+  (v1.0.1) and 10.0 (v1.0.3) became invalid AFTER the corresponding
+  release was cut — v1.1 backlog item to investigate Splunkbase
+  publisher RSS/API for supported-version-list change notifications.
