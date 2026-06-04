@@ -213,3 +213,73 @@ load-bearing.
 4. **v1.1 backlog item** — stand up `splunk/splunk:9.4.x` and
    `splunk/splunk:10.0.x` parallel containers, run the integration
    + E2E suite against both, capture any failures here.
+
+## Runtime verification — Splunkbase upload 8800-43334 (2026-06-03)
+
+The v1.0.2 hosted-AppInspect re-run on 2026-06-03 (request
+`7f105ce0-6ed6-4e7c-be76-adfe132d879c`, run 8800-43334) was the
+runtime confirmation of two things:
+
+1. **SLIM 2.0 LIST-FORM SYNTAX: REJECTED.** SLIM emitted exactly
+   one error against `app.manifest`:
+
+   > Expected String value for `manifest.platformRequirements.splunk.Enterprise`,
+   > not `['9.4', '10.0']`
+
+   The list form is NOT accepted by SLIM 2.0. Adding this finding
+   to the row of historical SLIM-format rejections (cumulative as
+   of v1.0.3):
+
+   | Format tried | Result | Tag | Notes |
+   |---|---|---|---|
+   | `">=9.0.0"` | REJECTED | v1.0.0 (pre-release attempt) | "no upper bound = no concrete version in range" |
+   | `">=9.0,<10.0"` | REJECTED | v1.0.0-rc series | Phase 1.7 retry; "no supported version" |
+   | `"9.3"` | ACCEPTED | v1.0.0, v1.0.1 | Worked until 9.3 was retired from supported list |
+   | `["9.4", "10.0"]` | REJECTED | v1.0.2 | "Expected String value, not [...]" |
+   | `"10.0"` | (this release) | v1.0.3 | Expected to pass (matches Phase 1.7's `"9.3"` pattern) |
+
+   **Conclusion (added 2026-06-03)**: SLIM 2.0's
+   `platformRequirements.splunk.Enterprise` field accepts ONLY a
+   single concrete-version string (`"X.Y"`). Multi-version
+   declaration via list form or semver range is NOT supported. The
+   only way to declare support for multiple versions in one release
+   is for Splunk to ship a SLIM 2.x schema change; no such change
+   is on the public Splunkbase roadmap as of 2026-06-03.
+
+2. **The 5 WARNINGS are byte-identical to the v1.0.1 run.** Same
+   warnings as `docs/APPINSPECT_FINDINGS.md` §3 (SplunkJS telemetry,
+   Python 2/3 compat note, scripted-inputs informational,
+   gratuitous-cron-scheduling on 4 security-critical alerts,
+   collections.conf informational). No new warning class introduced
+   by the manifest edit. Confirms that the manifest change is
+   strictly scoped to the platform-requirements declaration with no
+   spillover effects on other AppInspect rules.
+
+### Updated decision — v1.0.3
+
+- `app.manifest.platformRequirements.splunk.Enterprise` changes from
+  list `["9.4", "10.0"]` to single string `"10.0"` (chosen over
+  `"9.4"` for the forward-leaning trade-off documented in
+  `docs/DECISION_LOG.md` 2026-06-03 row).
+- The 7-risk-area audit results (sections 1-7 above) remain valid —
+  the underlying code didn't change between v1.0.2 and v1.0.3, only
+  the declared compatibility surface.
+- The Python syntax sweep (3.7-compat confirmed) remains valid for
+  the same reason.
+- 9.4 customers see the standard Splunkbase compatibility-override
+  prompt instead of a clean install path; we accept this trade-off
+  rather than ship `"9.4"` and force another forced-retirement
+  re-release in ~12-18 months when 9.4 hits its end-of-life.
+
+### v1.1 backlog (carries over from v1.0.2, restated for clarity)
+
+- Stand up `splunk/splunk:10.0.x` parallel container, run the
+  integration + E2E suite against it before the 2026-07-18 quarterly
+  audit. If 10.0 surfaces a regression, v1.0.4 reverts the manifest
+  to `"9.4"` (the prior documented fallback in
+  `docs/DECISION_LOG.md` 2026-06-02 row) and adds the regression
+  details here.
+- Track Splunk's SLIM 2.x roadmap: if a future SLIM version adds
+  list-form or semver-range support for `platformRequirements`, the
+  declaration trade-off in `docs/DECISION_LOG.md` 2026-06-03 row
+  can be re-evaluated.

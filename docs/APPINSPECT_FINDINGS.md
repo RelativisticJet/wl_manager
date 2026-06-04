@@ -605,6 +605,85 @@ DECISION_LOG row reversing the multi-version choice.
 
 ---
 
+## 7.6 v1.0.2 Splunkbase upload — SLIM list-form rejection (2026-06-03 → resolved in v1.0.3 on 2026-06-03)
+
+**Background**: v1.0.2 declared `platformRequirements.splunk.Enterprise`
+as a list `["9.4", "10.0"]` per the 2026-06-02 DECISION_LOG row.
+Splunkbase re-upload (request `7f105ce0-6ed6-4e7c-be76-adfe132d879c`,
+hosted-API run `8800-43334`) immediately rejected the list form at
+the SLIM step. This is the runtime confirmation predicted in the
+v1.0.2 CHANGELOG + release notes: "the next hosted AppInspect run on
+the v1.0.2 .spl is the runtime confirmation [of list-form syntax
+acceptance]."
+
+| # | Class | File | Stanza | Setting / message |
+|---|-------|------|--------|------------------|
+| **F14** | **HARD ERROR** | `app.manifest` | `platformRequirements.splunk.Enterprise` | "Expected String value for `manifest.platformRequirements.splunk.Enterprise`, not `['9.4', '10.0']`" |
+
+**Headline numbers (2026-06-03 hosted-API run)**:
+162 success / **1 failure** / 0 future_failures / 0 errors / 5 warnings
+/ 79 N/A / 0 skipped. Byte-identical totals to v1.0.1 and v1.0.2
+runs — only the failure CLASS shifted (from "unsupported version" to
+"wrong type").
+
+The 5 warnings are byte-identical to §3.2 + §3.3 + §3.4 + §3.5 + §3.6
+already triaged (no change). Confirms the v1.0.2 → v1.0.3 manifest
+edit is strictly scoped to platformRequirements with zero spillover
+on other AppInspect rules.
+
+**F14 — root cause analysis**: SLIM 2.0's
+`platformRequirements.splunk.Enterprise` field is typed `String` at
+the schema level. The list form passed the `app.manifest` JSON
+schema validator (because JSON itself accepts arrays at any field)
+but SLIM's downstream type-checker rejected the value as wrong type.
+The error message wording is unambiguous: it specifies the EXPECTED
+type (String) and quotes the REJECTED value (`['9.4', '10.0']`).
+
+**Resolution (v1.0.3, commit pending)**:
+
+- `app.manifest`: `platformRequirements.splunk.Enterprise` changed
+  from list `["9.4", "10.0"]` to single string `"10.0"`. Chosen
+  over `"9.4"` per DECISION_LOG.md 2026-06-03 row (forward-leaning
+  trade-off; 9.4 customers see the standard Splunkbase
+  compatibility-override prompt instead of a clean install path).
+- `app.manifest`: `info.id.version` bumped to `1.0.3`,
+  `releaseDate` to `2026-06-03`.
+- `default/app.conf`: `build = 673`, `[launcher].version =
+  [id].version = 1.0.3`.
+- `appserver/static/whitelist_manager.js:14`: `urlArgs: "_b=673"`
+  (auto-applied by `scripts/hooks/urlargs-sync.js`).
+- `docs/SPLUNK_10_COMPATIBILITY.md` "Runtime verification" section
+  records the SLIM-format-acceptance lesson + cumulative format
+  history (5 formats tried; `"X.Y"` single string is the only
+  accepted form as of 2026-06-03).
+
+**Disposition**: **F14 FIXED in v1.0.3**.
+
+**Cumulative SLIM format history** (added 2026-06-03):
+
+| Format | Result | Release where tried |
+|--------|--------|-------------------|
+| `">=9.0.0"` | REJECTED | v1.0.0 (pre-release attempt) |
+| `">=9.0,<10.0"` | REJECTED | v1.0.0-rc series (Phase 1.7) |
+| `"9.3"` | ACCEPTED | v1.0.0, v1.0.1 (until 9.3 retired) |
+| `["9.4", "10.0"]` | REJECTED | v1.0.2 (F14) |
+| `"10.0"` | (this release) | v1.0.3 (expected to pass) |
+
+Conclusion: SLIM 2.0 accepts ONLY single-concrete-version strings
+of the form `"X.Y"`. List form, semver ranges (`">=A,<B"`), and
+open-ended floors (`">=A"`) are all rejected. Multi-version support
+in one manifest requires a future SLIM 2.x schema change.
+
+**Local runtime verification gap (same as v1.0.2)**: Docker not
+running on this dev machine at fix time; could not re-run
+`scripts/verify_appinspect.sh` locally. The next Splunkbase upload
+of `wl_manager-1.0.3.spl` will be the runtime confirmation. If SLIM
+rejects `"10.0"` for any reason (unlikely given the format history
+above), the fallback is single-version `"9.4"` with another
+DECISION_LOG reversal row pointing back at the 2026-06-03 row.
+
+---
+
 ## 8. Revision log
 
 - 2026-05-17 — initial Phase 1.3 baseline. App.manifest version drift
@@ -680,3 +759,24 @@ DECISION_LOG row reversing the multi-version choice.
   list-form `["9.4", "10.0"]` is a NEW format SLIM did not previously
   consume. If SLIM rejects the list form on the next hosted-API run,
   fallback is single-version `"9.4"` with a DECISION_LOG reversal row.
+- 2026-06-03 — **v1.0.2 Splunkbase upload (8800-43334) → F14 SLIM
+  list-form rejection**. The predicted runtime risk from the v1.0.2
+  release notes materialized: SLIM 2.0 rejected the list form with
+  "Expected String value, not `['9.4', '10.0']`". §7.6 added with the
+  2026-06-03 hosted-API run results (byte-identical totals to the
+  v1.0.2 run: 162 / 1 / 0 / 0 / 5 / 79 / 0; only the failure CLASS
+  shifted from "unsupported version" to "wrong type"). Resolution
+  shipped in v1.0.3 — `app.manifest` changes from list
+  `["9.4", "10.0"]` to single string `"10.0"` per the
+  `docs/DECISION_LOG.md` 2026-06-03 reversal row. The decision chose
+  `"10.0"` over `"9.4"` for the forward-leaning trade-off (9.4
+  customers see the standard Splunkbase compatibility-override prompt
+  rather than a clean install path; 10.0 buys ~24-30 months before
+  the next forced-retirement re-release vs ~12-18 months if 9.4 had
+  been picked). `docs/SPLUNK_10_COMPATIBILITY.md` "Runtime
+  verification" section added with the cumulative SLIM format
+  history (5 formats tried; `"X.Y"` single string is the only
+  accepted form as of 2026-06-03) and the SLIM-2.0-schema
+  conclusion: list form, semver ranges, and open-ended floors are
+  all rejected; multi-version support requires a Splunk-side SLIM
+  schema change.

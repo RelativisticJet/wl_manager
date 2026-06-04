@@ -4,6 +4,80 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [1.0.3] - 2026-06-03
+
+**SLIM list-form rejection fallback.** v1.0.2's `["9.4", "10.0"]`
+list-form declaration was rejected by hosted AppInspect 4.2.1 at the
+SLIM step with:
+
+> Expected String value for `manifest.platformRequirements.splunk.Enterprise`,
+> not `['9.4', '10.0']`
+
+v1.0.3 falls back to a single-string declaration (`"10.0"`) per the
+documented recovery path in `docs/DECISION_LOG.md` 2026-06-02 row.
+No app-code or behavior changes — manifest + version-bump only.
+
+### Why list form failed
+
+The v1.0.2 release notes called this out as the live runtime risk:
+"the next hosted AppInspect run on the v1.0.2 .spl is the runtime
+confirmation [of list-form syntax acceptance]". SLIM 2.0's
+`manifest.platformRequirements.splunk.Enterprise` field is typed
+String at the schema level; the AppInspect 4.2.0 spec docs do not
+document a multi-version syntax for this field. The list form was a
+defensible attempt to declare multi-version support in one release;
+the runtime result is now the source of truth. List form is OUT;
+semver-range strings (`">=9.4,<11.0"`) are also OUT per Phase 1.7's
+earlier rejection (see `docs/APPINSPECT_FINDINGS.md` §5.7).
+
+### Why "10.0" not "9.4"
+
+Both single-version strings would have passed SLIM. The trade-off:
+
+- `"9.4"` — broader near-term install base (9.x still dominant),
+  matches Phase 1.7's `"9.3"` pattern, was the literal "documented
+  fallback" in DECISION_LOG.md 2026-06-02 row.
+- `"10.0"` (chosen) — forward-leaning, aligns with Splunk's promotion
+  cadence (10.0 went GA mid-2025; 10.0 customers are growing fast),
+  reduces the next-retirement risk (10.0 will fall off the supported
+  list much later than 9.4 will).
+
+9.4 customers can still install v1.0.3 with a one-click "I understand
+this app declares 10.0" override in Splunkbase Cloud UI; the
+declaration is a soft compatibility hint, not a hard install gate at
+the customer's instance.
+
+### What changed since v1.0.2
+
+| File | Change |
+|---|---|
+| `app.manifest` | `platformRequirements.splunk.Enterprise` changed from list `["9.4", "10.0"]` to string `"10.0"`; `info.id.version` 1.0.2 → 1.0.3; `releaseDate` 2026-06-03 |
+| `default/app.conf` | `[install].build` 672 → 673; `[launcher].version` + `[id].version` 1.0.2 → 1.0.3 |
+| `appserver/static/whitelist_manager.js` | `urlArgs: "_b=673"` (auto-synced by hook) |
+| `docs/SPLUNK_10_COMPATIBILITY.md` | Added "Runtime verification (2026-06-03)" section recording the list-form rejection finding and the single-string fallback |
+| `docs/APPINSPECT_FINDINGS.md` §7.6 | 2026-06-03 hosted-API run F14 + resolution (162 success / 1 failure / 0 future / 0 errors / 5 warnings) |
+| `docs/DECISION_LOG.md` 2026-06-03 row | Reversal row pointing back at 2026-06-02; documents the "10.0" single-string choice and the SLIM-format-acceptance lesson |
+| `CLAUDE.md` | Updated 2026-06-02 row in the "Splunk Version Pinning Audit" log + added 2026-06-03 row |
+
+### Known residual gap
+
+Same as v1.0.2: the 10.0 declaration is **code-audit-only**, not
+runtime-verified against a real Splunk 10.0 container. The 2026-07-18
+quarterly audit per CLAUDE.md is the deadline for that runtime work;
+if 10.0 surfaces a regression, v1.0.4 reverts to `"9.4"` (the prior
+documented fallback). 9.4 / 9.5 customers continue to install with a
+compatibility-override prompt.
+
+### What did not change
+
+- All app code (`bin/*.py`, `appserver/static/*.js`,
+  `appserver/static/**/*.css`, all dashboard XML, all conf files
+  except `default/app.conf` build/version fields, all lookups,
+  scripted inputs, REST handlers, RBAC).
+- Sigstore signing chain (cosign-installer@v3 + cosign-release v2.4.1).
+
+---
+
 ## [1.0.2] - 2026-06-02
 
 **Splunkbase Cloud-vetting compatibility patch.** Bumps the manifest
