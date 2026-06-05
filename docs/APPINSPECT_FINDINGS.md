@@ -827,6 +827,81 @@ Runtime Verification for details):
 
 ---
 
+## 7.9 v1.0.5 Splunkbase upload — `">=9.0.0"` REJECTED but confirms SLIM parses ranges (2026-06-05 → v1.0.6 trial)
+
+**Background**: v1.0.5 declared `">=9.0.0"` as an empirical test of
+whether SLIM type-rejects semver ranges. SLIM rejected with:
+
+> manifest.platformRequirements.splunk: Version requirement includes
+> no supported version of Splunk Enterprise: **>=9.0.0**
+
+| # | Class | File | Stanza | Setting / message |
+|---|-------|------|--------|------------------|
+| **F17** | **HARD ERROR (content)** | `app.manifest` | `platformRequirements.splunk.Enterprise` | "Version requirement includes no supported version of Splunk Enterprise: >=9.0.0" |
+
+**Headline numbers**: 162 success / **1 failure** / 0 future / 0 errors
+/ 5 warnings / 79 N/A / 0 skipped.
+
+**F17 — major analytical finding**: SLIM echoed back the literal range
+string `">=9.0.0"`, NOT "Expected String value". This is the
+definitive disambiguation: SLIM **parses semver ranges as a valid
+type**. The rejection is content-based — no version in `[9.0.0, ∞)`
+matches Cloud Classic's supported list. My v1.0.2 / v1.0.3 / v1.0.4
+docs claiming "ranges are type-rejected" were wrong.
+
+**Cloud Classic supported-list shape (inferred from F13-F17)**:
+
+Versions NOT on the list:
+- 9.3 (F13, v1.0.1)
+- 10.0 (F15, v1.0.3)
+- 9.4 (F16, v1.0.4)
+- All of `[9.0.0, ∞)` (F17, v1.0.5)
+
+The supported set is NOT a contiguous low-floor range. Splunkbase AI
+explainer's new floor hint (`">=8.1.0"`) suggests 8.x may be on the
+list.
+
+**Resolution (v1.0.6, commit pending)**:
+
+- `app.manifest`: `Enterprise` from `">=9.0.0"` to `">=8.1.0 <10.0.0"`
+  (bounded range, space-conjunction syntax per AI explainer's
+  example).
+- `app.manifest`: `info.id.version` 1.0.5 → 1.0.6; `releaseDate`
+  2026-06-05.
+- `default/app.conf`: `build = 676`; `[launcher].version =
+  [id].version = 1.0.6`.
+- `appserver/static/whitelist_manager.js:14`: `urlArgs: "_b=676"`
+  (auto-applied).
+- `docs/SPLUNK_10_COMPATIBILITY.md` Runtime Verification: 2026-06-05
+  section + cumulative format history updated with the v1.0.5 finding.
+
+**Disposition**: **F17 testing-in-v1.0.6**.
+
+**Updated cumulative SLIM format history**:
+
+| Format | Result | Release |
+|---|---|---|
+| `">=9.0.0"` | REJECTED (content) | v1.0.0 pre-release; v1.0.5 |
+| `">=9.0,<10.0"` | REJECTED (likely content + comma syntax) | v1.0.0-rc Phase 1.7 |
+| `"9.3"` | ACCEPTED-then-RETIRED | v1.0.0, v1.0.1 |
+| `["9.4", "10.0"]` | REJECTED (type) | v1.0.2 (F14) |
+| `"10.0"` | REJECTED (content) | v1.0.3 (F15) |
+| `"9.4"` | REJECTED (content) | v1.0.4 (F16) |
+| `">=9.0.0"` | REJECTED (content) — empirically confirmed range PARSES | v1.0.5 (F17) |
+| `">=8.1.0 <10.0.0"` | (v1.0.6 trial) | v1.0.6 |
+
+**Three outcomes possible for v1.0.6**:
+
+1. SLIM accepts → first ACCEPTED semver-range entry. Pin to this
+   format permanently. Cleanup commit needed for v1.0.2-v1.0.4 docs.
+2. SLIM rejects with "no supported version" → Cloud Classic's list
+   excludes both 8.x and 9.x; next move is Splunkbase publisher
+   support ticket.
+3. SLIM rejects with "Expected String value" → unexpected; would
+   indicate space-conjunction is type-rejected. Low probability.
+
+---
+
 ## 8. Revision log
 
 - 2026-05-17 — initial Phase 1.3 baseline. App.manifest version drift
@@ -923,6 +998,21 @@ Runtime Verification for details):
   conclusion: list form, semver ranges, and open-ended floors are
   all rejected; multi-version support requires a Splunk-side SLIM
   schema change.
+- 2026-06-05 — **v1.0.5 Splunkbase upload → F17 SLIM unsupported-
+  version rejection of `">=9.0.0"` semver range** — major analytical
+  finding: SLIM echoed back the literal range string, NOT "Expected
+  String value". This empirically confirms SLIM PARSES semver ranges
+  as a valid type; my v1.0.2-v1.0.4 docs claiming "ranges are type-
+  rejected" were wrong. §7.9 added with the analytical disambiguation
+  + Cloud Classic supported-list shape inference (NOT a contiguous
+  low-floor range; `[9.0.0, ∞)` excluded). Splunkbase AI's new
+  recommendation extends the floor DOWN to 8.1.0, suggesting 8.x may
+  be on the list. v1.0.6 tests bounded range `">=8.1.0 <10.0.0"`
+  (space conjunction per AI explainer's example syntax). New
+  `docs/DECISION_LOG.md` 2026-06-05 row + `docs/SPLUNK_10_COMPATIBILITY.md`
+  Runtime Verification updated; CLAUDE.md audit log row appended.
+  Cleanup commit needed regardless of v1.0.6 outcome to correct the
+  v1.0.2-v1.0.4 docs' "ranges are type-rejected" claim.
 - 2026-06-04 (evening) — **v1.0.4 Splunkbase upload → F16 SLIM
   unsupported-version rejection of `"9.4"`**. Three single-version
   strings now confirmed NOT on Cloud Classic's supported list: 9.3

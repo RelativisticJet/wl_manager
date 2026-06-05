@@ -4,6 +4,83 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [1.0.6] - 2026-06-05
+
+**Bounded-range trial after v1.0.5 confirmed SLIM parses semver ranges
+as type.** No app-code changes — manifest + version-bump only.
+
+### Empirical confirmation from v1.0.5
+
+v1.0.5 declared `">=9.0.0"`. SLIM rejected it with:
+
+> manifest.platformRequirements.splunk: Version requirement includes
+> no supported version of Splunk Enterprise: **>=9.0.0**
+
+The error echoed back the **literal range string** (`>=9.0.0`), NOT
+"Expected String value". This is significant: it confirms **SLIM
+parses semver ranges as a valid TYPE**. The Phase 1.7 conclusion
+(captured in v1.0.2 / v1.0.3 / v1.0.4 docs) that "semver ranges are
+type-rejected" was wrong. Semver ranges ARE accepted; the failure
+mode is content (no version in the range matches Cloud Classic's
+supported list).
+
+### What v1.0.6 is testing
+
+Splunkbase AI's recommendation in the v1.0.5 failure report extended
+the floor DOWN to 8.1.0:
+
+> Recommended example: `">=8.1.0 <9.2.0"`. If you cannot determine the
+> exact upper bound immediately, you can temporarily broaden while
+> keeping a sensible cap, e.g., `">=8.1.0 <10.0.0"`.
+
+User picked `">=8.1.0 <10.0.0"` (bounded range, broader than the AI's
+narrower example, excludes 10.x). Rationale: the AI suggesting 8.1.0
+as the floor is a meaningful clue — Cloud Classic's supported list
+may include 8.x versions that we hadn't considered. A broader range
+that covers 8.1.0 → 9.x maximizes the chance of intersecting Cloud
+Classic's list.
+
+Cumulative search-space progression:
+- `[9.4, ∞)` (v1.0.4 `"9.4"`) — single version, didn't match list
+- `[9.0.0, ∞)` (v1.0.5 `">=9.0.0"`) — broader, still didn't match
+- `[8.1.0, 10.0.0)` (v1.0.6 — this release) — extends to 8.x
+
+If 8.x is on Cloud Classic's list, this matches. If only 9.x retired
+minors are on the list (e.g., 9.2 or 9.1), this matches. If 10.x is
+on the list, this still doesn't match (intentional exclusion).
+
+### What changed since v1.0.5
+
+| File | Change |
+|---|---|
+| `app.manifest` | `Enterprise` from `">=9.0.0"` to `">=8.1.0 <10.0.0"`; `info.id.version` 1.0.5 → 1.0.6; `releaseDate` 2026-06-05 |
+| `default/app.conf` | `[install].build` 675 → 676; `[launcher].version` + `[id].version` 1.0.5 → 1.0.6 |
+| `appserver/static/whitelist_manager.js` | `urlArgs: "_b=676"` (auto-synced) |
+| `docs/SPLUNK_10_COMPATIBILITY.md` | Runtime Verification: 2026-06-05 update confirming SLIM parses ranges + cumulative format history with v1.0.5 result |
+| `docs/APPINSPECT_FINDINGS.md` §7.9 | 2026-06-05 hosted-API run F17 + v1.0.6 trial details |
+| `docs/DECISION_LOG.md` 2026-06-05 row | Documents the bounded-range trial + the v1.0.5 empirical confirmation that ranges parse |
+| `CLAUDE.md` | Audit-log row with the confirmation-of-range-parsing |
+| `CHANGELOG.md` | This entry |
+
+### Two outcomes possible
+
+1. **SLIM accepts `">=8.1.0 <10.0.0"`** → Cloud Vetting clears. The
+   format history's first ACCEPTED semver-range entry. Future
+   releases can pin to this range and stop the version-retirement
+   treadmill entirely.
+2. **SLIM rejects with "no supported version: >=8.1.0 <10.0.0"** →
+   Cloud Classic's list is even narrower (possibly only 10.x, or a
+   specific older version). Next move is the Splunkbase publisher
+   support ticket the v1.0.5 docs already flagged as the escalation
+   path.
+
+### What did not change
+
+- All app code, dashboards, RBAC.
+- Sigstore signing chain.
+
+---
+
 ## [1.0.5] - 2026-06-04
 
 **Semver-range trial after `"9.4"` was also rejected.** No app-code or
