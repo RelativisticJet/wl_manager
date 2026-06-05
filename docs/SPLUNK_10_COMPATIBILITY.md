@@ -326,6 +326,81 @@ row for the full rationale.
 supported-version-list change notifications — both 9.3 and 10.0 became
 invalid AFTER the corresponding release was cut.
 
+## Runtime verification — Splunkbase upload of v1.0.4 (2026-06-04 evening) + v1.0.5 trial
+
+v1.0.4's `"9.4"` was ALSO rejected by SLIM with the same error class
+as `"9.3"` (v1.0.1) and `"10.0"` (v1.0.3):
+
+> manifest.platformRequirements.splunk: Version requirement includes
+> no supported version of Splunk Enterprise: 9.4
+
+**Three single-version strings now confirmed NOT on Cloud Classic's
+supported list**: `"9.3"`, `"9.4"`, `"10.0"`. Cloud Classic's
+supported list is much narrower than I assumed when writing the
+"only `"X.Y"` accepted" conclusion above.
+
+### Analytical correction (2026-06-04 evening)
+
+The prior Runtime Verification section claimed "semver ranges are
+type-rejected by SLIM" based on Phase 1.7 evidence. **That conclusion
+was overconfident.** Re-examining the error wordings:
+
+- Phase 1.7's `">=9.0,<10.0"` rejection: "no supported version of
+  Splunk Enterprise: `>=9.0,<10.0`"
+- v1.0.3's `"10.0"` rejection: "no supported version of Splunk
+  Enterprise: 10.0"
+- v1.0.4's `"9.4"` rejection: "no supported version of Splunk
+  Enterprise: 9.4"
+
+All three use the SAME "no supported version" wording. Contrast with
+v1.0.2's `["9.4","10.0"]` rejection: "**Expected String value, not
+`[...]`**" — clearly different wording.
+
+The Phase 1.7 rejection of `">=9.0,<10.0"` could equally have been
+content-based (no version in the range matched the supported list at
+that moment), not type-based. v1.0.5 tests this hypothesis with
+`">=9.0.0"` (the Splunkbase AI explainer's literal recommendation).
+
+### v1.0.5 — testing `">=9.0.0"`
+
+`app.manifest.platformRequirements.splunk.Enterprise` set to
+`">=9.0.0"` (chosen via user AskUserQuestion over `">=9.4"` and
+`">=9.0.0,<10.0.0"` alternatives). Rationale: this is the literal AI
+recommendation from the v1.0.4 failure explainer; it has the broadest
+match set so if ANY version is on Cloud Classic's supported list, it
+should match.
+
+Two outcomes possible:
+
+1. **SLIM accepts** — semver ranges work; the cumulative SLIM format
+   history learns its first accepted range entry; future releases can
+   pin to a semver range and avoid version-retirement re-releases.
+2. **SLIM rejects with "Expected String value"** — confirms range is
+   type-rejected; my Phase 1.7 conclusion was correct; next move is a
+   Splunkbase publisher support ticket asking for Cloud Classic's
+   actual supported-version list.
+3. **SLIM rejects with "no supported version"** — semver ranges ARE
+   parsed but the range still doesn't match anything on the supported
+   list, suggesting Cloud Classic's list is NARROWER than `[9.0.0, ∞)`
+   (maybe just 8.x or a specific minor like 9.2 only). Next move: try
+   narrower ranges anchored to specific candidates, or contact Splunk
+   support.
+
+The empirical result of v1.0.5 determines which docs need correcting
+and what the next iteration looks like.
+
+### Updated cumulative SLIM format history (post-v1.0.4)
+
+| Format tried | Result | Tag | Notes |
+|---|---|---|---|
+| `">=9.0.0"` | REJECTED ("no supported version") | v1.0.0 pre-release | Phase 1.6; cause ambiguous (type vs content) |
+| `">=9.0,<10.0"` | REJECTED ("no supported version") | v1.0.0-rc | Phase 1.7; cause ambiguous (type vs content) |
+| `"9.3"` | ACCEPTED-then-RETIRED | v1.0.0, v1.0.1 | Worked until 9.3 dropped from supported list |
+| `["9.4", "10.0"]` | REJECTED ("Expected String value") | v1.0.2 | Clearly type-rejected (F14) |
+| `"10.0"` | REJECTED ("no supported version") | v1.0.3 | Content rejection (10.0 not on list) (F15) |
+| `"9.4"` | REJECTED ("no supported version") | v1.0.4 | Content rejection (9.4 not on list) (F16) |
+| `">=9.0.0"` | (v1.0.5 trial) | v1.0.5 | Re-testing semver range with full benefit of intermediate evidence |
+
 ## Runtime verification — Splunkbase upload 8800-43335 (2026-06-04)
 
 The v1.0.3 hosted-AppInspect re-run on 2026-06-04 (request

@@ -5,7 +5,7 @@
     "id": {
       "group": null,
       "name": "wl_manager",
-      "version": "1.0.4"
+      "version": "1.0.5"
     },
     "author": [
       {
@@ -36,7 +36,7 @@
   "incompatibleApps": null,
   "platformRequirements": {
     "splunk": {
-      "Enterprise": "9.4"
+      "Enterprise": ">=9.0.0"
     }
   },
   "supportedDeployments": [

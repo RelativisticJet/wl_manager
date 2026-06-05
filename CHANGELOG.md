@@ -4,6 +4,95 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [1.0.5] - 2026-06-04
+
+**Semver-range trial after `"9.4"` was also rejected.** No app-code or
+behavior changes — manifest + version-bump only.
+
+### Why this exists
+
+v1.0.4's single-string `"9.4"` was rejected by SLIM on the v1.0.4
+Splunkbase upload with the SAME error pattern as v1.0.1's `"9.3"` and
+v1.0.3's `"10.0"`:
+
+> manifest.platformRequirements.splunk: Version requirement includes
+> no supported version of Splunk Enterprise: 9.4
+
+We have now empirically confirmed that ALL THREE of `"9.3"`, `"9.4"`,
+and `"10.0"` are NOT on Splunk Cloud Classic's currently-supported
+version list. The single-concrete-version approach has been exhausted
+on the obvious candidates without empirical knowledge of what
+versions Cloud Classic actually accepts.
+
+### Analytical correction — semver ranges may not be type-rejected
+
+My v1.0.2/v1.0.3/v1.0.4 release docs claimed "semver ranges are
+type-rejected by SLIM" based on Phase 1.7 evidence. **That
+conclusion was overconfident.** Re-examining the error messages:
+
+- Phase 1.7's `">=9.0,<10.0"` rejection used error wording "no
+  supported version of Splunk Enterprise: `>=9.0,<10.0`" — the SAME
+  wording as v1.0.3's `"10.0"` content rejection.
+- v1.0.2's `["9.4", "10.0"]` (list form) used DIFFERENT wording:
+  "Expected String value, not `[...]`" — that was a clear type
+  rejection.
+
+The Phase 1.7 rejection of `">=9.0,<10.0"` was **plausibly content-
+based** (no version in the range was on the supported list at that
+moment), NOT necessarily type-based. v1.0.5 tests this hypothesis
+by trying the AI explainer's exact recommendation `">=9.0.0"`.
+
+### What changed since v1.0.4
+
+| File | Change |
+|---|---|
+| `app.manifest` | `Enterprise` from `"9.4"` to `">=9.0.0"` (semver range, the Splunkbase AI explainer's exact recommendation in the v1.0.4 failure report); `info.id.version` 1.0.4 → 1.0.5; `releaseDate` 2026-06-04 |
+| `default/app.conf` | `[install].build` 674 → 675; `[launcher].version` + `[id].version` 1.0.4 → 1.0.5 |
+| `appserver/static/whitelist_manager.js` | `urlArgs: "_b=675"` (auto-synced) |
+| `docs/SPLUNK_10_COMPATIBILITY.md` | Runtime Verification: 2026-06-04 update with the analytical correction + cumulative SLIM format history updated with the v1.0.4 finding (9.4 not on supported list) |
+| `docs/APPINSPECT_FINDINGS.md` §7.8 | 2026-06-04 second hosted-API run F16 + resolution path |
+| `docs/DECISION_LOG.md` 2026-06-04 row 2 | Documents the semver-range trial decision + the analytical correction; cites both the user direction and the AI recommendation |
+| `CLAUDE.md` | New audit-log row noting the format-rejection conclusion was overconfident; v1.0.5 is the empirical test |
+| `CHANGELOG.md` | This entry |
+
+### Why `">=9.0.0"` specifically
+
+User picked this from a 3-option AskUserQuestion (vs `">=9.4"` or
+`">=9.0.0,<10.0.0"`). Rationale: this is the Splunk AI explainer's
+LITERAL recommendation from the v1.0.4 failure report. If SLIM
+evaluates ranges content-wise, `">=9.0.0"` has the broadest possible
+match set (every 9.x and 10.x release), so if ANY version is on Cloud
+Classic's supported list, this should match it.
+
+### Two possible outcomes
+
+1. **SLIM accepts `">=9.0.0"`** — Cloud Vetting clears; we add this
+   format to the cumulative SLIM format history table as the FIRST
+   accepted semver range. Future releases pin to this format (or a
+   tighter range) and avoid the version-retirement treadmill that
+   single-version strings have suffered.
+2. **SLIM rejects `">=9.0.0"`** — proves that semver ranges ARE
+   type-rejected by SLIM (the Phase 1.7 evidence was correct). At
+   that point we have no documented fallback: the single-string
+   approach is exhausted for the candidates we've tried; the
+   semver-range approach is exhausted by this failure. Next move
+   would be to contact Splunk support directly to ask which Enterprise
+   versions are currently on Cloud Classic's supported list.
+
+### Known residual gap
+
+Same as v1.0.4: declaration is code-audit-only, not runtime-verified.
+Plus: this release tests a format that I had previously written
+documentation against. If it fails, my docs will need ANOTHER
+correction.
+
+### What did not change
+
+- All app code, all dashboards, all RBAC.
+- Sigstore signing chain.
+
+---
+
 ## [1.0.4] - 2026-06-04
 
 **Second SLIM reversal — `"10.0"` was rejected; falling back to `"9.4"`.**

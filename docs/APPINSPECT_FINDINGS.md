@@ -755,6 +755,78 @@ not running on this dev machine at fix time; could not re-run
 
 ---
 
+## 7.8 v1.0.4 Splunkbase upload — `"9.4"` also not on Cloud Classic supported list (2026-06-04 evening → v1.0.5 trial)
+
+**Background**: v1.0.4 declared `"9.4"` per the documented fallback.
+Splunkbase re-upload rejected by SLIM:
+
+> manifest.platformRequirements.splunk: Version requirement includes
+> no supported version of Splunk Enterprise: 9.4
+
+| # | Class | File | Stanza | Setting / message |
+|---|-------|------|--------|------------------|
+| **F16** | **HARD ERROR** | `app.manifest` | `platformRequirements.splunk.Enterprise` | "Version requirement includes no supported version of Splunk Enterprise: 9.4" |
+
+**Headline numbers**: 162 success / **1 failure** / 0 future / 0 errors
+/ 5 warnings / 79 N/A / 0 skipped. Byte-identical totals to all prior
+runs.
+
+**F16 — root cause analysis**: same error mechanism as F13 (`"9.3"`)
+and F15 (`"10.0"`). Splunk Cloud Classic's supported-version list is
+narrower than I assumed; THREE single-version strings now confirmed
+NOT on the list. The candidates I picked were guesses (9.3, 9.4, 10.0
+are the most-recent Enterprise minor versions); none of them happen
+to be on Cloud Classic's internal list.
+
+**Analytical correction**: prior §7.5–§7.7 concluded "semver ranges
+are type-rejected by SLIM". That conclusion was overconfident — the
+Phase 1.7 evidence is ambiguous (could be type rejection OR content
+rejection, both produce the same "no supported version" wording).
+v1.0.5 tests the hypothesis that semver ranges ARE accepted by type
+by trying the Splunkbase AI explainer's literal recommendation
+`">=9.0.0"`.
+
+**Resolution (v1.0.5, commit pending)**:
+
+- `app.manifest`: `Enterprise` from `"9.4"` to `">=9.0.0"` (semver
+  range, broadest possible 9.x+ match set).
+- `app.manifest`: `info.id.version` 1.0.4 → 1.0.5; `releaseDate`
+  2026-06-04.
+- `default/app.conf`: `build = 675`; `[launcher].version =
+  [id].version = 1.0.5`.
+- `appserver/static/whitelist_manager.js:14`: `urlArgs: "_b=675"`
+  (auto-applied).
+- `docs/SPLUNK_10_COMPATIBILITY.md` Runtime Verification: extended
+  with the v1.0.4 finding + the analytical correction + cumulative
+  SLIM format history updated.
+
+**Disposition**: **F16 testing-in-v1.0.5**.
+
+**Updated cumulative SLIM format history**:
+
+| Format | Result | Release |
+|---|---|---|
+| `">=9.0.0"` | REJECTED (cause ambiguous) | v1.0.0 pre-release |
+| `">=9.0,<10.0"` | REJECTED (cause ambiguous) | v1.0.0-rc Phase 1.7 |
+| `"9.3"` | ACCEPTED-then-RETIRED | v1.0.0, v1.0.1 |
+| `["9.4", "10.0"]` | REJECTED (type) | v1.0.2 (F14) |
+| `"10.0"` | REJECTED (content) | v1.0.3 (F15) |
+| `"9.4"` | REJECTED (content) | v1.0.4 (F16) |
+| `">=9.0.0"` | (v1.0.5 trial) | v1.0.5 |
+
+**Two outcomes possible** (see `docs/SPLUNK_10_COMPATIBILITY.md`
+Runtime Verification for details):
+
+1. SLIM accepts → cumulative SLIM format history learns its first
+   accepted range entry; my Phase 1.7 conclusion needs revising in
+   all prior docs.
+2. SLIM rejects (either error wording) → confirms my earlier
+   conclusion was correct; next move is a Splunkbase publisher
+   support ticket asking for Cloud Classic's actual supported-version
+   list.
+
+---
+
 ## 8. Revision log
 
 - 2026-05-17 — initial Phase 1.3 baseline. App.manifest version drift
@@ -851,7 +923,21 @@ not running on this dev machine at fix time; could not re-run
   conclusion: list form, semver ranges, and open-ended floors are
   all rejected; multi-version support requires a Splunk-side SLIM
   schema change.
-- 2026-06-04 — **v1.0.3 Splunkbase upload (8800-43335) → F15 SLIM
+- 2026-06-04 (evening) — **v1.0.4 Splunkbase upload → F16 SLIM
+  unsupported-version rejection of `"9.4"`**. Three single-version
+  strings now confirmed NOT on Cloud Classic's supported list: 9.3
+  (v1.0.1), 9.4 (v1.0.4), 10.0 (v1.0.3). §7.8 added with the
+  analytical correction acknowledging that the prior "semver ranges
+  are type-rejected by SLIM" conclusion was overconfident. v1.0.5
+  tests `">=9.0.0"` (Splunkbase AI explainer's literal recommendation)
+  to disambiguate whether Phase 1.7's range rejection was type-based
+  or content-based. New `docs/DECISION_LOG.md` 2026-06-04 row 2
+  documents the trial decision; new empirical-evidence maintenance
+  rule captured: error wording alone doesn't distinguish "type
+  rejection" from "content rejection" (the "no supported version"
+  wording appears in both classes); measure error wording precisely
+  before attributing cause.
+- 2026-06-04 (morning) — **v1.0.3 Splunkbase upload (8800-43335) → F15 SLIM
   unsupported-version rejection**. `"10.0"` was rejected with the
   SAME error class as v1.0.1's `"9.3"`: "Version requirement includes
   no supported version of Splunk Enterprise: 10.0". The 2026-06-03
