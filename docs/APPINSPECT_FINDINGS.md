@@ -902,6 +902,94 @@ list.
 
 ---
 
+## 7.10 v1.0.6 Splunkbase upload — NEW error class: "Illegal version specification" (2026-06-05 evening → v1.0.7 trial)
+
+**Background**: v1.0.6 declared `">=8.1.0 <10.0.0"` (space conjunction
+per the 2026-06-05 morning AI explainer's literal example). SLIM
+rejected with:
+
+> manifest.platformRequirements.splunk.Enterprise: **Illegal version
+> specification**: >=8.1.0 <10.0.0
+
+| # | Class | File | Stanza | Setting / message |
+|---|-------|------|--------|------------------|
+| **F18** | **HARD ERROR (syntax)** | `app.manifest` | `platformRequirements.splunk.Enterprise` | "Illegal version specification: >=8.1.0 <10.0.0" |
+
+**Headline numbers**: 162 success / **1 failure** / 0 future / 0 errors
+/ 5 warnings / 79 N/A / 0 skipped. Byte-identical totals to all prior
+runs.
+
+**F18 — NEW error class discovered**: this is the first occurrence
+of "Illegal version specification" wording in our format history.
+Fundamentally different from the prior "no supported version"
+content-class wording. SLIM could not PARSE the space-conjunction
+form. The space form is type/syntax-rejected; the comma form is
+required.
+
+**Retroactive Phase 1.7 disambiguation**: Phase 1.7's `">=9.0,<10.0"`
+(comma form) was rejected with the "no supported version" content
+wording — NOT "Illegal version specification". This proves the
+comma syntax parses correctly; Phase 1.7's rejection was content-based
+(no version in `[9.0.0, 10.0.0)` matched Cloud Classic's supported
+list at that time). The 2026-06-05 morning Runtime Verification's
+hypothesis is now empirically confirmed.
+
+**Cloud Classic shape narrows further**: combining Phase 1.7's
+content rejection of `[9.0.0, 10.0.0)` and v1.0.5's content rejection
+of `[9.0.0, ∞)`, the supported list is entirely BELOW 9.0.0 —
+i.e., 8.x only. Matches Splunkbase AI's 8.1.0 floor hint.
+
+**Resolution (v1.0.7, commit pending)**:
+
+- `app.manifest`: `Enterprise` from `">=8.1.0 <10.0.0"` (space) to
+  `">=8.1.0, <10.0.0"` (comma, AI's literal recommended form from
+  the v1.0.6 explainer).
+- `app.manifest`: `info.id.version` 1.0.6 → 1.0.7; `releaseDate`
+  2026-06-05.
+- `default/app.conf`: `build = 677`; `[launcher].version =
+  [id].version = 1.0.7`.
+- `appserver/static/whitelist_manager.js:14`: `urlArgs: "_b=677"`
+  (auto-applied).
+- `docs/SPLUNK_10_COMPATIBILITY.md` Runtime Verification: 2026-06-05
+  evening section + cumulative format history updated with v1.0.6
+  finding (NEW syntax error class) + Phase 1.7 retroactive
+  disambiguation.
+
+**Disposition**: **F18 testing-in-v1.0.7**.
+
+**Three known error classes for `check_that_app_passes_slim_validation_for_cloud`**:
+
+| Wording | Class | First seen |
+|---|---|---|
+| "Expected String value, not [...]" | type | v1.0.2 (F14) |
+| "Illegal version specification: <value>" | syntax | v1.0.6 (F18) |
+| "Version requirement includes no supported version of Splunk Enterprise: <value>" | content | v1.0.0-rc Phase 1.7 |
+
+**Updated cumulative format history**:
+
+| Format | Error class | Result | Release |
+|---|---|---|---|
+| `">=9.0.0"` | content | REJECTED | v1.0.0 pre-release; v1.0.5 (F17) |
+| `">=9.0,<10.0"` | content (re-classified) | REJECTED | v1.0.0-rc Phase 1.7 |
+| `"9.3"` | (no error then) | ACCEPTED-then-RETIRED | v1.0.0, v1.0.1 |
+| `["9.4", "10.0"]` | type | REJECTED | v1.0.2 (F14) |
+| `"10.0"` | content | REJECTED | v1.0.3 (F15) |
+| `"9.4"` | content | REJECTED | v1.0.4 (F16) |
+| `">=8.1.0 <10.0.0"` (space) | **syntax** | REJECTED | v1.0.6 (F18) |
+| `">=8.1.0, <10.0.0"` (comma) | empirical test | (v1.0.7 trial) | v1.0.7 |
+
+**Three outcomes possible for v1.0.7**:
+
+1. SLIM accepts → first accepted semver-range entry in history; pin
+   to comma-form bounded ranges permanently.
+2. SLIM rejects with "no supported version" → 8.x-only inference is
+   too generous; Cloud Classic's list is even narrower; next move =
+   publisher support ticket.
+3. SLIM rejects with another unprecedented wording → new error class;
+   careful analysis before next iteration.
+
+---
+
 ## 8. Revision log
 
 - 2026-05-17 — initial Phase 1.3 baseline. App.manifest version drift
@@ -998,6 +1086,19 @@ list.
   conclusion: list form, semver ranges, and open-ended floors are
   all rejected; multi-version support requires a Splunk-side SLIM
   schema change.
+- 2026-06-05 (evening) — **v1.0.6 Splunkbase upload → F18 SLIM
+  `Illegal version specification` (NEW error class)**. Space-conjunction
+  `">=8.1.0 <10.0.0"` is syntax-rejected; comma form is required.
+  Retroactively disambiguates Phase 1.7: that comma form was
+  content-rejected, NOT syntax-rejected, so the comma syntax PARSES
+  correctly. Combining Phase 1.7's content rejection of
+  `[9.0.0, 10.0.0)` with v1.0.5's content rejection of `[9.0.0, ∞)`,
+  Cloud Classic's supported list is entirely BELOW 9.0.0 — 8.x only.
+  This matches the AI's 8.1.0 floor hint. §7.10 added. v1.0.7 tests
+  the comma form `">=8.1.0, <10.0.0"`. Three known error classes now
+  documented for `check_that_app_passes_slim_validation_for_cloud`:
+  type ("Expected String value"), syntax ("Illegal version
+  specification"), content ("no supported version").
 - 2026-06-05 — **v1.0.5 Splunkbase upload → F17 SLIM unsupported-
   version rejection of `">=9.0.0"` semver range** — major analytical
   finding: SLIM echoed back the literal range string, NOT "Expected

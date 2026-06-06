@@ -4,6 +4,102 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [1.0.7] - 2026-06-05
+
+**Syntax fix — comma conjunction instead of space.** No app-code or
+behavior changes — manifest + version-bump only.
+
+### Major analytical finding from v1.0.6
+
+v1.0.6 declared `">=8.1.0 <10.0.0"` (space-separated). SLIM rejected
+with a **new error class**:
+
+> manifest.platformRequirements.splunk.Enterprise: **Illegal version
+> specification**: >=8.1.0 <10.0.0
+
+The wording "Illegal version specification" is fundamentally different
+from the prior "no supported version" wording. This is a **syntax
+error**, not a content error.
+
+**This retroactively disambiguates Phase 1.7's `">=9.0,<10.0"`
+rejection.** That earlier failure used "no supported version" wording
+(content class), which means **comma-conjunction syntax parses
+correctly** — Phase 1.7's rejection was content-based all along (no
+version in `[9.0.0, 10.0.0)` matched Cloud Classic's supported list
+at that time).
+
+### Cloud Classic supported-list narrows further
+
+Combining all empirical evidence:
+
+- Phase 1.7's `">=9.0,<10.0"` (comma) → content-rejected → **no
+  version in `[9.0.0, 10.0.0)` was on the supported list**
+- v1.0.5's `">=9.0.0"` (open floor) → content-rejected → **no
+  version in `[9.0.0, ∞)` is on the supported list**
+
+Therefore: **Cloud Classic's supported list is entirely BELOW 9.0.0**
+— i.e., 8.x only. This matches Splunkbase AI's 8.1.0 floor hint.
+
+### What v1.0.7 is testing
+
+The same range as v1.0.6 (`">=8.1.0"` through `<10.0.0"`) but using
+the **comma conjunction** the AI explicitly recommended:
+
+> "The Packaging Toolkit requires multiple constraints to be
+> comma-separated (`">=8.1.0, <10.0.0"`). The space-only separation
+> is parsed as an illegal version specification."
+
+If the range `[8.1.0, 10.0.0)` contains any version on Cloud
+Classic's supported list (and the 8.1.0 floor strongly implies it
+does), SLIM should now accept.
+
+### What changed since v1.0.6
+
+| File | Change |
+|---|---|
+| `app.manifest` | `Enterprise` from `">=8.1.0 <10.0.0"` (space) to `">=8.1.0, <10.0.0"` (comma, AI's literal recommended form); `info.id.version` 1.0.6 → 1.0.7; `releaseDate` 2026-06-05 |
+| `default/app.conf` | `[install].build` 676 → 677; `[launcher].version` + `[id].version` 1.0.6 → 1.0.7 |
+| `appserver/static/whitelist_manager.js` | `urlArgs: "_b=677"` (auto-synced) |
+| `docs/SPLUNK_10_COMPATIBILITY.md` | Runtime Verification: 2026-06-05 evening section — syntax-vs-content disambiguation; Phase 1.7 re-interpretation; cumulative format history updated with v1.0.6 syntax-class error |
+| `docs/APPINSPECT_FINDINGS.md` §7.10 | 2026-06-05 evening F18 (syntax-class error) |
+| `docs/DECISION_LOG.md` 2026-06-05 row 2 | Documents the comma-syntax fix + the Phase 1.7 retroactive disambiguation + the narrowed Cloud Classic shape inference (8.x only) |
+| `CLAUDE.md` | Audit-log row with syntax-discovery + Phase 1.7 re-read |
+| `CHANGELOG.md` | This entry |
+
+### Updated cumulative SLIM format history
+
+| Format | Error class | Result | Release |
+|---|---|---|---|
+| `">=9.0.0"` | content | REJECTED | v1.0.0 pre-release; v1.0.5 |
+| `">=9.0,<10.0"` | **content** (re-classified 2026-06-05 eve) | REJECTED | v1.0.0-rc Phase 1.7 |
+| `"9.3"` | (no error then) | ACCEPTED-then-RETIRED | v1.0.0, v1.0.1 |
+| `["9.4", "10.0"]` | type | REJECTED | v1.0.2 |
+| `"10.0"` | content | REJECTED | v1.0.3 |
+| `"9.4"` | content | REJECTED | v1.0.4 |
+| `">=9.0.0"` | content | REJECTED | v1.0.5 |
+| `">=8.1.0 <10.0.0"` (space) | **syntax** (NEW class) | REJECTED | v1.0.6 |
+| `">=8.1.0, <10.0.0"` (comma) | empirical test | (this release) | v1.0.7 |
+
+### Three outcomes possible
+
+1. **SLIM accepts** — first accepted semver-range entry; future
+   releases pin to comma-form bounded ranges and stop the
+   version-retirement treadmill. Cleanup commit corrects all prior
+   docs.
+2. **SLIM rejects with "no supported version: >=8.1.0, <10.0.0"** →
+   Cloud Classic's list is even narrower than `[8.1.0, 10.0.0)`;
+   possibly only specific 8.x patches. Next move = Splunkbase
+   publisher support ticket (the documented escalation path).
+3. **SLIM rejects with another syntax class** — unexpected; would
+   indicate further AI guidance is needed.
+
+### What did not change
+
+- All app code, dashboards, RBAC.
+- Sigstore signing chain.
+
+---
+
 ## [1.0.6] - 2026-06-05
 
 **Bounded-range trial after v1.0.5 confirmed SLIM parses semver ranges
