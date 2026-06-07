@@ -658,14 +658,14 @@ predicts it does), SLIM should accept.
   documentation.
 - **Consolidate the cumulative SLIM format history into ONE canonical
   table** (cleanup deferred from 2026-06-07 escalation). This doc
-  currently contains 5 chronological "Runtime verification"
-  subsections, each carrying a snapshot of the cumulative format
-  history table. When the Splunkbase support ticket
+  currently contains 7 chronological "Runtime verification"
+  subsections (one per Splunkbase upload from v1.0.2 onward), each
+  carrying a snapshot of the cumulative format history table. When the Splunkbase support ticket
   (`docs/SPLUNKBASE_SUPPORT_TICKET.md`) returns a working format and
   v1.0.9 is cut, the cleanup commit should: (a) add a "READ THIS
   FIRST — current accepted format" banner at the top of the doc with
   a single canonical table marked `**Updated YYYY-MM-DD**`; (b)
-  demote the 5 chronological subsections under a "## Historical
+  demote the 7 chronological subsections under a "## Historical
   iterations" heading; (c) mirror the same canonical table into
   `docs/APPINSPECT_FINDINGS.md` §7.12 cumulative-history table so
   the next contributor doesn't have to cross-reference 5 doc
