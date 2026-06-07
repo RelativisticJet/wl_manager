@@ -990,6 +990,85 @@ i.e., 8.x only. Matches Splunkbase AI's 8.1.0 floor hint.
 
 ---
 
+## 7.11 v1.0.7 Splunkbase upload — comma + space form ALSO syntax-rejected (2026-06-06 → v1.0.8 trial)
+
+**Background**: v1.0.7 declared `">=8.1.0, <10.0.0"` (comma + space
+per the v1.0.6 AI explainer's literal example). SLIM rejected with
+the SAME syntax-class error as v1.0.6's space-only form:
+
+> manifest.platformRequirements.splunk.Enterprise: **Illegal version
+> specification**: >=8.1.0, <10.0.0
+
+| # | Class | File | Stanza | Setting / message |
+|---|-------|------|--------|------------------|
+| **F19** | **HARD ERROR (syntax)** | `app.manifest` | `platformRequirements.splunk.Enterprise` | "Illegal version specification: >=8.1.0, <10.0.0" |
+
+**Headline numbers**: 162 success / **1 failure** / 0 future / 0 errors
+/ 5 warnings / 79 N/A / 0 skipped. Byte-identical totals to all
+prior runs.
+
+**F19 — whitespace-sensitivity isolated**: SLIM's version parser
+treats any whitespace around the comma as a syntax error. The v1.0.7
+AI explainer corrects its prior recommendation: "SLIM's version
+parser expects a valid specifier set without whitespace around
+commas."
+
+**Three-position contrast now confirms**: comma works, whitespace
+around comma breaks parsing.
+
+| Form | Around-comma whitespace | Error class |
+|---|---|---|
+| `">=8.1.0 <10.0.0"` (v1.0.6) | (no comma) | syntax (F18) |
+| `">=8.1.0, <10.0.0"` (v1.0.7) | space after | syntax (F19) |
+| `">=9.0,<10.0"` (Phase 1.7) | none | content (no supported version) |
+
+Phase 1.7's content-class error proves comma-with-no-space parses
+correctly. The syntax-class error is whitespace-specific.
+
+**Resolution (v1.0.8, commit pending)**:
+
+- `app.manifest`: `Enterprise` from `">=8.1.0, <10.0.0"` (comma+space)
+  to `">=8.1.0,<10.0.0"` (comma+no-space, AI's corrected form +
+  Phase 1.7's known-parsable syntax).
+- `app.manifest`: `info.id.version` 1.0.7 → 1.0.8; `releaseDate`
+  2026-06-06.
+- `default/app.conf`: `build = 678`; `[launcher].version =
+  [id].version = 1.0.8`.
+- `appserver/static/whitelist_manager.js:14`: `urlArgs: "_b=678"`
+  (auto-applied).
+- `docs/SPLUNK_10_COMPATIBILITY.md` Runtime Verification: 2026-06-06
+  section + whitespace-sensitivity finding + 3-position contrast +
+  cumulative format history updated.
+
+**Disposition**: **F19 testing-in-v1.0.8**.
+
+**Updated cumulative format history** (whitespace-sensitivity row
+inserted):
+
+| Format | Error class | Result | Release |
+|---|---|---|---|
+| `">=9.0.0"` | content | REJECTED | v1.0.0 pre-release; v1.0.5 |
+| `">=9.0,<10.0"` | content | REJECTED | v1.0.0-rc Phase 1.7 |
+| `"9.3"` | (none then) | ACCEPTED-then-RETIRED | v1.0.0, v1.0.1 |
+| `["9.4", "10.0"]` | type | REJECTED | v1.0.2 (F14) |
+| `"10.0"` | content | REJECTED | v1.0.3 (F15) |
+| `"9.4"` | content | REJECTED | v1.0.4 (F16) |
+| `">=9.0.0"` | content | REJECTED | v1.0.5 (F17) |
+| `">=8.1.0 <10.0.0"` (space) | syntax | REJECTED | v1.0.6 (F18) |
+| `">=8.1.0, <10.0.0"` (comma+space) | syntax | REJECTED | v1.0.7 (F19) |
+| `">=8.1.0,<10.0.0"` (comma+no-space) | empirical test | (v1.0.8 trial) | v1.0.8 |
+
+**Three outcomes possible for v1.0.8**:
+
+1. SLIM accepts → first accepted semver-range entry; pin permanently.
+2. SLIM rejects with content wording → Cloud Classic's list is even
+   narrower than `[8.1.0, 10.0.0)`; next move = publisher support
+   ticket (documented escalation).
+3. SLIM rejects with unprecedented wording → new error class; careful
+   analysis required.
+
+---
+
 ## 8. Revision log
 
 - 2026-05-17 — initial Phase 1.3 baseline. App.manifest version drift
@@ -1086,6 +1165,20 @@ i.e., 8.x only. Matches Splunkbase AI's 8.1.0 floor hint.
   conclusion: list form, semver ranges, and open-ended floors are
   all rejected; multi-version support requires a Splunk-side SLIM
   schema change.
+- 2026-06-06 — **v1.0.7 Splunkbase upload → F19 SLIM `Illegal version
+  specification` (whitespace-sensitivity isolated)**. The comma+space
+  form `">=8.1.0, <10.0.0"` was rejected with the SAME syntax-class
+  error as v1.0.6's space-only form, isolating the issue to the
+  whitespace around the comma. The Splunkbase AI explainer corrects
+  its v1.0.6 recommendation: "SLIM's version parser expects a valid
+  specifier set without whitespace around commas. The space after
+  the comma causes the version spec to be considered invalid." The
+  3-position contrast (space-only / comma+space / comma+no-space)
+  now fully isolates whitespace sensitivity; Phase 1.7's
+  `">=9.0,<10.0"` (comma+no-space, content-rejected) is the
+  confirmed-parsable syntax. v1.0.8 tests `">=8.1.0,<10.0.0"`
+  (comma+no-space). §7.11 added with the whitespace-sensitivity
+  finding + 3-position contrast + updated cumulative format history.
 - 2026-06-05 (evening) — **v1.0.6 Splunkbase upload → F18 SLIM
   `Illegal version specification` (NEW error class)**. Space-conjunction
   `">=8.1.0 <10.0.0"` is syntax-rejected; comma form is required.

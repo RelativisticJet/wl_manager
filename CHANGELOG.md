@@ -4,6 +4,78 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [1.0.8] - 2026-06-06
+
+**Whitespace fix — comma with NO space after.** No app-code changes —
+manifest + version-bump only.
+
+### Why this exists
+
+v1.0.7 declared `">=8.1.0, <10.0.0"` (comma followed by SPACE per
+the v1.0.6 AI explainer's literal example). SLIM rejected with:
+
+> manifest.platformRequirements.splunk.Enterprise: **Illegal version
+> specification**: >=8.1.0, <10.0.0
+
+Same syntax-class error as v1.0.6's space-conjunction failure. The
+v1.0.7 explainer corrects the prior recommendation: SLIM's version
+parser does NOT tolerate whitespace around commas. The correct form
+is `">=8.1.0,<10.0.0"` — comma with no spaces.
+
+### Phase 1.7 confirmed correct syntax (yet again)
+
+Phase 1.7's `">=9.0,<10.0"` (comma, no space) was rejected with the
+**content** error wording ("no supported version"), NOT the syntax
+error wording. The no-space-around-comma form parses correctly.
+
+This means we now have a 3-position contrast that fully isolates the
+whitespace sensitivity:
+
+| Form | Whitespace around comma | Error class |
+|---|---|---|
+| `">=8.1.0 <10.0.0"` (v1.0.6, space, no comma) | n/a | syntax (Illegal) |
+| `">=8.1.0, <10.0.0"` (v1.0.7, space after comma) | yes | syntax (Illegal) |
+| `">=9.0,<10.0"` (Phase 1.7, no space anywhere) | no | content (no supported version) |
+| `">=8.1.0,<10.0.0"` (v1.0.8, no space anywhere) | no | (this release — empirical test) |
+
+### What v1.0.8 is testing
+
+Comma-no-space form. The Cloud Classic supported-list shape inference
+from v1.0.7 still holds: list is entirely BELOW 9.0.0 (Phase 1.7 +
+v1.0.5 both content-rejected `[9.0.0, ...)` regions). If 8.x is on
+the list and the syntax is now correct, this should pass.
+
+### What changed since v1.0.7
+
+| File | Change |
+|---|---|
+| `app.manifest` | `Enterprise` from `">=8.1.0, <10.0.0"` (comma+space) to `">=8.1.0,<10.0.0"` (comma, no space); `info.id.version` 1.0.7 → 1.0.8; `releaseDate` 2026-06-06 |
+| `default/app.conf` | `[install].build` 677 → 678; `[launcher].version` + `[id].version` 1.0.7 → 1.0.8 |
+| `appserver/static/whitelist_manager.js` | `urlArgs: "_b=678"` (auto-synced) |
+| `docs/SPLUNK_10_COMPATIBILITY.md` | Runtime Verification: v1.0.7 failure + whitespace-sensitivity finding + corrected syntax table |
+| `docs/APPINSPECT_FINDINGS.md` §7.11 | 2026-06-06 hosted-API run F19 (whitespace syntax error) + v1.0.8 trial details |
+| `docs/DECISION_LOG.md` 2026-06-06 row | Documents the whitespace-sensitivity discovery + corrects the 2026-06-05 evening row's "comma-with-space" recommendation |
+| `CLAUDE.md` | Audit-log row with whitespace-sensitivity lesson |
+| `CHANGELOG.md` | This entry |
+
+### Three outcomes possible
+
+1. **SLIM accepts** → first ACCEPTED semver-range entry in cumulative
+   history; pin to comma-no-space bounded ranges permanently.
+2. **SLIM rejects with "no supported version: >=8.1.0,<10.0.0"** →
+   Cloud Classic's list excludes `[8.1.0, 10.0.0)`. The 8.x-only
+   inference was wrong, or the list is narrower (specific 8.x patches
+   only). Next move = Splunkbase publisher support ticket.
+3. **SLIM rejects with another wording** → new error class to
+   catalogue.
+
+### What did not change
+
+- All app code, dashboards, RBAC.
+- Sigstore signing chain.
+
+---
+
 ## [1.0.7] - 2026-06-05
 
 **Syntax fix — comma conjunction instead of space.** No app-code or

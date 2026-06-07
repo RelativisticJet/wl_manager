@@ -650,8 +650,77 @@ predicts it does), SLIM should accept.
 - **AI-explainer-recommendation distillation gap**: the AI gave
   conflicting recommendations across explainers (`">=9.0.0,<10.0.0"`
   semver in v1.0.4 explainer; `">=8.1.0 <10.0.0"` space form in v1.0.5
-  explainer; `">=8.1.0, <10.0.0"` comma form in v1.0.6 explainer).
+  explainer; `">=8.1.0, <10.0.0"` comma+space form in v1.0.6 explainer;
+  `">=8.1.0,<10.0.0"` no-space form in v1.0.7 explainer).
   Future maintainers reading the AI explainer must read against the
   cumulative SLIM format history table above before applying — the
   AI's specific format suggestions evolve faster than our
   documentation.
+
+## Runtime verification — Splunkbase upload of v1.0.7 (2026-06-06) + v1.0.8 trial
+
+v1.0.7's `">=8.1.0, <10.0.0"` (comma + space) was rejected by SLIM
+with the SAME syntax-class error as v1.0.6's space-only form:
+
+> manifest.platformRequirements.splunk.Enterprise: **Illegal version
+> specification**: >=8.1.0, <10.0.0
+
+The Splunkbase AI explainer for this failure explicitly corrects
+its prior recommendation:
+
+> SLIM's version parser expects a valid specifier set without
+> whitespace around commas. The space after the comma causes the
+> version spec to be considered invalid.
+
+### Whitespace-sensitivity discovery — the comma is fine, the space is not
+
+We now have a 3-position contrast that fully isolates the
+whitespace-sensitivity:
+
+| Form | Whitespace around comma | Error wording |
+|---|---|---|
+| `">=8.1.0 <10.0.0"` (v1.0.6, space only) | (no comma) | `Illegal version specification` |
+| `">=8.1.0, <10.0.0"` (v1.0.7, comma+space) | yes | `Illegal version specification` |
+| `">=9.0,<10.0"` (Phase 1.7, comma+no-space) | no | `no supported version` (CONTENT) |
+
+The Phase 1.7 form's content-class error proves comma-with-no-space
+parses correctly. The whitespace around the comma is what breaks
+parsing.
+
+### Cloud Classic supported-list shape unchanged
+
+The shape inference from 2026-06-05 (8.x only — Phase 1.7 + v1.0.5
+both content-rejected `[9.0.0, ...)`) is unchanged by F19. The
+whitespace correction is orthogonal to the version-set question.
+
+### v1.0.8 — testing comma with no space
+
+`">=8.1.0,<10.0.0"` — comma directly between constraints, no
+surrounding whitespace. This is the form the AI now recommends and
+matches Phase 1.7's confirmed-parsable syntax.
+
+### Updated cumulative SLIM format history (post-v1.0.7)
+
+| Format | Error class | Result | Release |
+|---|---|---|---|
+| `">=9.0.0"` | content | REJECTED | v1.0.0 pre-release; v1.0.5 |
+| `">=9.0,<10.0"` | content | REJECTED | v1.0.0-rc Phase 1.7 |
+| `"9.3"` | (none then) | ACCEPTED-then-RETIRED | v1.0.0, v1.0.1 |
+| `["9.4", "10.0"]` | type | REJECTED | v1.0.2 (F14) |
+| `"10.0"` | content | REJECTED | v1.0.3 (F15) |
+| `"9.4"` | content | REJECTED | v1.0.4 (F16) |
+| `">=9.0.0"` | content | REJECTED | v1.0.5 (F17) |
+| `">=8.1.0 <10.0.0"` (space) | syntax | REJECTED | v1.0.6 (F18) |
+| `">=8.1.0, <10.0.0"` (comma+space) | syntax | REJECTED | v1.0.7 (F19) |
+| `">=8.1.0,<10.0.0"` (comma+no-space) | empirical test | (v1.0.8 trial) | v1.0.8 |
+
+### Three outcomes possible
+
+1. **SLIM accepts** → first ACCEPTED semver-range entry in cumulative
+   history. Pin to this comma-no-space bounded form permanently.
+2. **SLIM rejects with `no supported version: >=8.1.0,<10.0.0`** →
+   Cloud Classic's list excludes `[8.1.0, 10.0.0)`. Either the
+   8.x-only inference was wrong, or the list is narrower (specific
+   8.x patches only). Next move = Splunkbase publisher support ticket.
+3. **SLIM rejects with another unprecedented wording** → new error
+   class to catalogue; careful analysis required.
