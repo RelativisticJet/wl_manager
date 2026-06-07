@@ -59,15 +59,27 @@ the following empirical results:
   ">=8.1.0, <10.0.0" (comma + space) syntax             REJECTED v1.0.7
   ">=8.1.0,<10.0.0"  (comma, no sp)  content            REJECTED v1.0.8
 
-The Splunkbase AI explainer's recommendations have changed across
-successive failure reports:
-  v1.0.4 explainer: ">=9.0.0,<10.0.0" (semver, comma+space)
-  v1.0.5 explainer: ">=8.1.0 <10.0.0" (space-only)
-  v1.0.6 explainer: ">=8.1.0, <10.0.0" (comma+space)
-  v1.0.7 explainer: ">=8.1.0,<10.0.0" (comma, no space)
-  v1.0.8 explainer: ">=9.0.0"
-But ">=9.0.0" was already empirically rejected in v1.0.5 with the
-same "no supported version" content error.
+The AI explainer attached to each rejected upload (i.e., the
+recommendation SLIM returned alongside each failure, which informed
+the NEXT release's trial value) has changed across successive
+reports:
+
+  Rejection of    AI explainer's recommended next value
+  --------------  ----------------------------------------
+  v1.0.4 upload   ">=9.0.0,<10.0.0"   (semver range)
+  v1.0.5 upload   ">=8.1.0 <10.0.0"   (space-only, no comma)
+  v1.0.6 upload   ">=8.1.0, <10.0.0"  (comma + space)
+  v1.0.7 upload   ">=8.1.0,<10.0.0"   (comma, no whitespace)
+  v1.0.8 upload   ">=9.0.0"           (open floor)
+
+We tried each one literally (v1.0.5 used ">=9.0.0" from a different
+discovery path; the AI explainer for v1.0.4 was directionally similar
+but with an upper bound).
+
+The v1.0.8 explainer recommended ">=9.0.0", but that value was
+already empirically rejected in v1.0.5 with the same "no supported
+version" content error — i.e., the AI is recycling a known-failed
+value rather than offering new triangulation.
 
 The v1.0.8 result is informative: comma-no-space syntax PARSES (we
 get a content error, not the "Illegal version specification" syntax

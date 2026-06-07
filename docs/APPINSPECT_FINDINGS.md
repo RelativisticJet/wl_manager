@@ -1069,6 +1069,101 @@ inserted):
 
 ---
 
+## 7.12 v1.0.8 Splunkbase upload — comma-no-space syntax PARSES; range still content-rejected (2026-06-07 → escalation to publisher support)
+
+**Background**: v1.0.8 declared `">=8.1.0,<10.0.0"` (comma + NO space
+per the v1.0.7 AI explainer's literal corrected recommendation).
+SLIM rejected with:
+
+> manifest.platformRequirements.splunk: Version requirement includes
+> no supported version of Splunk Enterprise: >=8.1.0,<10.0.0
+
+| # | Class | File | Stanza | Setting / message |
+|---|-------|------|--------|------------------|
+| **F20** | **HARD ERROR (content)** | `app.manifest` | `platformRequirements.splunk.Enterprise` | "Version requirement includes no supported version of Splunk Enterprise: >=8.1.0,<10.0.0" |
+
+**Headline numbers**: 162 success / **1 failure** / 0 future / 0 errors
+/ 5 warnings / 79 N/A / 0 skipped. Byte-identical totals to all
+prior runs.
+
+**Major empirical confirmation**: the error wording is the **content**
+class (`no supported version`), NOT the syntax class (`Illegal
+version specification`). This empirically confirms the
+**comma-no-space syntax PARSES correctly**. SLIM's version parser
+accepts `">=X.Y.Z,<A.B.C"` as a valid range; the rejection is
+purely because no version in `[8.1.0, 10.0.0)` is on Cloud Classic's
+supported list.
+
+This closes the syntax-disambiguation question opened by F18 (v1.0.6
+syntax-class rejection) and F19 (v1.0.7 syntax-class rejection):
+
+| Form | Around-comma whitespace | Error class | Parses? |
+|---|---|---|---|
+| `">=8.1.0 <10.0.0"` (v1.0.6) | (no comma) | syntax (F18) | NO |
+| `">=8.1.0, <10.0.0"` (v1.0.7) | space after | syntax (F19) | NO |
+| `">=8.1.0,<10.0.0"` (v1.0.8) | NONE | content (F20) | **YES** |
+| `">=9.0,<10.0"` (Phase 1.7) | NONE | content | YES (confirmed earlier) |
+
+The 3-position whitespace-sensitivity finding from v1.0.8's CHANGELOG
+is now empirically confirmed by a second data point (Phase 1.7).
+
+**Supplementary findings (NOT new)**: the v1.0.8 SLIM report also
+showed 10 `Undefined setting` lines about `python.version` /
+`python.required` in `inputs.conf`, `restmap.conf`, `commands.conf`.
+These are the F2–F11 SLIM-vs-AppInspect spec drift documented in
+§5.2 and §5.7. Phase 1.7's accepted disposition was "live with the
+SLIM noise" because removing the settings breaks AppInspect's
+`check_python_version_correctness_for_splunk_enterprise`. They
+appear in the upload report because Splunkbase's hosted SLIM step
+doesn't honor our `.appinspect_api.expect.yaml` suppressions. **No
+action.**
+
+**AI explainer's recycled recommendation**: the v1.0.8 failure
+explainer recommended `">=9.0.0"` — literally the v1.0.5 value that
+was content-rejected in F17. The AI is now recycling known-failed
+values; its specific format recommendations have become hypothesis-
+quality rather than authoritative.
+
+**Cloud Classic supported-list shape inference (updated)**:
+
+- 9.3 NOT on list (F13, v1.0.1 once-accepted-then-retired)
+- 10.0 NOT on list (F15, v1.0.3)
+- 9.4 NOT on list (F16, v1.0.4)
+- `[9.0.0, ∞)` NOT on list (F17, v1.0.5)
+- `[9.0.0, 10.0.0)` NOT on list (Phase 1.7, content rejection)
+- **`[8.1.0, 10.0.0)` NOT on list** (F20, v1.0.8 — NEW)
+
+The supported set is somewhere **below 8.1.0** OR is a specific
+patch version we haven't named OR Cloud Classic is currently
+unreachable via third-party manifest declarations. None of those
+hypotheses is directly testable through one more iteration; this is
+where the documented escalation path triggers.
+
+**Disposition**: **ESCALATED via `docs/SPLUNKBASE_SUPPORT_TICKET.md`
+(commit `59c62ee`)**. v1.0.8 stays as the latest release; the
+comma-no-space syntax is now the established correct parse form
+going forward, regardless of which version set Cloud Classic
+eventually surfaces.
+
+**Updated cumulative SLIM format history** (final, until ticket
+response):
+
+| Format | Error class | Result | Release |
+|---|---|---|---|
+| `">=9.0.0"` | content | REJECTED | v1.0.0 pre-release; v1.0.5 |
+| `">=9.0,<10.0"` | content | REJECTED | v1.0.0-rc Phase 1.7 |
+| `"9.3"` | (none then) | ACCEPTED-then-RETIRED | v1.0.0, v1.0.1 |
+| `["9.4", "10.0"]` | type | REJECTED | v1.0.2 (F14) |
+| `"10.0"` | content | REJECTED | v1.0.3 (F15) |
+| `"9.4"` | content | REJECTED | v1.0.4 (F16) |
+| `">=9.0.0"` | content | REJECTED | v1.0.5 (F17) |
+| `">=8.1.0 <10.0.0"` (space) | syntax | REJECTED | v1.0.6 (F18) |
+| `">=8.1.0, <10.0.0"` (comma+space) | syntax | REJECTED | v1.0.7 (F19) |
+| `">=8.1.0,<10.0.0"` (comma+no-space) | **content** | REJECTED | v1.0.8 (F20) |
+| (pending ticket response) | TBD | TBD | v1.0.9 |
+
+---
+
 ## 8. Revision log
 
 - 2026-05-17 — initial Phase 1.3 baseline. App.manifest version drift
@@ -1165,6 +1260,25 @@ inserted):
   conclusion: list form, semver ranges, and open-ended floors are
   all rejected; multi-version support requires a Splunk-side SLIM
   schema change.
+- 2026-06-07 — **v1.0.8 Splunkbase upload → F20 SLIM content rejection
+  of `">=8.1.0,<10.0.0"` (comma+no-space) — escalation triggered**.
+  Major empirical confirmation: SLIM returned content-class error
+  (`no supported version`), NOT syntax-class. The comma-no-space
+  syntax PARSES correctly. Cloud Classic's supported set excludes
+  `[8.1.0, 10.0.0)` and is somewhere unreachable through guesses.
+  9 empirical data points across F13-F20 do not triangulate to any
+  defensible next single-version or range. AI explainer recommended
+  `">=9.0.0"` — literally the v1.0.5 value that already
+  content-rejected (recycling known-failed values). Per every prior
+  reversal row's "if v1.0.N+1 also fails, escalate" clause, the
+  iteration cost (8 releases in 7 days, all publicly visible)
+  exceeds the support-ticket cost. §7.12 added. **Escalation**:
+  `docs/SPLUNKBASE_SUPPORT_TICKET.md` (new) drafts the publisher
+  support ticket; `docs/DECISION_LOG.md` 2026-06-07 row formalizes
+  the pause-and-escalate decision; CLAUDE.md audit log appended.
+  v1.0.8 manifest stays as-is; comma-no-space syntax is the
+  established canonical parse form going forward. No new release
+  until ticket response.
 - 2026-06-06 — **v1.0.7 Splunkbase upload → F19 SLIM `Illegal version
   specification` (whitespace-sensitivity isolated)**. The comma+space
   form `">=8.1.0, <10.0.0"` was rejected with the SAME syntax-class
