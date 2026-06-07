@@ -43,40 +43,40 @@ class TestStability:
     The test fails if hypothesis finds ANY input that crashes the validator.
     """
 
-    @settings(max_examples=500)
+    @settings(max_examples=1000)
     @given(st.text())
     def test_is_ascii_name_never_raises(self, text):
         is_ascii_name(text)
         is_ascii_name(text, allow_spaces=False)
 
-    @settings(max_examples=500)
+    @settings(max_examples=1000)
     @given(st.text())
     def test_is_safe_filename_never_raises(self, text):
         is_safe_filename(text)
 
-    @settings(max_examples=500)
+    @settings(max_examples=1000)
     @given(st.text())
     def test_is_valid_app_context_never_raises(self, text):
         is_valid_app_context(text)
 
-    @settings(max_examples=500)
+    @settings(max_examples=1000)
     @given(st.text())
     def test_validate_ascii_text_never_raises(self, text):
         validate_ascii_text(text)
 
-    @settings(max_examples=500)
+    @settings(max_examples=1000)
     @given(st.text())
     def test_sanitize_text_never_raises(self, text):
         sanitize_text(text)
 
-    @settings(max_examples=500)
+    @settings(max_examples=1000)
     @given(st.text())
     def test_build_csv_path_never_raises(self, text):
         # build_csv_path may return None (invalid filename) — but never raise
         build_csv_path(text)
         build_csv_path(text, app_context="wl_manager")
 
-    @settings(max_examples=200)
+    @settings(max_examples=400)
     @given(st.one_of(
         st.none(),
         st.integers(),
@@ -105,14 +105,14 @@ class TestDeterminism:
     """Same input → same output, every time. Catches accidental
     statefulness or use of `random` etc."""
 
-    @settings(max_examples=300)
+    @settings(max_examples=600)
     @given(st.text())
     def test_is_ascii_name_deterministic(self, text):
         first = is_ascii_name(text)
         second = is_ascii_name(text)
         assert first == second, "is_ascii_name returned different results for same input!"
 
-    @settings(max_examples=300)
+    @settings(max_examples=600)
     @given(st.text())
     def test_is_safe_filename_deterministic(self, text):
         first = is_safe_filename(text)
@@ -132,7 +132,7 @@ class TestAcceptedInputsAreASCII:
     ALLOWED_RULE_CHARS = set(string.ascii_letters + string.digits + "_-. ")
     ALLOWED_FILENAME_STEM_CHARS = set(string.ascii_letters + string.digits + "_-")
 
-    @settings(max_examples=500)
+    @settings(max_examples=1000)
     @given(st.text())
     def test_accepted_rule_names_only_allowed_chars(self, text):
         if is_ascii_name(text, allow_spaces=True):
@@ -142,7 +142,7 @@ class TestAcceptedInputsAreASCII:
                     "char {!r} (codepoint U+{:04X})".format(
                         text, c, ord(c)))
 
-    @settings(max_examples=500)
+    @settings(max_examples=1000)
     @given(st.text())
     def test_accepted_filename_stems_only_allowed_chars(self, text):
         if is_ascii_name(text, allow_spaces=False):
@@ -151,7 +151,7 @@ class TestAcceptedInputsAreASCII:
                     "is_ascii_name(allow_spaces=False) accepted {!r} "
                     "containing disallowed char {!r}".format(text, c))
 
-    @settings(max_examples=500)
+    @settings(max_examples=1000)
     @given(st.text())
     def test_accepted_app_contexts_only_allowed_chars(self, text):
         if is_valid_app_context(text) and text:
@@ -177,19 +177,19 @@ class TestSanitizeTextInvariants:
     5. No control characters (\\n, \\r, \\t etc. become single space)
     """
 
-    @settings(max_examples=500)
+    @settings(max_examples=1000)
     @given(st.text())
     def test_returns_string(self, text):
         result = sanitize_text(text)
         assert isinstance(result, str)
 
-    @settings(max_examples=500)
+    @settings(max_examples=1000)
     @given(st.text(), st.integers(min_value=1, max_value=10000))
     def test_respects_max_length(self, text, max_length):
         result = sanitize_text(text, max_length=max_length)
         assert len(result) <= max_length
 
-    @settings(max_examples=500)
+    @settings(max_examples=1000)
     @given(st.text())
     def test_no_leading_trailing_whitespace(self, text):
         result = sanitize_text(text)
@@ -197,14 +197,14 @@ class TestSanitizeTextInvariants:
             assert result == result.strip(), (
                 "sanitize_text returned untrimmed: {!r}".format(result))
 
-    @settings(max_examples=500)
+    @settings(max_examples=1000)
     @given(st.text())
     def test_no_doubled_whitespace(self, text):
         result = sanitize_text(text)
         assert "  " not in result, (
             "sanitize_text left double-space in: {!r}".format(result))
 
-    @settings(max_examples=500)
+    @settings(max_examples=1000)
     @given(st.text())
     def test_no_newlines_or_tabs(self, text):
         # Defense: sanitize is the last layer before audit emission.
@@ -222,7 +222,7 @@ class TestSanitizeTextInvariants:
 class TestCrossValidatorConsistency:
     """Where validators overlap, they must agree."""
 
-    @settings(max_examples=300)
+    @settings(max_examples=600)
     @given(st.text(min_size=1))
     def test_safe_filename_implies_ascii_stem(self, stem):
         # Build a .csv filename and check the cross-validator invariant.
@@ -236,7 +236,7 @@ class TestCrossValidatorConsistency:
                 "is_safe_filename accepted {!r} but stem {!r} fails "
                 "is_ascii_name(allow_spaces=False)".format(name, stem))
 
-    @settings(max_examples=300)
+    @settings(max_examples=600)
     @given(st.text())
     def test_ascii_text_consistent_with_ascii_name(self, text):
         # If is_ascii_name accepts a string, validate_ascii_text must
