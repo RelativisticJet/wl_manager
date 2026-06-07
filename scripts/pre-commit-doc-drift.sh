@@ -12,6 +12,23 @@
 #      "Current State (Build 587)" claims without flagging genuine historical
 #      references to past incidents.
 #
+# Does NOT enforce (out of scope by design — the 2026-04-19 incident this
+# hook was built for was build-number drift + broken file paths; cross-doc
+# consistency requires structured data, not regex):
+#   - Cross-document table consistency. Same fact in two related docs (e.g.,
+#     finding F20 in docs/APPINSPECT_FINDINGS.md's cumulative-history table
+#     but missing from docs/SPLUNK_10_COMPATIBILITY.md's parallel table) is
+#     a maintainability gap this hook will not catch. Mitigate by keeping
+#     ONE canonical source-of-truth table and linking from siblings.
+#   - Schema-shape consistency. Whether every F-numbered finding has all
+#     expected fields (file, stanza, error class, etc.) is not checked.
+#   - Section presence / sequence. Whether §7.N exists for every release N
+#     that hit a SLIM failure is not checked.
+#   - Numeric facts other than build numbers. Line counts, LOC tables, test
+#     coverage % are banned at the prose level (see CLAUDE.md "Documentation
+#     rules" rule 1) but the hook does not regex for them; the convention is
+#     "if you find yourself writing one, you have already lost".
+#
 # Both checks SKIP lines inside fenced code blocks (``` ... ```), because
 # those contain command examples and runtime config where verbatim values
 # (like "deploy build 555") are part of the example syntax, not a claim

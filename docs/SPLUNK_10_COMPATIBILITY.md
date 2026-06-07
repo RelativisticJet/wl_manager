@@ -656,6 +656,26 @@ predicts it does), SLIM should accept.
   cumulative SLIM format history table above before applying — the
   AI's specific format suggestions evolve faster than our
   documentation.
+- **Consolidate the cumulative SLIM format history into ONE canonical
+  table** (cleanup deferred from 2026-06-07 escalation). This doc
+  currently contains 5 chronological "Runtime verification"
+  subsections, each carrying a snapshot of the cumulative format
+  history table. When the Splunkbase support ticket
+  (`docs/SPLUNKBASE_SUPPORT_TICKET.md`) returns a working format and
+  v1.0.9 is cut, the cleanup commit should: (a) add a "READ THIS
+  FIRST — current accepted format" banner at the top of the doc with
+  a single canonical table marked `**Updated YYYY-MM-DD**`; (b)
+  demote the 5 chronological subsections under a "## Historical
+  iterations" heading; (c) mirror the same canonical table into
+  `docs/APPINSPECT_FINDINGS.md` §7.12 cumulative-history table so
+  the next contributor doesn't have to cross-reference 5 doc
+  sections to know what works today. Origin of this item: the
+  `scripts/pre-commit-doc-drift.sh` hook does NOT enforce cross-doc
+  table consistency (by design — the hook is scoped to build-number
+  + file-path drift only). The F20 row was added to
+  `docs/APPINSPECT_FINDINGS.md` §7.12 in commit `a9231c4` but is
+  not yet present in this doc's cumulative tables, which is the
+  exact drift class the consolidation prevents.
 
 ## Runtime verification — Splunkbase upload of v1.0.7 (2026-06-06) + v1.0.8 trial
 
